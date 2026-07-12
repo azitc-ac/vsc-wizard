@@ -106,6 +106,18 @@ wird:
 
 ### Einstellungen
 
+Der Button **"Vorhandene virtuelle Smartcards anzeigen..."** oeffnet einen
+Dialog mit allen auf diesem Rechner erkannten Smartcard-Lesegeraeten
+(inkl. virtueller TPM-Smartcards, da `tpmvscmgr` selbst keinen "list"-Befehl
+kennt - die Erkennung laeuft ueber die PnP-Geraeteklasse fuer
+Smartcard-Lesegeraete). Je Lesegeraet werden, soweit ermittelbar, die
+darauf liegenden Zertifikate aus dem Benutzer-Zertifikatsspeicher
+aufgelistet (Subject, Gueltigkeit, Thumbprint). Die Zuordnung Zertifikat
+-> Lesegeraet funktioniert zuverlaessig nur fuer Legacy-CAPI-Schluessel;
+CNG-basierte Zertifikate erscheinen als "weitere smartcard-gebundene
+Zertifikate" ohne eindeutige Lesegeraet-Zuordnung, sind aber trotzdem
+sichtbar.
+
 Kompaktes Grid-Layout (Label neben statt ueber dem Feld). Leere Felder zeigen
 einen grauen Hinweistext (z.B. `z.B. ca01.contoso.local\Contoso-Issuing-CA`),
 der beim Klick ins Feld verschwindet und beim Verlassen eines leeren Feldes

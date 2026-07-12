@@ -1095,6 +1095,100 @@ function Add-SettingsFullRow {
     $settingsLayout.SetColumnSpan($Control, 2)
 }
 
+function Show-VscInventoryDialog {
+    param([System.Windows.Forms.Form]$Owner)
+
+    $readers = Get-VirtualSmartCardReaders
+    $certs = Get-SmartCardCertificates
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Vorhandene virtuelle Smartcards'
+    $dlg.Size = New-Object System.Drawing.Size(720, 560)
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false
+    $dlg.MaximizeBox = $false
+
+    $dlgLayout = New-Object System.Windows.Forms.TableLayoutPanel
+    $dlgLayout.Dock = 'Fill'
+    $dlgLayout.RowCount = 3
+    $dlgLayout.ColumnCount = 1
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 50)))
+    $dlg.Controls.Add($dlgLayout)
+
+    $lblInventoryInfo = New-Object System.Windows.Forms.Label
+    $lblInventoryInfo.Text = "Erkannte Smartcard-Lesegeraete (inkl. virtueller TPM-Smartcards): $($readers.Count)"
+    $lblInventoryInfo.AutoSize = $true
+    $lblInventoryInfo.Margin = New-Object System.Windows.Forms.Padding(10, 10, 10, 4)
+    $dlgLayout.Controls.Add($lblInventoryInfo, 0, 0)
+
+    $tree = New-Object System.Windows.Forms.TreeView
+    $tree.Dock = 'Fill'
+    $tree.Margin = New-Object System.Windows.Forms.Padding(10, 0, 10, 0)
+    $tree.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $dlgLayout.Controls.Add($tree, 0, 1)
+
+    if ($readers.Count -eq 0) {
+        [void]$tree.Nodes.Add('Keine Smartcard-Lesegeraete gefunden (auch keine virtuellen).')
+    }
+
+    foreach ($reader in $readers) {
+        $readerNode = New-Object System.Windows.Forms.TreeNode("$($reader.FriendlyName)  [$($reader.Status)]")
+        $matchingCerts = @($certs | Where-Object { $_.Reader -and $_.Reader -eq $reader.FriendlyName })
+        if ($matchingCerts.Count -eq 0) {
+            [void]$readerNode.Nodes.Add('(keine eindeutig zuordenbaren Zertifikate gefunden)')
+        } else {
+            foreach ($c in $matchingCerts) {
+                [void]$readerNode.Nodes.Add("$($c.Subject)  -  gueltig bis $($c.NotAfter.ToString('yyyy-MM-dd'))  ($($c.Thumbprint))")
+            }
+        }
+        [void]$tree.Nodes.Add($readerNode)
+    }
+
+    $readerNames = @($readers | ForEach-Object { $_.FriendlyName })
+    $unmatched = @($certs | Where-Object { -not $_.Reader -or ($readerNames -notcontains $_.Reader) })
+    if ($unmatched.Count -gt 0) {
+        $otherNode = New-Object System.Windows.Forms.TreeNode('Weitere smartcard-gebundene Zertifikate (Lesegeraet nicht eindeutig zuordenbar):')
+        foreach ($c in $unmatched) {
+            [void]$otherNode.Nodes.Add("$($c.Subject)  -  gueltig bis $($c.NotAfter.ToString('yyyy-MM-dd'))  ($($c.Thumbprint))  [$($c.Provider)]")
+        }
+        [void]$tree.Nodes.Add($otherNode)
+    }
+
+    $tree.ExpandAll()
+
+    $dlgBtnPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $dlgBtnPanel.Dock = 'Fill'
+    $dlgBtnPanel.FlowDirection = 'RightToLeft'
+    $dlgLayout.Controls.Add($dlgBtnPanel, 0, 2)
+
+    $btnCloseInventory = New-Object System.Windows.Forms.Button
+    $btnCloseInventory.Text = 'Schliessen'
+    $btnCloseInventory.Size = New-Object System.Drawing.Size(120, 30)
+    $btnCloseInventory.Margin = New-Object System.Windows.Forms.Padding(10)
+    $dlgBtnPanel.Controls.Add($btnCloseInventory)
+    $btnCloseInventory.Add_Click({ $dlg.Close() })
+
+    $btnRefreshInventory = New-Object System.Windows.Forms.Button
+    $btnRefreshInventory.Text = 'Aktualisieren'
+    $btnRefreshInventory.Size = New-Object System.Drawing.Size(120, 30)
+    $btnRefreshInventory.Margin = New-Object System.Windows.Forms.Padding(10)
+    $dlgBtnPanel.Controls.Add($btnRefreshInventory)
+    $btnRefreshInventory.Add_Click({
+        $dlg.Close()
+        Show-VscInventoryDialog -Owner $Owner
+    })
+
+    if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
+}
+
+$btnShowInventory = New-Object System.Windows.Forms.Button
+$btnShowInventory.Text = 'Vorhandene virtuelle Smartcards anzeigen...'
+$btnShowInventory.Size = New-Object System.Drawing.Size(280, 30)
+Add-SettingsFullRow -Control $btnShowInventory
+$btnShowInventory.Add_Click({ Show-VscInventoryDialog -Owner $form })
+
 $txtCfgCA = New-Object System.Windows.Forms.TextBox
 Set-TextBoxPlaceholder -TextBox $txtCfgCA -Placeholder 'z.B. ca01.contoso.local\Contoso-Issuing-CA' -Value $config.CAConfig
 Add-SettingsRow -LabelText 'CA-Konfigurationsstring (Server\CA-Name):' -InputControl $txtCfgCA

@@ -365,6 +365,70 @@ function New-VirtualSmartCard {
     }
 }
 
+function Get-VirtualSmartCardReaders {
+    # tpmvscmgr kennt keinen "list"-Befehl - virtuelle Smartcards werden deshalb
+    # ueber die PnP-Geraeteklasse fuer Smartcard-Lesegeraete erkannt, unter der sich
+    # auch TPM Virtual Smart Cards (mit dem bei der Erstellung vergebenen Namen als
+    # FriendlyName) einordnen.
+    try {
+        $readers = Get-PnpDevice -Class SmartCardReader -PresentOnly -ErrorAction Stop
+        return @($readers | Select-Object -Property FriendlyName, InstanceId, Status)
+    } catch {
+        return @()
+    }
+}
+
+function Get-SmartCardCertificateInfo {
+    # Legacy-CAPI (.PrivateKey.CspKeyContainerInfo) liefert sowohl Provider- als auch
+    # Reader-Namen und erlaubt damit eine Zuordnung Zertifikat -> Lesegeraet. Fuer rein
+    # CNG-basierte Schluessel (RSACng) ist nur der Provider-Name ohne Reader-Zuordnung
+    # zuverlaessig ueber die oeffentliche .NET-API ermittelbar.
+    param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+
+    $info = [pscustomobject]@{ Provider = $null; Reader = $null }
+
+    try {
+        if ($Certificate.PrivateKey -and $Certificate.PrivateKey.CspKeyContainerInfo) {
+            $info.Provider = $Certificate.PrivateKey.CspKeyContainerInfo.ProviderName
+            $info.Reader = $Certificate.PrivateKey.CspKeyContainerInfo.Reader
+            return $info
+        }
+    } catch { }
+
+    try {
+        $rsaKey = $Certificate.GetRSAPrivateKey()
+        if ($rsaKey -and $rsaKey.Key -and $rsaKey.Key.Provider) {
+            $info.Provider = $rsaKey.Key.Provider.Provider
+        }
+    } catch { }
+
+    return $info
+}
+
+function Get-SmartCardCertificates {
+    # Alle Zertifikate im Benutzer-Zertifikatsspeicher, deren privater Schluessel auf
+    # einer Smartcard liegt (Provider-Name enthaelt "Smart Card"), mit Lesegeraet
+    # sofern ermittelbar.
+    param([string]$StoreLocation = 'Cert:\CurrentUser\My')
+
+    $certs = Get-ChildItem -Path $StoreLocation -ErrorAction SilentlyContinue
+    $results = foreach ($cert in $certs) {
+        if (-not $cert.HasPrivateKey) { continue }
+        $info = Get-SmartCardCertificateInfo -Certificate $cert
+        if ($info.Provider -and $info.Provider -match 'Smart Card') {
+            [pscustomobject]@{
+                Subject    = $cert.Subject
+                Thumbprint = $cert.Thumbprint
+                NotBefore  = $cert.NotBefore
+                NotAfter   = $cert.NotAfter
+                Provider   = $info.Provider
+                Reader     = $info.Reader
+            }
+        }
+    }
+    return @($results)
+}
+
 #endregion
 
 #region Zertifikatsanforderung (certreq)
