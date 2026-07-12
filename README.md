@@ -39,11 +39,15 @@ wird:
 
 ## Verwendung
 
-1. `config.psd1` anpassen (CA-Konfigurationsstring, Zertifikatstemplates,
-   RDP-Zielserver fuer Plan B) - oder die Werte spaeter bequem ueber den Tab
-   "Einstellungen" in der Anwendung pflegen.
-2. `VscWizard.bat` ausfuehren (startet `VscWizard.ps1` mit
+1. `VscWizard.bat` ausfuehren (startet `VscWizard.ps1` mit
    `-ExecutionPolicy Bypass` im aktuellen Benutzerkontext).
+2. `config.psd1` wird leer ausgeliefert (CA-Konfigurationsstring,
+   Zertifikatstemplates und RDP-Zielserver sind org-spezifisch und daher nicht
+   vorbefuellt). Solange diese Werte fehlen, oeffnet der Wizard beim Start
+   automatisch den Tab "Einstellungen" - dort entweder manuell eintragen oder
+   per "PKI automatisch erkennen" befuellen lassen (siehe unten), dann
+   "Speichern". Danach wird beim naechsten Start automatisch der passende
+   Tab (Plan A/Plan B) vorausgewaehlt.
 3. Passenden Tab waehlen (wird anhand des erkannten Domaenen-Status
    vorausgewaehlt) und dem Wizard folgen.
 
@@ -77,15 +81,11 @@ wird:
 ### Plan B (mit RDP-Zwischenschritt)
 
 1. **Status**: Erkannter Domaenen-Status (Entra-joined/Workgroup) und
-   konfigurierter RDP-Zielserver. Zusaetzlich kann hier eine **automatische
-   Erreichbarkeitspruefung** gestartet werden: der Wizard fragt die
-   Enterprise-CAs direkt aus der AD-Konfigurationspartition ab (LDAP) und
-   testet die RPC-Erreichbarkeit jeder gefundenen CA (`certutil -ping`).
-   Das deckt z.B. Entra-joined-Rechner mit Cloud Kerberos Trust und einer
-   VPN-/Private-Access-Verbindung ab, die trotz fehlendem Domain-Join
-   direkten PKI-Zugriff haben. Bei Erfolg kann per Knopfdruck in den
-   automatisierten Plan-A-Ablauf gewechselt werden (CA und passende
-   Templates werden dabei automatisch uebernommen).
+   konfigurierter RDP-Zielserver. Die automatische PKI-Erkennung (siehe
+   Einstellungen) kann auch fuer Entra-joined-Rechner mit Cloud Kerberos
+   Trust und einer VPN-/Private-Access-Verbindung dazu fuehren, dass direkter
+   PKI-Zugriff besteht - in dem Fall einfach in Tab "Plan A" wechseln, statt
+   den manuellen RDP-Ablauf zu durchlaufen.
 2. **Virtuelle Smartcard erstellen**: wie bei Plan A.
 3. **CSR erstellen (lokal)**: `certreq -new` erzeugt eine an die Smartcard
    gebundene Zertifikatsanforderung; Pfad kann per Knopfdruck kopiert oder
@@ -101,6 +101,20 @@ wird:
 6. **Zertifikat abschliessen (lokal)**: Zurueck auf dem Ausgangsrechner wird
    die `.cer`-Datei ausgewaehlt und per `certreq -accept` an den bereits auf
    der Smartcard vorhandenen privaten Schluessel gebunden.
+
+### Einstellungen
+
+Leere Felder zeigen einen grauen Hinweistext (z.B. `z.B. ca01.contoso.local\
+Contoso-Issuing-CA`), der beim Klick ins Feld verschwindet und beim Verlassen
+eines leeren Feldes wieder erscheint - er wird nicht als echter Wert
+gespeichert.
+
+Der Button **"PKI automatisch erkennen"** fragt die Enterprise-CAs direkt aus
+der AD-Konfigurationspartition ab (LDAP) und testet die RPC-Erreichbarkeit
+jeder gefundenen CA (`certutil -ping`, ca. 25 Sekunden Zeitlimit). Bei Erfolg
+werden CA-Konfigurationsstring und verfuegbare Templates direkt in die
+Felder geschrieben (als echte Werte, nicht nur als Hinweis) - anschliessend
+noch "Speichern" klicken, um sie dauerhaft in `config.psd1` zu uebernehmen.
 
 ## Manueller Testplan
 

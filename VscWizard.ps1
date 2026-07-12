@@ -47,6 +47,55 @@ function New-WizardLabel {
     return $lbl
 }
 
+# Einfache Hint/Placeholder-TextBox: zeigt grauen Beispieltext, solange kein echter
+# Wert eingetragen ist; verschwindet beim Fokussieren, kehrt beim Verlassen eines
+# leeren Feldes zurueck. Erkennung "ist gerade Placeholder" ueber ForeColor=Gray.
+$script:PlaceholderMap = @{}
+
+function Set-TextBoxPlaceholder {
+    param(
+        [Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox,
+        [Parameter(Mandatory)][string]$Placeholder,
+        [string]$Value
+    )
+    $script:PlaceholderMap[$TextBox] = $Placeholder
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        $TextBox.Text = $Placeholder
+        $TextBox.ForeColor = [System.Drawing.Color]::Gray
+    } else {
+        $TextBox.Text = $Value
+        $TextBox.ForeColor = [System.Drawing.SystemColors]::WindowText
+    }
+
+    $TextBox.Add_Enter({
+        if ($this.ForeColor -eq [System.Drawing.Color]::Gray) {
+            $this.Text = ''
+            $this.ForeColor = [System.Drawing.SystemColors]::WindowText
+        }
+    })
+    $TextBox.Add_Leave({
+        if ([string]::IsNullOrWhiteSpace($this.Text)) {
+            $this.Text = $script:PlaceholderMap[$this]
+            $this.ForeColor = [System.Drawing.Color]::Gray
+        }
+    })
+}
+
+function Set-TextBoxRealValue {
+    param(
+        [Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox,
+        [Parameter(Mandatory)][string]$Value
+    )
+    $TextBox.Text = $Value
+    $TextBox.ForeColor = [System.Drawing.SystemColors]::WindowText
+}
+
+function Get-TextBoxRealValue {
+    param([Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox)
+    if ($TextBox.ForeColor -eq [System.Drawing.Color]::Gray) { return '' }
+    return $TextBox.Text
+}
+
 #region MAIN FORM
 
 $form = New-Object System.Windows.Forms.Form
@@ -293,9 +342,8 @@ $pnlStepsA.Controls.Add($pnlA1)
 $lblJoinStateA = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
 $lblUserA = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
 $lblTpmA = New-WizardLabel -Text 'TPM: ...' -X 20 -Y 80
-$lblActiveCAA = New-WizardLabel -Text '' -X 20 -Y 110
-$lblWarnA = New-WizardLabel -Text '' -X 20 -Y 140 -Style Bold
-$pnlA1.Controls.AddRange(@($lblJoinStateA, $lblUserA, $lblTpmA, $lblActiveCAA, $lblWarnA))
+$lblWarnA = New-WizardLabel -Text '' -X 20 -Y 120 -Style Bold
+$pnlA1.Controls.AddRange(@($lblJoinStateA, $lblUserA, $lblTpmA, $lblWarnA))
 
 # --- Schritt A2: VSC erstellen ---
 $pnlA2 = New-Object System.Windows.Forms.Panel
@@ -392,8 +440,7 @@ $btnRequestCertA.Add_Click({
         return
     }
 
-    $script:PlanA_CAConfigUsed = if ($script:ActiveCAConfig) { $script:ActiveCAConfig } else { $config.CAConfig }
-    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $script:PlanA_CAConfigUsed -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
+    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
     if ($submit.Pending) {
         $script:PlanA_PendingRequestId = $submit.RequestId
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
@@ -423,7 +470,7 @@ $btnRequestCertA.Add_Click({
 
 $btnRetrieveA.Add_Click({
     if (-not $script:PlanA_PendingRequestId) { return }
-    $recv = Receive-PendingCertificate -RequestId $script:PlanA_PendingRequestId -CAConfig $script:PlanA_CAConfigUsed -OutputDirectory $script:PlanA_EnrollDir
+    $recv = Receive-PendingCertificate -RequestId $script:PlanA_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanA_EnrollDir
     if ($recv.Success) {
         $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
         if ($complete.Success) {
@@ -482,14 +529,7 @@ function Update-PlanAStatus {
     $lblUserA.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
     $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
 
-    if ($script:ActiveCAConfig) {
-        $lblActiveCAA.ForeColor = [System.Drawing.Color]::SteelBlue
-        $lblActiveCAA.Text = "Automatisch erkannte CA wird verwendet: $script:ActiveCAConfig"
-    } else {
-        $lblActiveCAA.Text = ''
-    }
-
-    if ($joinState.Mode -ne 'ADDomain' -and -not $script:ActiveCAConfig) {
+    if ($joinState.Mode -ne 'ADDomain') {
         $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
         $lblWarnA.Text = 'Dieser Rechner scheint nicht domaenen-gebunden zu sein. Fuer diesen Fall ist "Plan B" vorgesehen.'
     } elseif (-not $tpm.Ready) {
@@ -593,82 +633,8 @@ $pnlStepsB.Controls.Add($pnlB1)
 $lblJoinStateB = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
 $lblUserB = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
 $lblJumpServerB = New-WizardLabel -Text '' -X 20 -Y 80
-$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da dieser Rechner voraussichtlich keine direkte Sicht auf die Zertifizierungsstelle hat.' -X 20 -Y 116 -Width 780 -Height 40
-
-$lblDiscoverInfoB = New-WizardLabel -Text 'Manche Rechner (z.B. Entra-joined mit Cloud Kerberos Trust und VPN/Private-Access-Verbindung) haben trotzdem direkten Zugriff auf die PKI. Das laesst sich hier automatisch pruefen.' -X 20 -Y 160 -Width 780 -Height 34
-
-$btnDiscoverB = New-Object System.Windows.Forms.Button
-$btnDiscoverB.Text = 'Automatische Erreichbarkeit pruefen'
-$btnDiscoverB.Location = New-Object System.Drawing.Point(20, 198)
-$btnDiscoverB.Size = New-Object System.Drawing.Size(280, 32)
-
-$txtDiscoveryResultB = New-Object System.Windows.Forms.TextBox
-$txtDiscoveryResultB.Location = New-Object System.Drawing.Point(20, 236)
-$txtDiscoveryResultB.Size = New-Object System.Drawing.Size(780, 90)
-$txtDiscoveryResultB.Multiline = $true
-$txtDiscoveryResultB.ReadOnly = $true
-$txtDiscoveryResultB.ScrollBars = 'Vertical'
-$txtDiscoveryResultB.Font = New-Object System.Drawing.Font('Consolas', 9)
-
-$btnUsePlanAB = New-Object System.Windows.Forms.Button
-$btnUsePlanAB.Text = 'Automatisiert fortfahren (Plan A verwenden)'
-$btnUsePlanAB.Location = New-Object System.Drawing.Point(20, 334)
-$btnUsePlanAB.Size = New-Object System.Drawing.Size(300, 32)
-$btnUsePlanAB.Visible = $false
-
-$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblJumpServerB, $lblExplainB, $lblDiscoverInfoB, $btnDiscoverB, $txtDiscoveryResultB, $btnUsePlanAB))
-
-$btnDiscoverB.Add_Click({
-    $btnDiscoverB.Enabled = $false
-    $btnUsePlanAB.Visible = $false
-    $txtDiscoveryResultB.Text = 'Pruefe automatische Erreichbarkeit (CA-Discovery per LDAP, RPC-Verbindungstest, bis zu ca. 25 Sekunden)...'
-    $form.Refresh()
-
-    $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
-    $job = Start-Job -ScriptBlock {
-        param($ModulePath, $Timeout)
-        Import-Module $ModulePath -Force
-        Get-PkiReachability -TimeoutSeconds $Timeout
-    } -ArgumentList $modulePath, 8
-
-    $completed = Wait-Job -Job $job -Timeout 25
-    $reachableCAs = @()
-    if ($completed) {
-        $reachableCAs = @(Receive-Job -Job $job)
-    } else {
-        Stop-Job -Job $job
-    }
-    Remove-Job -Job $job -Force
-
-    if ($reachableCAs.Count -gt 0) {
-        $script:DiscoveredCAs = $reachableCAs
-        $lines = $reachableCAs | ForEach-Object { "- $($_.Name) ($($_.ConfigString))`r`n  Templates: $($_.Templates -join ', ')" }
-        $txtDiscoveryResultB.Text = "Erreichbare CA(s) gefunden:`r`n`r`n" + ($lines -join "`r`n")
-        $btnUsePlanAB.Visible = $true
-        Write-WizardLog -Message "Automatische Erkennung: $($reachableCAs.Count) erreichbare CA(s) gefunden." -Level Success
-    } else {
-        $script:DiscoveredCAs = $null
-        $txtDiscoveryResultB.Text = 'Keine erreichbare CA gefunden (LDAP-Discovery oder RPC-Verbindung fehlgeschlagen/Zeitueberschreitung). Bitte mit dem manuellen Ablauf (naechste Schritte) fortfahren.'
-        Write-WizardLog -Message 'Automatische Erkennung: keine erreichbare CA gefunden.' -Level Info
-    }
-    $btnDiscoverB.Enabled = $true
-})
-
-$btnUsePlanAB.Add_Click({
-    if (-not $script:DiscoveredCAs -or $script:DiscoveredCAs.Count -eq 0) { return }
-    $primary = $script:DiscoveredCAs[0]
-    $script:ActiveCAConfig = $primary.ConfigString
-
-    $allTemplates = @($script:DiscoveredCAs | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
-    if ($allTemplates.Count -eq 0) { $allTemplates = $config.Templates }
-
-    $cboTemplateA.Items.Clear()
-    [void]$cboTemplateA.Items.AddRange($allTemplates)
-    if ($cboTemplateA.Items.Count -gt 0) { $cboTemplateA.SelectedIndex = 0 }
-
-    $tabs.SelectedTab = $tabPlanA
-    Show-PlanAStep -Index 1
-})
+$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da dieser Rechner voraussichtlich keine direkte Sicht auf die Zertifizierungsstelle hat. CA-Konfiguration und automatische PKI-Erkennung finden sich im Tab "Einstellungen".' -X 20 -Y 116 -Width 780 -Height 60
+$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblJumpServerB, $lblExplainB))
 
 # --- Schritt B2: VSC erstellen ---
 $pnlB2 = New-Object System.Windows.Forms.Panel
@@ -1067,13 +1033,13 @@ $lblCfgCA = New-WizardLabel -Text 'CA-Konfigurationsstring (Server\CA-Name):' -X
 $txtCfgCA = New-Object System.Windows.Forms.TextBox
 $txtCfgCA.Location = New-Object System.Drawing.Point(20, 46)
 $txtCfgCA.Size = New-Object System.Drawing.Size(500, 24)
-$txtCfgCA.Text = $config.CAConfig
+Set-TextBoxPlaceholder -TextBox $txtCfgCA -Placeholder 'z.B. ca01.contoso.local\Contoso-Issuing-CA' -Value $config.CAConfig
 
 $lblCfgTemplates = New-WizardLabel -Text 'Zertifikatstemplates (kommagetrennt):' -X 20 -Y 84 -Width 500
 $txtCfgTemplates = New-Object System.Windows.Forms.TextBox
 $txtCfgTemplates.Location = New-Object System.Drawing.Point(20, 110)
 $txtCfgTemplates.Size = New-Object System.Drawing.Size(500, 24)
-$txtCfgTemplates.Text = ($config.Templates -join ', ')
+Set-TextBoxPlaceholder -TextBox $txtCfgTemplates -Placeholder 'z.B. SmartcardLogon, SmartcardUser' -Value ($config.Templates -join ', ')
 
 $lblCfgPrefix = New-WizardLabel -Text 'Namenspraefix fuer virtuelle Smartcards:' -X 20 -Y 148 -Width 500
 $txtCfgPrefix = New-Object System.Windows.Forms.TextBox
@@ -1085,7 +1051,7 @@ $lblCfgJump = New-WizardLabel -Text 'RDP-Zielserver fuer Plan B:' -X 20 -Y 212 -
 $txtCfgJump = New-Object System.Windows.Forms.TextBox
 $txtCfgJump.Location = New-Object System.Drawing.Point(20, 238)
 $txtCfgJump.Size = New-Object System.Drawing.Size(500, 24)
-$txtCfgJump.Text = $config.RdpJumpServer
+Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
 
 $lblCfgCsp = New-WizardLabel -Text 'Crypto Service Provider (CSP) der virtuellen Smartcard:' -X 20 -Y 276 -Width 500
 $txtCfgCsp = New-Object System.Windows.Forms.TextBox
@@ -1093,21 +1059,72 @@ $txtCfgCsp.Location = New-Object System.Drawing.Point(20, 302)
 $txtCfgCsp.Size = New-Object System.Drawing.Size(500, 24)
 $txtCfgCsp.Text = $config.CspName
 
+$lblCfgDiscover = New-WizardLabel -Text 'Automatische PKI-Erkennung (LDAP-Discovery der Enterprise-CAs + RPC-Erreichbarkeitstest):' -X 20 -Y 340 -Width 700
+
+$btnDiscoverCfg = New-Object System.Windows.Forms.Button
+$btnDiscoverCfg.Text = 'PKI automatisch erkennen'
+$btnDiscoverCfg.Location = New-Object System.Drawing.Point(20, 366)
+$btnDiscoverCfg.Size = New-Object System.Drawing.Size(240, 32)
+
+$lblDiscoverResultCfg = New-WizardLabel -Text '' -X 270 -Y 372 -Width 500
+
 $btnSaveConfig = New-Object System.Windows.Forms.Button
 $btnSaveConfig.Text = 'Speichern'
-$btnSaveConfig.Location = New-Object System.Drawing.Point(20, 340)
+$btnSaveConfig.Location = New-Object System.Drawing.Point(20, 410)
 $btnSaveConfig.Size = New-Object System.Drawing.Size(160, 32)
 
-$lblCfgSaved = New-WizardLabel -Text '' -X 190 -Y 346 -Width 300
+$lblCfgSaved = New-WizardLabel -Text '' -X 190 -Y 416 -Width 300
 
-$tabSettings.Controls.AddRange(@($lblCfgCA, $txtCfgCA, $lblCfgTemplates, $txtCfgTemplates, $lblCfgPrefix, $txtCfgPrefix, $lblCfgJump, $txtCfgJump, $lblCfgCsp, $txtCfgCsp, $btnSaveConfig, $lblCfgSaved))
+$tabSettings.Controls.AddRange(@($lblCfgCA, $txtCfgCA, $lblCfgTemplates, $txtCfgTemplates, $lblCfgPrefix, $txtCfgPrefix, $lblCfgJump, $txtCfgJump, $lblCfgCsp, $txtCfgCsp, $lblCfgDiscover, $btnDiscoverCfg, $lblDiscoverResultCfg, $btnSaveConfig, $lblCfgSaved))
+
+$btnDiscoverCfg.Add_Click({
+    $btnDiscoverCfg.Enabled = $false
+    $lblDiscoverResultCfg.ForeColor = [System.Drawing.SystemColors]::WindowText
+    $lblDiscoverResultCfg.Text = 'Pruefe PKI-Erreichbarkeit (bis zu ca. 25 Sekunden)...'
+    $form.Refresh()
+
+    $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+    $job = Start-Job -ScriptBlock {
+        param($ModulePath, $Timeout)
+        Import-Module $ModulePath -Force
+        Get-PkiReachability -TimeoutSeconds $Timeout
+    } -ArgumentList $modulePath, 8
+
+    $completed = Wait-Job -Job $job -Timeout 25
+    $reachableCAs = @()
+    if ($completed) {
+        $reachableCAs = @(Receive-Job -Job $job)
+    } else {
+        Stop-Job -Job $job
+    }
+    Remove-Job -Job $job -Force
+
+    if ($reachableCAs.Count -gt 0) {
+        $primary = $reachableCAs[0]
+        Set-TextBoxRealValue -TextBox $txtCfgCA -Value $primary.ConfigString
+
+        $allTemplates = @($reachableCAs | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+        if ($allTemplates.Count -gt 0) {
+            Set-TextBoxRealValue -TextBox $txtCfgTemplates -Value ($allTemplates -join ', ')
+        }
+
+        $lblDiscoverResultCfg.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblDiscoverResultCfg.Text = "$($reachableCAs.Count) erreichbare CA(s) gefunden und uebernommen - bitte pruefen und Speichern."
+        Write-WizardLog -Message "Automatische Erkennung: $($reachableCAs.Count) erreichbare CA(s) gefunden." -Level Success
+    } else {
+        $lblDiscoverResultCfg.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblDiscoverResultCfg.Text = 'Keine erreichbare CA gefunden. Bitte CA-Konfiguration manuell eintragen (oder Plan B/RDP verwenden).'
+        Write-WizardLog -Message 'Automatische Erkennung: keine erreichbare CA gefunden.' -Level Info
+    }
+    $btnDiscoverCfg.Enabled = $true
+})
 
 $btnSaveConfig.Add_Click({
     $newConfig = @{
-        CAConfig      = $txtCfgCA.Text
-        Templates     = @($txtCfgTemplates.Text -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        CAConfig      = Get-TextBoxRealValue -TextBox $txtCfgCA
+        Templates     = @((Get-TextBoxRealValue -TextBox $txtCfgTemplates) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         VscNamePrefix = $txtCfgPrefix.Text
-        RdpJumpServer = $txtCfgJump.Text
+        RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
         CspName       = $txtCfgCsp.Text
         WorkingDir    = $config.WorkingDir
     }
@@ -1135,11 +1152,16 @@ $btnSaveConfig.Add_Click({
 Show-PlanAStep -Index 0
 Show-PlanBStep -Index 0
 
-$joinStateStartup = Get-DomainJoinState
-if ($joinStateStartup.Mode -eq 'ADDomain') {
-    $tabs.SelectedTab = $tabPlanA
+$configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or (-not $config.Templates) -or (@($config.Templates).Count -eq 0)
+if ($configIncomplete) {
+    $tabs.SelectedTab = $tabSettings
 } else {
-    $tabs.SelectedTab = $tabPlanB
+    $joinStateStartup = Get-DomainJoinState
+    if ($joinStateStartup.Mode -eq 'ADDomain') {
+        $tabs.SelectedTab = $tabPlanA
+    } else {
+        $tabs.SelectedTab = $tabPlanB
+    }
 }
 
 [void]$form.ShowDialog()
