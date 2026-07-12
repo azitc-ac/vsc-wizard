@@ -16,6 +16,18 @@ Die Beantragung setzt eine bestehende Anmeldung als der Zielbenutzer voraus;
 das Tool fuehrt die Schritte im jeweiligen Benutzerkontext aus (nur die
 Kartenerstellung mit `tpmvscmgr` fordert gezielt eine UAC-Elevation an).
 
+Beim Start fragt der Wizard zunaechst, **fuer wen** die Smartcard beantragt
+wird:
+
+- **Fuer mich**: normaler Ablauf im aktuell angemeldeten Benutzerkontext.
+- **Fuer ein separates Konto** (z.B. ein Admin-Konto): PIN-Vergabe und
+  Zertifikatsbindung muessen im Sicherheitskontext des Zielkontos erfolgen.
+  Der Wizard zeigt dafuer einen `runas`-Befehl (inkl. Zwischenablage-Kopie)
+  oder eine RDP-Anleitung an, um sich als Zielkonto interaktiv anzumelden -
+  in der neuen Sitzung dann erneut den Wizard starten und "Fuer mich"
+  waehlen. Fuer mehrere Admin-Konten wird dieser Ablauf entsprechend
+  mehrfach durchlaufen (je eine eigene virtuelle Smartcard pro Konto).
+
 ## Voraussetzungen
 
 - Windows 10/11 mit PowerShell 5.1
@@ -65,7 +77,15 @@ Kartenerstellung mit `tpmvscmgr` fordert gezielt eine UAC-Elevation an).
 ### Plan B (mit RDP-Zwischenschritt)
 
 1. **Status**: Erkannter Domaenen-Status (Entra-joined/Workgroup) und
-   konfigurierter RDP-Zielserver.
+   konfigurierter RDP-Zielserver. Zusaetzlich kann hier eine **automatische
+   Erreichbarkeitspruefung** gestartet werden: der Wizard fragt die
+   Enterprise-CAs direkt aus der AD-Konfigurationspartition ab (LDAP) und
+   testet die RPC-Erreichbarkeit jeder gefundenen CA (`certutil -ping`).
+   Das deckt z.B. Entra-joined-Rechner mit Cloud Kerberos Trust und einer
+   VPN-/Private-Access-Verbindung ab, die trotz fehlendem Domain-Join
+   direkten PKI-Zugriff haben. Bei Erfolg kann per Knopfdruck in den
+   automatisierten Plan-A-Ablauf gewechselt werden (CA und passende
+   Templates werden dabei automatisch uebernommen).
 2. **Virtuelle Smartcard erstellen**: wie bei Plan A.
 3. **CSR erstellen (lokal)**: `certreq -new` erzeugt eine an die Smartcard
    gebundene Zertifikatsanforderung; Pfad kann per Knopfdruck kopiert oder
@@ -104,3 +124,9 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
 - Der RDP-Zwischenschritt in Plan B bleibt bewusst manuell (Kopieren der
   CSR-/CER-Datei) - dies ist eine inhaerente Einschraenkung des Szenarios ohne
   direkte CA-Sicht.
+- Die automatische Erreichbarkeitspruefung ist auf ca. 25 Sekunden begrenzt
+  (LDAP-Discovery + RPC-Ping je CA); bei einer sehr langsamen, aber
+  grundsaetzlich erreichbaren PKI kann das faelschlich als "nicht erreichbar"
+  gewertet werden.
+- Der `runas`-Weg fuer separate Konten setzt voraus, dass das Zielkonto sich
+  interaktiv lokal anmelden darf (keine GPO-Einschraenkung); sonst RDP nutzen.

@@ -110,7 +110,11 @@ function Invoke-ExternalCommand {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$ArgumentList = @(),
-        [string]$WorkingDirectory = (Get-Location)
+        [string]$WorkingDirectory = (Get-Location),
+        # 0 = kein Timeout (Standardverhalten). Bei Ueberschreitung wird der Prozess beendet
+        # und Success=$false zurueckgegeben - wichtig fuer Netzwerkaufrufe (z.B. certutil -ping)
+        # gegen eventuell nicht erreichbare Server.
+        [int]$TimeoutSeconds = 0
     )
 
     $quotedArgs = ($ArgumentList | ForEach-Object {
@@ -131,9 +135,25 @@ function Invoke-ExternalCommand {
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
     [void]$proc.Start()
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
-    $proc.WaitForExit()
+
+    if ($TimeoutSeconds -gt 0) {
+        # Asynchrones Lesen startet VOR WaitForExit, damit die Pipes laufend geleert werden
+        # und ein volles Output-Puffer nicht zum Deadlock mit dem Kindprozess fuehrt.
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $exited) {
+            try { $proc.Kill() } catch { }
+            Write-WizardLog -Message "$FilePath $quotedArgs (Zeitueberschreitung nach $TimeoutSeconds s)" -Level Error
+            return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false }
+        }
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+    } else {
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $stderr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+    }
 
     if ($stdout.Trim()) { Write-WizardLog -Message $stdout.Trim() -Level Output }
     if ($stderr.Trim()) { Write-WizardLog -Message $stderr.Trim() -Level Error }
@@ -187,6 +207,73 @@ function Get-CurrentUpn {
         if ($upn -and ($upn -notmatch 'ERROR')) { return $upn.Trim() }
     } catch { }
     return $null
+}
+
+#endregion
+
+#region PKI-Erreichbarkeit (fuer Entra-joined/Workgroup-Rechner mit Netzwerkpfad ins Firmennetz,
+# z.B. per Cloud Kerberos Trust + VPN/Private Access - Kerberos allein ersetzt keine Netzwerksicht)
+
+function Find-EnterpriseCAs {
+    # Fragt die Enterprise-CAs direkt aus der AD-Konfigurationspartition ab
+    # (CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,...),
+    # genau der Mechanismus, den auch die Windows-Zertifikatsanforderung intern nutzt.
+    # Absichtlich ohne Write-WizardLog: wird typischerweise aus einem Start-Job heraus
+    # aufgerufen, in dem kein GUI-Log-Kontext existiert.
+    param([int]$TimeoutSeconds = 8)
+
+    try {
+        $rootDse = New-Object System.DirectoryServices.DirectoryEntry('LDAP://RootDSE')
+        $configNC = $rootDse.Properties['configurationNamingContext'].Value
+        if (-not $configNC) { return @() }
+
+        $casPath = "LDAP://CN=Enrollment Services,CN=Public Key Services,CN=Services,$configNC"
+        $casEntry = New-Object System.DirectoryServices.DirectoryEntry($casPath)
+        $searcher = New-Object System.DirectoryServices.DirectorySearcher($casEntry)
+        $searcher.Filter = '(objectClass=pKIEnrollmentService)'
+        $searcher.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $searcher.ServerTimeLimit = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'dNSHostName', 'certificateTemplates'))
+
+        $results = $searcher.FindAll()
+        $cas = foreach ($r in $results) {
+            $name = $r.Properties['cn'][0]
+            $server = $r.Properties['dNSHostName'][0]
+            [pscustomobject]@{
+                Name         = $name
+                Server       = $server
+                ConfigString = "$server\$name"
+                Templates    = @($r.Properties['certificateTemplates'])
+            }
+        }
+        return @($cas)
+    } catch {
+        return @()
+    }
+}
+
+function Test-CAConnectivity {
+    param(
+        [Parameter(Mandatory)][string]$ConfigString,
+        [int]$TimeoutSeconds = 8
+    )
+    $result = Invoke-ExternalCommand -FilePath 'certutil.exe' -ArgumentList @('-ping', '-config', $ConfigString) -TimeoutSeconds $TimeoutSeconds
+    return $result.Success
+}
+
+function Get-PkiReachability {
+    # Kombiniert AD-Discovery und RPC-Erreichbarkeitstest; liefert nur tatsaechlich
+    # erreichbare CAs zurueck. Gedacht zum Aufruf in einem Start-Job mit Wait-Job -Timeout,
+    # da sowohl LDAP- als auch RPC-Aufrufe bei nicht erreichbaren Servern lange haengen koennen.
+    param([int]$TimeoutSeconds = 8)
+
+    $cas = Find-EnterpriseCAs -TimeoutSeconds $TimeoutSeconds
+    $reachable = foreach ($ca in $cas) {
+        if (Test-CAConnectivity -ConfigString $ca.ConfigString -TimeoutSeconds $TimeoutSeconds) {
+            $ca
+        }
+    }
+    return @($reachable)
 }
 
 #endregion

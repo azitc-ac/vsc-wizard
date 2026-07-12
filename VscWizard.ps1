@@ -63,9 +63,14 @@ $mainLayout.ColumnCount = 1
 [void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 32)))
 $form.Controls.Add($mainLayout)
 
+$pnlTabHost = New-Object System.Windows.Forms.Panel
+$pnlTabHost.Dock = 'Fill'
+$mainLayout.Controls.Add($pnlTabHost, 0, 0)
+
 $tabs = New-Object System.Windows.Forms.TabControl
 $tabs.Dock = 'Fill'
-$mainLayout.Controls.Add($tabs, 0, 0)
+$pnlTabHost.Controls.Add($tabs)
+$tabs.Visible = $false
 
 $tabPlanA = New-Object System.Windows.Forms.TabPage
 $tabPlanA.Text = 'Plan A: AD-Domaene'
@@ -74,6 +79,125 @@ $tabPlanB.Text = 'Plan B: Entra / Workgroup'
 $tabSettings = New-Object System.Windows.Forms.TabPage
 $tabSettings.Text = 'Einstellungen'
 $tabs.TabPages.AddRange(@($tabPlanA, $tabPlanB, $tabSettings))
+
+#endregion
+
+#region LANDING (Kontoauswahl: angemeldeter Benutzer oder separates Konto)
+
+$pnlLanding = New-Object System.Windows.Forms.Panel
+$pnlLanding.Dock = 'Fill'
+$pnlTabHost.Controls.Add($pnlLanding)
+
+$lblLandingTitle = New-WizardLabel -Text 'Fuer wen soll die virtuelle Smartcard beantragt werden?' -X 20 -Y 20 -Width 780 -Style Bold
+
+$radSelf = New-Object System.Windows.Forms.RadioButton
+$radSelf.Text = "Fuer mich (aktuell angemeldet als $env:USERDOMAIN\$env:USERNAME)"
+$radSelf.Location = New-Object System.Drawing.Point(20, 60)
+$radSelf.Size = New-Object System.Drawing.Size(700, 24)
+$radSelf.Checked = $true
+
+$radOther = New-Object System.Windows.Forms.RadioButton
+$radOther.Text = 'Fuer ein separates Konto (z.B. Admin-Konto)'
+$radOther.Location = New-Object System.Drawing.Point(20, 90)
+$radOther.Size = New-Object System.Drawing.Size(700, 24)
+
+$lblOtherAccount = New-WizardLabel -Text 'Zielkonto (z.B. CONTOSO\adm.mustermann oder UPN):' -X 40 -Y 122 -Width 500
+$txtOtherAccount = New-Object System.Windows.Forms.TextBox
+$txtOtherAccount.Location = New-Object System.Drawing.Point(40, 148)
+$txtOtherAccount.Size = New-Object System.Drawing.Size(400, 24)
+$txtOtherAccount.Enabled = $false
+
+$btnContinueSelf = New-Object System.Windows.Forms.Button
+$btnContinueSelf.Text = "Los geht's"
+$btnContinueSelf.Location = New-Object System.Drawing.Point(20, 186)
+$btnContinueSelf.Size = New-Object System.Drawing.Size(160, 32)
+
+$lblOtherExplain = New-WizardLabel -Text 'Fuer ein separates Konto muessen PIN-Vergabe und Zertifikatsbindung im Sicherheitskontext dieses Kontos erfolgen - dafuer ist eine eigene interaktive Anmeldung noetig (dieselbe Einschraenkung wie beim RDP-Schritt in Plan B, hier aber unabhaengig vom Domaenen-Status). Danach diesen Wizard in der neuen Sitzung erneut starten und dort "Fuer mich" waehlen.' -X 40 -Y 228 -Width 760 -Height 60
+
+$btnRunasCommand = New-Object System.Windows.Forms.Button
+$btnRunasCommand.Text = 'runas-Befehl anzeigen && kopieren'
+$btnRunasCommand.Location = New-Object System.Drawing.Point(40, 296)
+$btnRunasCommand.Size = New-Object System.Drawing.Size(280, 32)
+$btnRunasCommand.Enabled = $false
+
+$btnRdpInstructions = New-Object System.Windows.Forms.Button
+$btnRdpInstructions.Text = 'RDP-Anleitung anzeigen'
+$btnRdpInstructions.Location = New-Object System.Drawing.Point(330, 296)
+$btnRdpInstructions.Size = New-Object System.Drawing.Size(220, 32)
+$btnRdpInstructions.Enabled = $false
+
+$txtHandoffResult = New-Object System.Windows.Forms.TextBox
+$txtHandoffResult.Location = New-Object System.Drawing.Point(40, 340)
+$txtHandoffResult.Size = New-Object System.Drawing.Size(760, 140)
+$txtHandoffResult.Multiline = $true
+$txtHandoffResult.ReadOnly = $true
+$txtHandoffResult.ScrollBars = 'Vertical'
+$txtHandoffResult.Font = New-Object System.Drawing.Font('Consolas', 9)
+
+$pnlLanding.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $btnContinueSelf, $lblOtherExplain, $btnRunasCommand, $btnRdpInstructions, $txtHandoffResult))
+
+$radSelf.Add_CheckedChanged({
+    if ($radSelf.Checked) {
+        $txtOtherAccount.Enabled = $false
+        $btnContinueSelf.Enabled = $true
+        $btnRunasCommand.Enabled = $false
+        $btnRdpInstructions.Enabled = $false
+    }
+})
+
+$radOther.Add_CheckedChanged({
+    if ($radOther.Checked) {
+        $txtOtherAccount.Enabled = $true
+        $btnContinueSelf.Enabled = $false
+        $btnRunasCommand.Enabled = $true
+        $btnRdpInstructions.Enabled = $true
+    }
+})
+
+$btnContinueSelf.Add_Click({
+    $pnlLanding.Visible = $false
+    $tabs.Visible = $true
+    $tabs.BringToFront()
+})
+
+$btnRunasCommand.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtOtherAccount.Text)) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst ein Zielkonto angeben.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $scriptPath = Join-Path $PSScriptRoot 'VscWizard.ps1'
+    $innerQuoted = '\"' + $scriptPath + '\"'
+    $cmd = "runas /user:$($txtOtherAccount.Text) `"powershell.exe -NoProfile -ExecutionPolicy Bypass -File $innerQuoted`""
+
+    $txtHandoffResult.Text = @"
+Folgenden Befehl in einer Eingabeaufforderung ausfuehren (fragt nach dem Passwort von $($txtOtherAccount.Text)):
+
+$cmd
+
+Es oeffnet sich eine neue Instanz dieses Wizards, angemeldet als $($txtOtherAccount.Text).
+Dort "Fuer mich" waehlen und normal weitermachen (eigene VSC, eigene PIN, eigenes Zertifikat).
+
+Hinweis: runas funktioniert nur, wenn das Zielkonto sich interaktiv lokal anmelden darf.
+Falls nicht (z.B. GPO-Einschraenkung), stattdessen die RDP-Anleitung verwenden.
+"@
+    Set-WizardClipboard -Text $cmd
+})
+
+$btnRdpInstructions.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtOtherAccount.Text)) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst ein Zielkonto angeben.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $txtHandoffResult.Text = @"
+Per RDP als $($txtOtherAccount.Text) anmelden - entweder:
+
+- Lokal per Loopback-RDP auf diesem Rechner (mstsc /v:localhost), oder
+- Auf einem anderen (idealerweise domaenen-gebundenen bzw. CA-erreichbaren) Rechner/Server.
+
+Danach diesen Wizard in der neuen Sitzung erneut starten und dort "Fuer mich" waehlen.
+Diese Sitzung kann parallel offen bleiben.
+"@
+})
 
 #endregion
 
@@ -169,8 +293,9 @@ $pnlStepsA.Controls.Add($pnlA1)
 $lblJoinStateA = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
 $lblUserA = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
 $lblTpmA = New-WizardLabel -Text 'TPM: ...' -X 20 -Y 80
-$lblWarnA = New-WizardLabel -Text '' -X 20 -Y 120 -Style Bold
-$pnlA1.Controls.AddRange(@($lblJoinStateA, $lblUserA, $lblTpmA, $lblWarnA))
+$lblActiveCAA = New-WizardLabel -Text '' -X 20 -Y 110
+$lblWarnA = New-WizardLabel -Text '' -X 20 -Y 140 -Style Bold
+$pnlA1.Controls.AddRange(@($lblJoinStateA, $lblUserA, $lblTpmA, $lblActiveCAA, $lblWarnA))
 
 # --- Schritt A2: VSC erstellen ---
 $pnlA2 = New-Object System.Windows.Forms.Panel
@@ -267,7 +392,8 @@ $btnRequestCertA.Add_Click({
         return
     }
 
-    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
+    $script:PlanA_CAConfigUsed = if ($script:ActiveCAConfig) { $script:ActiveCAConfig } else { $config.CAConfig }
+    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $script:PlanA_CAConfigUsed -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
     if ($submit.Pending) {
         $script:PlanA_PendingRequestId = $submit.RequestId
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
@@ -297,7 +423,7 @@ $btnRequestCertA.Add_Click({
 
 $btnRetrieveA.Add_Click({
     if (-not $script:PlanA_PendingRequestId) { return }
-    $recv = Receive-PendingCertificate -RequestId $script:PlanA_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanA_EnrollDir
+    $recv = Receive-PendingCertificate -RequestId $script:PlanA_PendingRequestId -CAConfig $script:PlanA_CAConfigUsed -OutputDirectory $script:PlanA_EnrollDir
     if ($recv.Success) {
         $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
         if ($complete.Success) {
@@ -356,7 +482,14 @@ function Update-PlanAStatus {
     $lblUserA.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
     $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
 
-    if ($joinState.Mode -ne 'ADDomain') {
+    if ($script:ActiveCAConfig) {
+        $lblActiveCAA.ForeColor = [System.Drawing.Color]::SteelBlue
+        $lblActiveCAA.Text = "Automatisch erkannte CA wird verwendet: $script:ActiveCAConfig"
+    } else {
+        $lblActiveCAA.Text = ''
+    }
+
+    if ($joinState.Mode -ne 'ADDomain' -and -not $script:ActiveCAConfig) {
         $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
         $lblWarnA.Text = 'Dieser Rechner scheint nicht domaenen-gebunden zu sein. Fuer diesen Fall ist "Plan B" vorgesehen.'
     } elseif (-not $tpm.Ready) {
@@ -460,8 +593,82 @@ $pnlStepsB.Controls.Add($pnlB1)
 $lblJoinStateB = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
 $lblUserB = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
 $lblJumpServerB = New-WizardLabel -Text '' -X 20 -Y 80
-$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da dieser Rechner voraussichtlich keine direkte Sicht auf die Zertifizierungsstelle hat.' -X 20 -Y 116 -Width 780 -Height 60
-$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblJumpServerB, $lblExplainB))
+$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da dieser Rechner voraussichtlich keine direkte Sicht auf die Zertifizierungsstelle hat.' -X 20 -Y 116 -Width 780 -Height 40
+
+$lblDiscoverInfoB = New-WizardLabel -Text 'Manche Rechner (z.B. Entra-joined mit Cloud Kerberos Trust und VPN/Private-Access-Verbindung) haben trotzdem direkten Zugriff auf die PKI. Das laesst sich hier automatisch pruefen.' -X 20 -Y 160 -Width 780 -Height 34
+
+$btnDiscoverB = New-Object System.Windows.Forms.Button
+$btnDiscoverB.Text = 'Automatische Erreichbarkeit pruefen'
+$btnDiscoverB.Location = New-Object System.Drawing.Point(20, 198)
+$btnDiscoverB.Size = New-Object System.Drawing.Size(280, 32)
+
+$txtDiscoveryResultB = New-Object System.Windows.Forms.TextBox
+$txtDiscoveryResultB.Location = New-Object System.Drawing.Point(20, 236)
+$txtDiscoveryResultB.Size = New-Object System.Drawing.Size(780, 90)
+$txtDiscoveryResultB.Multiline = $true
+$txtDiscoveryResultB.ReadOnly = $true
+$txtDiscoveryResultB.ScrollBars = 'Vertical'
+$txtDiscoveryResultB.Font = New-Object System.Drawing.Font('Consolas', 9)
+
+$btnUsePlanAB = New-Object System.Windows.Forms.Button
+$btnUsePlanAB.Text = 'Automatisiert fortfahren (Plan A verwenden)'
+$btnUsePlanAB.Location = New-Object System.Drawing.Point(20, 334)
+$btnUsePlanAB.Size = New-Object System.Drawing.Size(300, 32)
+$btnUsePlanAB.Visible = $false
+
+$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblJumpServerB, $lblExplainB, $lblDiscoverInfoB, $btnDiscoverB, $txtDiscoveryResultB, $btnUsePlanAB))
+
+$btnDiscoverB.Add_Click({
+    $btnDiscoverB.Enabled = $false
+    $btnUsePlanAB.Visible = $false
+    $txtDiscoveryResultB.Text = 'Pruefe automatische Erreichbarkeit (CA-Discovery per LDAP, RPC-Verbindungstest, bis zu ca. 25 Sekunden)...'
+    $form.Refresh()
+
+    $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+    $job = Start-Job -ScriptBlock {
+        param($ModulePath, $Timeout)
+        Import-Module $ModulePath -Force
+        Get-PkiReachability -TimeoutSeconds $Timeout
+    } -ArgumentList $modulePath, 8
+
+    $completed = Wait-Job -Job $job -Timeout 25
+    $reachableCAs = @()
+    if ($completed) {
+        $reachableCAs = @(Receive-Job -Job $job)
+    } else {
+        Stop-Job -Job $job
+    }
+    Remove-Job -Job $job -Force
+
+    if ($reachableCAs.Count -gt 0) {
+        $script:DiscoveredCAs = $reachableCAs
+        $lines = $reachableCAs | ForEach-Object { "- $($_.Name) ($($_.ConfigString))`r`n  Templates: $($_.Templates -join ', ')" }
+        $txtDiscoveryResultB.Text = "Erreichbare CA(s) gefunden:`r`n`r`n" + ($lines -join "`r`n")
+        $btnUsePlanAB.Visible = $true
+        Write-WizardLog -Message "Automatische Erkennung: $($reachableCAs.Count) erreichbare CA(s) gefunden." -Level Success
+    } else {
+        $script:DiscoveredCAs = $null
+        $txtDiscoveryResultB.Text = 'Keine erreichbare CA gefunden (LDAP-Discovery oder RPC-Verbindung fehlgeschlagen/Zeitueberschreitung). Bitte mit dem manuellen Ablauf (naechste Schritte) fortfahren.'
+        Write-WizardLog -Message 'Automatische Erkennung: keine erreichbare CA gefunden.' -Level Info
+    }
+    $btnDiscoverB.Enabled = $true
+})
+
+$btnUsePlanAB.Add_Click({
+    if (-not $script:DiscoveredCAs -or $script:DiscoveredCAs.Count -eq 0) { return }
+    $primary = $script:DiscoveredCAs[0]
+    $script:ActiveCAConfig = $primary.ConfigString
+
+    $allTemplates = @($script:DiscoveredCAs | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+    if ($allTemplates.Count -eq 0) { $allTemplates = $config.Templates }
+
+    $cboTemplateA.Items.Clear()
+    [void]$cboTemplateA.Items.AddRange($allTemplates)
+    if ($cboTemplateA.Items.Count -gt 0) { $cboTemplateA.SelectedIndex = 0 }
+
+    $tabs.SelectedTab = $tabPlanA
+    Show-PlanAStep -Index 1
+})
 
 # --- Schritt B2: VSC erstellen ---
 $pnlB2 = New-Object System.Windows.Forms.Panel
