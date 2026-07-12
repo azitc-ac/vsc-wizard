@@ -371,14 +371,14 @@ $txtCardNameA.Location = New-Object System.Drawing.Point(20, 46)
 $txtCardNameA.Size = New-Object System.Drawing.Size(300, 24)
 $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
 
-$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt) sowie ein PIN-Dialog von Windows zur Vergabe der Karten-PIN.' -X 20 -Y 84 -Width 780 -Height 50
+$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein SEPARATES KONSOLENFENSTER (kein Dialog!), das direkt dort per Texteingabe nach der Karten-PIN fragt - falls es nicht automatisch in den Vordergrund kommt, in der Taskleiste danach suchen. Dieses Fenster bleibt bis zum Abschluss offen.' -X 20 -Y 84 -Width 780 -Height 76
 
 $btnCreateVscA = New-Object System.Windows.Forms.Button
 $btnCreateVscA.Text = 'Virtuelle Smartcard erstellen'
-$btnCreateVscA.Location = New-Object System.Drawing.Point(20, 146)
+$btnCreateVscA.Location = New-Object System.Drawing.Point(20, 172)
 $btnCreateVscA.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblVscResultA = New-WizardLabel -Text '' -X 20 -Y 190 -Width 780
+$lblVscResultA = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780
 
 $pnlA2.Controls.AddRange(@($lblCardNameA, $txtCardNameA, $lblVscInfoA, $btnCreateVscA, $lblVscResultA))
 
@@ -389,7 +389,7 @@ $btnCreateVscA.Add_Click({
     }
     $btnCreateVscA.Enabled = $false
     $lblVscResultA.ForeColor = [System.Drawing.Color]::Black
-    $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC- und PIN-Dialog bestaetigen...'
+    $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestaetigen, dann im separaten Konsolenfenster die PIN eingeben...'
     $form.Refresh()
 
     $result = New-VirtualSmartCard -CardName $txtCardNameA.Text
@@ -661,14 +661,14 @@ $txtCardNameB.Location = New-Object System.Drawing.Point(20, 46)
 $txtCardNameB.Size = New-Object System.Drawing.Size(300, 24)
 $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
 
-$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt) sowie ein PIN-Dialog von Windows zur Vergabe der Karten-PIN.' -X 20 -Y 84 -Width 780 -Height 50
+$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein SEPARATES KONSOLENFENSTER (kein Dialog!), das direkt dort per Texteingabe nach der Karten-PIN fragt - falls es nicht automatisch in den Vordergrund kommt, in der Taskleiste danach suchen. Dieses Fenster bleibt bis zum Abschluss offen.' -X 20 -Y 84 -Width 780 -Height 76
 
 $btnCreateVscB = New-Object System.Windows.Forms.Button
 $btnCreateVscB.Text = 'Virtuelle Smartcard erstellen'
-$btnCreateVscB.Location = New-Object System.Drawing.Point(20, 146)
+$btnCreateVscB.Location = New-Object System.Drawing.Point(20, 172)
 $btnCreateVscB.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblVscResultB = New-WizardLabel -Text '' -X 20 -Y 190 -Width 780
+$lblVscResultB = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780
 
 $pnlB2.Controls.AddRange(@($lblCardNameB, $txtCardNameB, $lblVscInfoB, $btnCreateVscB, $lblVscResultB))
 
@@ -679,7 +679,7 @@ $btnCreateVscB.Add_Click({
     }
     $btnCreateVscB.Enabled = $false
     $lblVscResultB.ForeColor = [System.Drawing.Color]::Black
-    $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC- und PIN-Dialog bestaetigen...'
+    $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestaetigen, dann im separaten Konsolenfenster die PIN eingeben...'
     $form.Refresh()
 
     $result = New-VirtualSmartCard -CardName $txtCardNameB.Text

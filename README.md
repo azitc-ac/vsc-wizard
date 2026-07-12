@@ -68,8 +68,10 @@ wird:
 1. **Status**: Domaenen-Status, TPM-Status und angemeldeter Benutzer werden
    automatisch geprueft.
 2. **Virtuelle Smartcard erstellen**: `tpmvscmgr create` (mit gezielter
-   UAC-Elevation); die Karten-PIN wird ueber den nativen Windows-PIN-Dialog
-   vergeben.
+   UAC-Elevation) laeuft in einem eigenen, direkt elevierten Konsolenfenster
+   (kein Wrapper-Prozess, keine Ausgabeumleitung) und fragt dort per
+   Texteingabe nach der Karten-PIN - **kein** GUI-Dialog. Das Fenster kommt
+   moeglicherweise nicht automatisch in den Vordergrund.
 3. **Zertifikat anfordern**: `certreq -new` (Schluesselerzeugung auf der
    Smartcard) gefolgt von `certreq -submit` gegen die konfigurierte CA und
    `certreq -accept` zur Uebernahme - alles im Benutzerkontext. Erfordert das
@@ -160,9 +162,13 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
 - Der RDP-Zwischenschritt in Plan B bleibt bewusst manuell (Kopieren der
   CSR-/CER-Datei) - dies ist eine inhaerente Einschraenkung des Szenarios ohne
   direkte CA-Sicht.
-- Die automatische Erreichbarkeitspruefung ist auf ca. 25 Sekunden begrenzt
+- Die automatische Erreichbarkeitspruefung ist auf ca. 40 Sekunden begrenzt
   (LDAP-Discovery + RPC-Ping je CA); bei einer sehr langsamen, aber
   grundsaetzlich erreichbaren PKI kann das faelschlich als "nicht erreichbar"
   gewertet werden.
 - Der `runas`-Weg fuer separate Konten setzt voraus, dass das Zielkonto sich
   interaktiv lokal anmelden darf (keine GPO-Einschraenkung); sonst RDP nutzen.
+- Die Ausgabe von `tpmvscmgr create` landet nicht im Log (bewusst keine
+  Umleitung, siehe oben) - Erfolg/Misserfolg ist nur am Exit-Code sowie am
+  Ergebnis im separaten Konsolenfenster erkennbar. Kommt dieses Fenster nicht
+  automatisch in den Vordergrund, in der Taskleiste danach suchen.

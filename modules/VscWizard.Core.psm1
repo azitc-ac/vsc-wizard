@@ -345,25 +345,22 @@ function New-VirtualSmartCard {
     }
 
     # tpmvscmgr benoetigt lokale Administratorrechte - nur fuer diesen Schritt wird
-    # gezielt ein erhoehter Hilfsprozess gestartet, der Rest der App laeuft im
-    # normalen Benutzerkontext (wichtig fuer die spaetere Zertifikatsbindung).
-    $resultFile = Join-Path (Get-WizardWorkingDir) "tpmvscmgr-$([guid]::NewGuid()).log"
-    $argLine = ($vscArgs | ForEach-Object { if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ } }) -join ' '
-    $wrapped = "& `"$tpmvscmgr`" $argLine *> `"$resultFile`""
+    # gezielt ein erhoehter Prozess gestartet, der Rest der App laeuft im normalen
+    # Benutzerkontext (wichtig fuer die spaetere Zertifikatsbindung).
+    #
+    # WICHTIG: tpmvscmgr fragt die PIN interaktiv UEBER DIE KONSOLE ab (kein GUI-
+    # Dialog!). Stdout/Stderr duerfen deshalb NICHT umgeleitet werden - sonst laeuft
+    # die Prompt-Anzeige ins Leere und der Prozess haengt auf eine Eingabe, die nie
+    # ankommt (leeres/unveraendertes Konsolenfenster). tpmvscmgr wird deshalb direkt
+    # elevated gestartet (kein umschliessender powershell-Wrapper), damit es sein
+    # eigenes, voll interaktives Konsolenfenster bekommt.
+    Write-WizardLog -Message "Starte erhoehten Prozess (eigenes Konsolenfenster, PIN-Eingabe dort erforderlich): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
 
-    Write-WizardLog -Message "Starte erhoehten Prozess fuer: $tpmvscmgr $argLine" -Level Command
-
-    $proc = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $wrapped) `
-        -Verb RunAs -PassThru -Wait
-
-    $output = if (Test-Path $resultFile) { Get-Content $resultFile -Raw } else { '' }
-    if ($output.Trim()) { Write-WizardLog -Message $output.Trim() -Level Output }
-    Remove-Item $resultFile -ErrorAction SilentlyContinue
+    $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait
 
     [pscustomobject]@{
         ExitCode = $proc.ExitCode
-        Output   = $output
+        Output   = $null
         Success  = ($proc.ExitCode -eq 0)
     }
 }
