@@ -12,21 +12,30 @@ Karte und die Zertifikatsbeantragung und unterstuetzt zwei Szenarien als Tabs:
   Zielbenutzer auf einen CA-nahen Server eingereicht, und das ausgestellte
   Zertifikat anschliessend wieder lokal auf der virtuellen Smartcard hinterlegt.
 
-Die Beantragung setzt eine bestehende Anmeldung als der Zielbenutzer voraus;
-das Tool fuehrt die Schritte im jeweiligen Benutzerkontext aus (nur die
-Kartenerstellung mit `tpmvscmgr` fordert gezielt eine UAC-Elevation an).
+Die Beantragung laeuft im Benutzerkontext, in dem der Wizard gestartet wurde
+(nur die Kartenerstellung mit `tpmvscmgr` fordert gezielt eine
+UAC-Elevation an) - das gilt unabhaengig davon, fuer wen die Smartcard
+gedacht ist, siehe naechster Abschnitt.
 
 Beim Start fragt der Wizard zunaechst, **fuer wen** die Smartcard beantragt
 wird:
 
-- **Fuer mich**: normaler Ablauf im aktuell angemeldeten Benutzerkontext.
-- **Fuer ein separates Konto** (z.B. ein Admin-Konto): PIN-Vergabe und
-  Zertifikatsbindung muessen im Sicherheitskontext des Zielkontos erfolgen.
-  Der Wizard zeigt dafuer einen `runas`-Befehl (inkl. Zwischenablage-Kopie)
-  oder eine RDP-Anleitung an, um sich als Zielkonto interaktiv anzumelden -
-  in der neuen Sitzung dann erneut den Wizard starten und "Fuer mich"
-  waehlen. Fuer mehrere Admin-Konten wird dieser Ablauf entsprechend
-  mehrfach durchlaufen (je eine eigene virtuelle Smartcard pro Konto).
+- **Fuer mich**: normaler Ablauf, alles im aktuell angemeldeten
+  Benutzerkontext.
+- **Fuer ein separates Konto** (z.B. ein Admin-Konto): Kartenerstellung und
+  CSR-Erstellung laufen trotzdem ganz normal im eigenen Benutzerkontext -
+  die Smartcard-PIN ist kontounabhaengig und `certreq` verwaltet offene
+  Antraege im Profil des aufrufenden Benutzers, nicht des Zielkontos. Es ist
+  also **keine** gesonderte Anmeldung als Zielkonto fuer VSC/CSR noetig.
+  Nur die Einreichung bei der CA muss aus Berechtigungsgruenden als
+  Zielkonto erfolgen (die CA prueft die Enroll-Berechtigung anhand des
+  einreichenden Kontos) - dafuer fuehrt Plan B automatisch an der
+  passenden Stelle einen RDP-Zwischenschritt ein, unabhaengig vom
+  Domaenen-Status dieses Rechners (Plan A unterstuetzt kein separates
+  Konto, siehe unten). Die Uebernahme des fertigen Zertifikats passiert
+  danach wieder hier im eigenen Konto. Fuer mehrere Admin-Konten wird der
+  gesamte Ablauf entsprechend mehrfach durchlaufen (je eine eigene
+  virtuelle Smartcard pro Konto).
 
 ## Voraussetzungen
 
@@ -65,6 +74,11 @@ wird:
 
 ### Plan A (automatisiert)
 
+Funktioniert nur fuer "Fuer mich" (angemeldeter Benutzer) - bei einem
+separaten Zielkonto blockiert Schritt 3 mit einem Hinweis auf Plan B, da
+die Einreichung sonst unter der eigenen statt der Zielkonto-Identitaet
+laufen wuerde.
+
 1. **Status**: Domaenen-Status, TPM-Status und angemeldeter Benutzer werden
    automatisch geprueft.
 2. **Virtuelle Smartcard erstellen**: `tpmvscmgr create` (mit gezielter
@@ -82,27 +96,38 @@ wird:
 
 ### Plan B (mit RDP-Zwischenschritt)
 
-1. **Status**: Erkannter Domaenen-Status (Entra-joined/Workgroup) und
+Wird gebraucht, wenn dieser Rechner keine direkte Sicht auf die
+Zertifizierungsstelle hat **oder** die Smartcard fuer ein separates Konto
+beantragt wird (dann unabhaengig vom Domaenen-Status, da die Einreichung
+in beiden Faellen woanders/als andere Identitaet passieren muss).
+
+1. **Status**: Erkannter Domaenen-Status (Entra-joined/Workgroup), gewaehltes
+   Zielkonto (falls "Fuer ein separates Konto" gewaehlt wurde) und
    konfigurierter RDP-Zielserver. Die automatische PKI-Erkennung (siehe
    Einstellungen) kann auch fuer Entra-joined-Rechner mit Cloud Kerberos
    Trust und einer VPN-/Private-Access-Verbindung dazu fuehren, dass direkter
-   PKI-Zugriff besteht - in dem Fall einfach in Tab "Plan A" wechseln, statt
-   den manuellen RDP-Ablauf zu durchlaufen.
-2. **Virtuelle Smartcard erstellen**: wie bei Plan A.
+   PKI-Zugriff besteht - in dem Fall (sofern kein separates Konto involviert
+   ist) einfach in Tab "Plan A" wechseln, statt den manuellen RDP-Ablauf zu
+   durchlaufen.
+2. **Virtuelle Smartcard erstellen**: wie bei Plan A - im eigenen
+   Benutzerkontext, unabhaengig vom Zielkonto.
 3. **CSR erstellen (lokal)**: `certreq -new` erzeugt eine an die Smartcard
-   gebundene Zertifikatsanforderung; Pfad kann per Knopfdruck kopiert oder
-   der Ordner geoeffnet werden.
-4. **Uebergabe per RDP**: Anleitung mit konkretem Zielserver und Benutzer;
-   die CSR-Datei muss manuell auf den Server kopiert werden (Bruch im
-   Workflow, da der Rechner keine direkte CA-Sicht hat).
+   gebundene Zertifikatsanforderung mit dem Zielkonto (oder dem eigenen
+   Konto) als Subject; laeuft ebenfalls im eigenen Benutzerkontext. Pfad
+   kann per Knopfdruck kopiert oder der Ordner geoeffnet werden.
+4. **Uebergabe per RDP**: Anleitung mit konkretem Zielserver und dem Konto,
+   als das man sich dort anmelden soll (Zielkonto bei separatem Konto, sonst
+   das eigene); die CSR-Datei muss manuell auf den Server kopiert werden.
 5. **Antrag einreichen (auf dem Server)**: Auf dem RDP-Zielserver, angemeldet
-   als Zielbenutzer, wird dieselbe Anwendung im gleichen Modus weiter
-   bedient: CSR-Datei auswaehlen, Template waehlen, einreichen. Das
+   als das Konto aus Schritt 4, wird dieselbe Anwendung im gleichen Modus
+   weiter bedient: CSR-Datei auswaehlen, Template waehlen, einreichen. Das
    ausgestellte Zertifikat (`certnew.cer`) wird lokal auf dem Server abgelegt
    und muss zurueck auf den Ausgangsrechner kopiert werden.
-6. **Zertifikat abschliessen (lokal)**: Zurueck auf dem Ausgangsrechner wird
-   die `.cer`-Datei ausgewaehlt und per `certreq -accept` an den bereits auf
-   der Smartcard vorhandenen privaten Schluessel gebunden.
+6. **Zertifikat abschliessen (lokal)**: Zurueck auf dem Ausgangsrechner, im
+   **eigenen** Benutzerkontext (nicht dem Zielkonto - `certreq` verwaltet den
+   offenen Antrag im Profil des Kontos, das die CSR erstellt hat), wird die
+   `.cer`-Datei ausgewaehlt und per `certreq -accept` an den bereits auf der
+   Smartcard vorhandenen privaten Schluessel gebunden.
 
 ### Einstellungen
 
@@ -178,8 +203,8 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
   (LDAP-Discovery + RPC-Ping je CA); bei einer sehr langsamen, aber
   grundsaetzlich erreichbaren PKI kann das faelschlich als "nicht erreichbar"
   gewertet werden.
-- Der `runas`-Weg fuer separate Konten setzt voraus, dass das Zielkonto sich
-  interaktiv lokal anmelden darf (keine GPO-Einschraenkung); sonst RDP nutzen.
+- Fuer ein separates Zielkonto unterstuetzt nur Plan B die Einreichung (siehe
+  oben); Plan A blockiert Schritt 3 mit einem Hinweis darauf.
 - Die Ausgabe von `tpmvscmgr create` landet nicht im Log (bewusst keine
   Umleitung, siehe oben) - Erfolg/Misserfolg ist nur am Exit-Code sowie am
   Ergebnis im separaten Konsolenfenster erkennbar. Kommt dieses Fenster nicht

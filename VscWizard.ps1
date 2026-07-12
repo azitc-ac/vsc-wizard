@@ -47,6 +47,20 @@ function New-WizardLabel {
     return $lbl
 }
 
+# $script:TargetAccount ist $null (= aktuell angemeldeter Benutzer) oder ein auf dem
+# Landing-Screen eingegebenes Zielkonto. VSC- und CSR-Erstellung laufen unabhaengig
+# davon immer im aktuellen Benutzerkontext (die Smartcard-PIN ist kontounabhaengig
+# und certreq verwaltet offene Antraege im Profil des aufrufenden Benutzers) - nur
+# die Einreichung bei der CA muss aus Berechtigungsgruenden als Zielkonto erfolgen.
+function Get-EnrollmentIdentity {
+    if ($script:TargetAccount) {
+        $upn = if ($script:TargetAccount -match '@') { $script:TargetAccount } else { $null }
+        $cn = if ($script:TargetAccount -match '\\') { ($script:TargetAccount -split '\\')[-1] } else { $script:TargetAccount }
+        return [pscustomobject]@{ Subject = "CN=$cn"; Upn = $upn; DisplayName = $script:TargetAccount; SearchTerm = $cn }
+    }
+    return [pscustomobject]@{ Subject = "CN=$env:USERNAME"; Upn = (Get-CurrentUpn); DisplayName = "$env:USERDOMAIN\$env:USERNAME"; SearchTerm = $env:USERNAME }
+}
+
 # Einfache Hint/Placeholder-Eingabe: zeigt grauen Beispieltext, solange kein echter
 # Wert eingetragen ist; verschwindet beim Fokussieren, kehrt beim Verlassen eines
 # leeren Feldes zurueck. Erkennung "ist gerade Placeholder" ueber ForeColor=Gray.
@@ -171,96 +185,40 @@ $txtOtherAccount.Location = New-Object System.Drawing.Point(40, 148)
 $txtOtherAccount.Size = New-Object System.Drawing.Size(400, 24)
 $txtOtherAccount.Enabled = $false
 
+$lblOtherExplain = New-WizardLabel -Text 'Karten- und CSR-Erstellung laufen ganz normal in deinem eigenen Benutzerkontext - dafuer ist keine gesonderte Anmeldung als Zielkonto noetig (die Smartcard-PIN ist unabhaengig vom Windows-Konto). Nur die spaetere Einreichung bei der CA muss aus Berechtigungsgruenden als Zielkonto erfolgen; Plan B fuehrt dich an der passenden Stelle dorthin (z.B. per RDP), die Uebernahme des fertigen Zertifikats erfolgt danach wieder hier.' -X 40 -Y 178 -Width 760 -Height 60
+
 $btnContinueSelf = New-Object System.Windows.Forms.Button
 $btnContinueSelf.Text = "Los geht's"
-$btnContinueSelf.Location = New-Object System.Drawing.Point(20, 186)
+$btnContinueSelf.Location = New-Object System.Drawing.Point(20, 250)
 $btnContinueSelf.Size = New-Object System.Drawing.Size(160, 32)
 
-$lblOtherExplain = New-WizardLabel -Text 'Fuer ein separates Konto muessen PIN-Vergabe und Zertifikatsbindung im Sicherheitskontext dieses Kontos erfolgen - dafuer ist eine eigene interaktive Anmeldung noetig (dieselbe Einschraenkung wie beim RDP-Schritt in Plan B, hier aber unabhaengig vom Domaenen-Status). Danach diesen Wizard in der neuen Sitzung erneut starten und dort "Fuer mich" waehlen.' -X 40 -Y 228 -Width 760 -Height 60
+$lblLandingValidation = New-WizardLabel -Text '' -X 20 -Y 292 -Width 760
+$lblLandingValidation.ForeColor = [System.Drawing.Color]::Firebrick
 
-$btnRunasCommand = New-Object System.Windows.Forms.Button
-$btnRunasCommand.Text = 'runas-Befehl anzeigen && kopieren'
-$btnRunasCommand.Location = New-Object System.Drawing.Point(40, 296)
-$btnRunasCommand.Size = New-Object System.Drawing.Size(280, 32)
-$btnRunasCommand.Enabled = $false
-
-$btnRdpInstructions = New-Object System.Windows.Forms.Button
-$btnRdpInstructions.Text = 'RDP-Anleitung anzeigen'
-$btnRdpInstructions.Location = New-Object System.Drawing.Point(330, 296)
-$btnRdpInstructions.Size = New-Object System.Drawing.Size(220, 32)
-$btnRdpInstructions.Enabled = $false
-
-$txtHandoffResult = New-Object System.Windows.Forms.TextBox
-$txtHandoffResult.Location = New-Object System.Drawing.Point(40, 340)
-$txtHandoffResult.Size = New-Object System.Drawing.Size(760, 140)
-$txtHandoffResult.Multiline = $true
-$txtHandoffResult.ReadOnly = $true
-$txtHandoffResult.ScrollBars = 'Vertical'
-$txtHandoffResult.Font = New-Object System.Drawing.Font('Consolas', 9)
-
-$pnlLanding.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $btnContinueSelf, $lblOtherExplain, $btnRunasCommand, $btnRdpInstructions, $txtHandoffResult))
+$pnlLanding.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $btnContinueSelf, $lblLandingValidation))
 
 $radSelf.Add_CheckedChanged({
-    if ($radSelf.Checked) {
-        $txtOtherAccount.Enabled = $false
-        $btnContinueSelf.Enabled = $true
-        $btnRunasCommand.Enabled = $false
-        $btnRdpInstructions.Enabled = $false
-    }
+    if ($radSelf.Checked) { $txtOtherAccount.Enabled = $false }
 })
 
 $radOther.Add_CheckedChanged({
-    if ($radOther.Checked) {
-        $txtOtherAccount.Enabled = $true
-        $btnContinueSelf.Enabled = $false
-        $btnRunasCommand.Enabled = $true
-        $btnRdpInstructions.Enabled = $true
-    }
+    if ($radOther.Checked) { $txtOtherAccount.Enabled = $true }
 })
 
 $btnContinueSelf.Add_Click({
+    if ($radOther.Checked) {
+        if ([string]::IsNullOrWhiteSpace($txtOtherAccount.Text)) {
+            $lblLandingValidation.Text = 'Bitte ein Zielkonto angeben.'
+            return
+        }
+        $script:TargetAccount = $txtOtherAccount.Text.Trim()
+    } else {
+        $script:TargetAccount = $null
+    }
+    $lblLandingValidation.Text = ''
     $pnlLanding.Visible = $false
     $tabs.Visible = $true
     $tabs.BringToFront()
-})
-
-$btnRunasCommand.Add_Click({
-    if ([string]::IsNullOrWhiteSpace($txtOtherAccount.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst ein Zielkonto angeben.', 'Hinweis', 'OK', 'Warning') | Out-Null
-        return
-    }
-    $scriptPath = Join-Path $PSScriptRoot 'VscWizard.ps1'
-    $innerQuoted = '\"' + $scriptPath + '\"'
-    $cmd = "runas /user:$($txtOtherAccount.Text) `"powershell.exe -NoProfile -ExecutionPolicy Bypass -File $innerQuoted`""
-
-    $txtHandoffResult.Text = @"
-Folgenden Befehl in einer Eingabeaufforderung ausfuehren (fragt nach dem Passwort von $($txtOtherAccount.Text)):
-
-$cmd
-
-Es oeffnet sich eine neue Instanz dieses Wizards, angemeldet als $($txtOtherAccount.Text).
-Dort "Fuer mich" waehlen und normal weitermachen (eigene VSC, eigene PIN, eigenes Zertifikat).
-
-Hinweis: runas funktioniert nur, wenn das Zielkonto sich interaktiv lokal anmelden darf.
-Falls nicht (z.B. GPO-Einschraenkung), stattdessen die RDP-Anleitung verwenden.
-"@
-    Set-WizardClipboard -Text $cmd
-})
-
-$btnRdpInstructions.Add_Click({
-    if ([string]::IsNullOrWhiteSpace($txtOtherAccount.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst ein Zielkonto angeben.', 'Hinweis', 'OK', 'Warning') | Out-Null
-        return
-    }
-    $txtHandoffResult.Text = @"
-Per RDP als $($txtOtherAccount.Text) anmelden - entweder:
-
-- Lokal per Loopback-RDP auf diesem Rechner (mstsc /v:localhost), oder
-- Auf einem anderen (idealerweise domaenen-gebundenen bzw. CA-erreichbaren) Rechner/Server.
-
-Danach diesen Wizard in der neuen Sitzung erneut starten und dort "Fuer mich" waehlen.
-Diese Sitzung kann parallel offen bleiben.
-"@
 })
 
 #endregion
@@ -433,6 +391,10 @@ $btnRetrieveA.Visible = $false
 $pnlA3.Controls.AddRange(@($lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
+    if ($script:TargetAccount) {
+        [System.Windows.Forms.MessageBox]::Show('Fuer ein separates Konto funktioniert dieser automatisierte Ablauf nicht - die Einreichung bei der CA wuerde unter deiner eigenen Identitaet laufen, nicht der des Zielkontos. Bitte stattdessen Plan B verwenden: dort ist die Einreichung ein eigener Schritt, der als Zielkonto (z.B. per RDP) durchgefuehrt werden kann.', 'Separates Konto: Plan B verwenden', 'OK', 'Information') | Out-Null
+        return
+    }
     if (-not $cboTemplateA.SelectedItem) {
         [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
@@ -443,10 +405,9 @@ $btnRequestCertA.Add_Click({
     $form.Refresh()
 
     $script:PlanA_EnrollDir = Join-Path (Get-WizardWorkingDir) "PlanA-$($script:PlanA_CardName)"
-    $upn = Get-CurrentUpn
-    $subject = "CN=$env:USERNAME"
+    $identity = Get-EnrollmentIdentity
 
-    $csr = New-CertificateSigningRequest -Subject $subject -Upn $upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir
+    $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir
     if (-not $csr.Success) {
         $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
         $lblCertResultA.Text = 'CSR-Erstellung fehlgeschlagen. Details siehe Log.'
@@ -512,7 +473,7 @@ $btnResetA.Size = New-Object System.Drawing.Size(240, 32)
 $pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA))
 
 function Update-PlanASummary {
-    $summary = Get-IssuedCertificateSummary -SubjectContains $env:USERNAME
+    $summary = Get-IssuedCertificateSummary -SubjectContains (Get-EnrollmentIdentity).SearchTerm
     if ($summary) {
         $lblSummaryA.Text = "Kartenname: $($script:PlanA_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGueltig ab: $($summary.NotBefore)`r`nGueltig bis: $($summary.NotAfter)"
     } else {
@@ -543,7 +504,10 @@ function Update-PlanAStatus {
     $lblUserA.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
     $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
 
-    if ($joinState.Mode -ne 'ADDomain') {
+    if ($script:TargetAccount) {
+        $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblWarnA.Text = "Smartcard wird fuer ein separates Konto beantragt ($($script:TargetAccount)) - die Zertifikatsanforderung in Schritt 3 funktioniert hier nicht, bitte Plan B verwenden."
+    } elseif ($joinState.Mode -ne 'ADDomain') {
         $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
         $lblWarnA.Text = 'Dieser Rechner scheint nicht domaenen-gebunden zu sein. Fuer diesen Fall ist "Plan B" vorgesehen.'
     } elseif (-not $tpm.Ready) {
@@ -646,9 +610,10 @@ $pnlStepsB.Controls.Add($pnlB1)
 
 $lblJoinStateB = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
 $lblUserB = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
-$lblJumpServerB = New-WizardLabel -Text '' -X 20 -Y 80
-$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da dieser Rechner voraussichtlich keine direkte Sicht auf die Zertifizierungsstelle hat. CA-Konfiguration und automatische PKI-Erkennung finden sich im Tab "Einstellungen".' -X 20 -Y 116 -Width 780 -Height 60
-$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblJumpServerB, $lblExplainB))
+$lblTargetB = New-WizardLabel -Text '' -X 20 -Y 80
+$lblJumpServerB = New-WizardLabel -Text '' -X 20 -Y 110
+$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da entweder dieser Rechner keine direkte Sicht auf die Zertifizierungsstelle hat oder die Einreichung als separates Zielkonto erfolgen muss. CA-Konfiguration und automatische PKI-Erkennung finden sich im Tab "Einstellungen".' -X 20 -Y 146 -Width 780 -Height 60
+$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblTargetB, $lblJumpServerB, $lblExplainB))
 
 # --- Schritt B2: VSC erstellen ---
 $pnlB2 = New-Object System.Windows.Forms.Panel
@@ -732,10 +697,9 @@ $btnCreateCsrB.Add_Click({
     }
     $btnCreateCsrB.Enabled = $false
     $script:PlanB_EnrollDir = Join-Path (Get-WizardWorkingDir) "PlanB-$($script:PlanB_CardName)"
-    $upn = Get-CurrentUpn
-    $subject = "CN=$env:USERNAME"
+    $identity = Get-EnrollmentIdentity
 
-    $csr = New-CertificateSigningRequest -Subject $subject -Upn $upn -CspName $config.CspName -OutputDirectory $script:PlanB_EnrollDir
+    $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanB_EnrollDir
     if ($csr.Success) {
         $script:PlanB_CsrPath = $csr.CsrPath
         $txtCsrPathB.Text = $csr.CsrPath
@@ -762,17 +726,28 @@ $lblHandoffB = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 220
 $pnlB4.Controls.Add($lblHandoffB)
 
 function Update-PlanBHandoff {
+    $identity = Get-EnrollmentIdentity
+    $reason = if ($script:TargetAccount) {
+        "Die Einreichung bei der CA muss als $($identity.DisplayName) erfolgen (Berechtigungspruefung der CA basiert auf dem einreichenden Konto) - dieser Rechner reicht dafuer nicht, unabhaengig vom Domaenen-Status."
+    } else {
+        'Dieser Rechner hat vermutlich keine direkte Sicht auf die Zertifizierungsstelle.'
+    }
+
     $lblHandoffB.Text = @"
 Naechste Schritte:
 
+$reason
+
 1. Per RDP verbinden mit: $($config.RdpJumpServer)
-2. Dort als derselbe Benutzer anmelden: $env:USERDOMAIN\$env:USERNAME
+2. Dort anmelden als: $($identity.DisplayName)
 3. Die CSR-Datei auf den Server kopieren (z.B. ueber Zwischenablage/Laufwerksfreigabe):
    $($script:PlanB_CsrPath)
 4. Diesen Wizard auf dem Server erneut starten, ebenfalls den Tab "Plan B" waehlen
    und bis zu Schritt "Antrag einreichen (auf dem Server)" weiterklicken.
 
-Auf "Weiter" klicken, sobald du auf dem Server angemeldet bist.
+Auf "Weiter" klicken, sobald du auf dem Server angemeldet bist. Die Uebernahme des
+fertigen Zertifikats (Schritt 6) erfolgt danach wieder auf DIESEM Rechner in DEINEM
+eigenen Konto - certreq verwaltet den offenen Antrag hier, nicht beim Zielkonto.
 "@
 }
 
@@ -931,7 +906,7 @@ $btnSelectCerB.Add_Click({
 })
 
 function Update-PlanBSummary {
-    $summary = Get-IssuedCertificateSummary -SubjectContains $env:USERNAME
+    $summary = Get-IssuedCertificateSummary -SubjectContains (Get-EnrollmentIdentity).SearchTerm
     if ($summary) {
         $lblSummaryB.Text = "Kartenname: $($script:PlanB_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGueltig ab: $($summary.NotBefore)`r`nGueltig bis: $($summary.NotAfter)"
     } else {
@@ -982,6 +957,12 @@ function Update-PlanBStatus {
     $upn = Get-CurrentUpn
     $lblJoinStateB.Text = "Domaenen-Status: $($joinState.Mode)"
     $lblUserB.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
+    if ($script:TargetAccount) {
+        $lblTargetB.ForeColor = [System.Drawing.Color]::SteelBlue
+        $lblTargetB.Text = "Smartcard wird beantragt fuer: $($script:TargetAccount) (VSC/CSR trotzdem in deinem eigenen Konto)"
+    } else {
+        $lblTargetB.Text = ''
+    }
     $lblJumpServerB.Text = "CA-naher Server (RDP-Ziel): $($config.RdpJumpServer)"
 }
 
