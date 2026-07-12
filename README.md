@@ -132,16 +132,23 @@ in beiden Faellen woanders/als andere Identitaet passieren muss).
 ### Einstellungen
 
 Der Button **"Vorhandene virtuelle Smartcards anzeigen..."** oeffnet einen
-Dialog mit allen auf diesem Rechner erkannten Smartcard-Lesegeraeten
-(inkl. virtueller TPM-Smartcards, da `tpmvscmgr` selbst keinen "list"-Befehl
-kennt - die Erkennung laeuft ueber die PnP-Geraeteklasse fuer
-Smartcard-Lesegeraete). Je Lesegeraet werden, soweit ermittelbar, die
-darauf liegenden Zertifikate aus dem Benutzer-Zertifikatsspeicher
-aufgelistet (Subject, Gueltigkeit, Thumbprint). Die Zuordnung Zertifikat
--> Lesegeraet funktioniert zuverlaessig nur fuer Legacy-CAPI-Schluessel;
-CNG-basierte Zertifikate erscheinen als "weitere smartcard-gebundene
-Zertifikate" ohne eindeutige Lesegeraet-Zuordnung, sind aber trotzdem
-sichtbar.
+Dialog (Master-Detail: Lesegeraete oben, Zertifikate des ausgewaehlten
+Lesegeraets unten, beide als Listen mit Spalten statt Baumtext) mit allen
+auf diesem Rechner erkannten Smartcard-Lesegeraeten (inkl. virtueller
+TPM-Smartcards, da `tpmvscmgr` selbst keinen "list"-Befehl kennt - die
+Erkennung laeuft ueber die PnP-Geraeteklasse fuer Smartcard-Lesegeraete).
+Lesegeraet auswaehlen zeigt die zugehoerigen Zertifikate aus dem
+Benutzer-Zertifikatsspeicher (Subject, Gueltigkeit, Thumbprint, Provider).
+Zertifikate, die zwar als smartcard-gebunden erkannt aber keinem
+Lesegeraet eindeutig zugeordnet werden konnten, sowie alle sonstigen
+Zertifikate mit privatem Schluessel (zur Fehlersuche, falls die
+Smartcard-Erkennung im Einzelfall nicht greift), erscheinen als eigene
+Eintraege in der Lesegeraete-Liste.
+
+**"Ausgewaehlte Smartcard loeschen..."** ruft `tpmvscmgr destroy` fuer das
+ausgewaehlte Lesegeraet auf (nach Sicherheitsabfrage) - unwiderruflich,
+alle darauf gespeicherten Schluessel gehen dabei verloren. Nur fuer echte
+Lesegeraete verfuegbar, nicht fuer die beiden Sammel-Eintraege.
 
 Kompaktes Grid-Layout (Label neben statt ueber dem Feld). Leere Felder zeigen
 einen grauen Hinweistext (z.B. `z.B. ca01.contoso.local\Contoso-Issuing-CA`),

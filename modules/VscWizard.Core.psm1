@@ -378,52 +378,106 @@ function Get-VirtualSmartCardReaders {
     }
 }
 
+function Remove-VirtualSmartCard {
+    # tpmvscmgr destroy /instance <InstanceId> - die InstanceId ist dieselbe
+    # PnP-Geraetepfad-Kennung, die auch Get-VirtualSmartCardReaders liefert
+    # (z.B. "ROOT\SMARTCARDREADER\0000"). Unwiderruflich: alle auf der Karte
+    # gespeicherten Schluessel gehen dabei verloren - Bestaetigung ist Aufgabe der GUI.
+    param([Parameter(Mandatory)][string]$InstanceId)
+
+    $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
+    $vscArgs = @('destroy', '/instance', $InstanceId)
+
+    if (Test-IsElevated) {
+        $result = Invoke-ExternalCommand -FilePath $tpmvscmgr -ArgumentList $vscArgs
+        return [pscustomobject]@{ ExitCode = $result.ExitCode; Success = $result.Success }
+    }
+
+    Write-WizardLog -Message "Starte erhoehten Prozess (eigenes Konsolenfenster): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
+    $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait
+
+    [pscustomobject]@{
+        ExitCode = $proc.ExitCode
+        Success  = ($proc.ExitCode -eq 0)
+    }
+}
+
 function Get-SmartCardCertificateInfo {
-    # Legacy-CAPI (.PrivateKey.CspKeyContainerInfo) liefert sowohl Provider- als auch
-    # Reader-Namen und erlaubt damit eine Zuordnung Zertifikat -> Lesegeraet. Fuer rein
-    # CNG-basierte Schluessel (RSACng) ist nur der Provider-Name ohne Reader-Zuordnung
-    # zuverlaessig ueber die oeffentliche .NET-API ermittelbar.
+    # Ermittelt Provider-/Reader-/Hardware-Info fuer den privaten Schluessel eines
+    # Zertifikats ueber mehrere Wege, da je nach CSP/KSP (Legacy-CAPI vs. CNG)
+    # unterschiedliche .NET-APIs greifen - EIN Weg allein deckt nicht alle Faelle ab:
+    #   1. .PrivateKey.CspKeyContainerInfo - klassischer Weg fuer Legacy-CAPI-CSPs
+    #      (z.B. "Microsoft Base Smart Card Crypto Provider", der Default dieses
+    #      Wizards). Wirft bei rein CNG-basierten Schluesseln typischerweise eine
+    #      Exception.
+    #   2. GetRSAPrivateKey() liefert je nach Schluesseltyp ENTWEDER RSACng (CNG,
+    #      Provider ueber .Key.Provider) ODER RSACryptoServiceProvider (Legacy-CAPI,
+    #      Provider ueber .CspKeyContainerInfo wie bei Weg 1) - beide Faelle werden
+    #      hier unterschieden, da ein direkter .Key-Zugriff auf einem
+    #      RSACryptoServiceProvider-Objekt schlicht $null liefert (kein Fehler, aber
+    #      auch kein Ergebnis - das war der Grund, warum bisher gar keine Zertifikate
+    #      gefunden wurden).
+    # HardwareDevice (falls ermittelbar) ist ein zusaetzliches, von der Provider-Namen-
+    # Heuristik unabhaengiges Signal.
     param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
 
-    $info = [pscustomobject]@{ Provider = $null; Reader = $null }
+    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; DetectionError = $null }
 
     try {
-        if ($Certificate.PrivateKey -and $Certificate.PrivateKey.CspKeyContainerInfo) {
-            $info.Provider = $Certificate.PrivateKey.CspKeyContainerInfo.ProviderName
-            $info.Reader = $Certificate.PrivateKey.CspKeyContainerInfo.Reader
-            return $info
+        $capiKey = $Certificate.PrivateKey
+        if ($capiKey -and $capiKey.CspKeyContainerInfo) {
+            $info.Provider = $capiKey.CspKeyContainerInfo.ProviderName
+            $info.Reader = $capiKey.CspKeyContainerInfo.Reader
+            $info.IsHardware = [bool]$capiKey.CspKeyContainerInfo.HardwareDevice
         }
-    } catch { }
+    } catch {
+        $info.DetectionError = $_.Exception.Message
+    }
 
-    try {
-        $rsaKey = $Certificate.GetRSAPrivateKey()
-        if ($rsaKey -and $rsaKey.Key -and $rsaKey.Key.Provider) {
-            $info.Provider = $rsaKey.Key.Provider.Provider
+    if (-not $info.Provider) {
+        try {
+            $rsaKey = $Certificate.GetRSAPrivateKey()
+            if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
+                if ($rsaKey.Key -and $rsaKey.Key.Provider) {
+                    $info.Provider = $rsaKey.Key.Provider.Provider
+                }
+            } elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
+                $info.Provider = $rsaKey.CspKeyContainerInfo.ProviderName
+                $info.Reader = $rsaKey.CspKeyContainerInfo.Reader
+                $info.IsHardware = [bool]$rsaKey.CspKeyContainerInfo.HardwareDevice
+            }
+        } catch {
+            if (-not $info.DetectionError) { $info.DetectionError = $_.Exception.Message }
         }
-    } catch { }
+    }
 
     return $info
 }
 
 function Get-SmartCardCertificates {
-    # Alle Zertifikate im Benutzer-Zertifikatsspeicher, deren privater Schluessel auf
-    # einer Smartcard liegt (Provider-Name enthaelt "Smart Card"), mit Lesegeraet
-    # sofern ermittelbar.
+    # Alle Zertifikate im Benutzer-Zertifikatsspeicher mit privatem Schluessel.
+    # IsSmartCard=true, wenn Provider-Name "Smart Card" enthaelt ODER die CSP-Info
+    # das Geraet als Hardware-Schluessel meldet. Zertifikate mit privatem Schluessel,
+    # die NICHT sicher als Smartcard erkannt wurden, werden trotzdem zurueckgegeben
+    # (samt Provider/DetectionError) statt sie stillschweigend zu verwerfen - damit
+    # eine unvollstaendige Erkennung in der GUI sichtbar/diagnostizierbar bleibt statt
+    # einfach nichts anzuzeigen.
     param([string]$StoreLocation = 'Cert:\CurrentUser\My')
 
     $certs = Get-ChildItem -Path $StoreLocation -ErrorAction SilentlyContinue
     $results = foreach ($cert in $certs) {
         if (-not $cert.HasPrivateKey) { continue }
         $info = Get-SmartCardCertificateInfo -Certificate $cert
-        if ($info.Provider -and $info.Provider -match 'Smart Card') {
-            [pscustomobject]@{
-                Subject    = $cert.Subject
-                Thumbprint = $cert.Thumbprint
-                NotBefore  = $cert.NotBefore
-                NotAfter   = $cert.NotAfter
-                Provider   = $info.Provider
-                Reader     = $info.Reader
-            }
+        $isSmartCard = $info.IsHardware -or ($info.Provider -and $info.Provider -match 'Smart Card')
+        [pscustomobject]@{
+            Subject        = $cert.Subject
+            Thumbprint     = $cert.Thumbprint
+            NotBefore      = $cert.NotBefore
+            NotAfter       = $cert.NotAfter
+            Provider       = $info.Provider
+            Reader         = $info.Reader
+            IsSmartCard    = [bool]$isSmartCard
+            DetectionError = $info.DetectionError
         }
     }
     return @($results)

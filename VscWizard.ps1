@@ -1084,65 +1084,174 @@ function Show-VscInventoryDialog {
 
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = 'Vorhandene virtuelle Smartcards'
-    $dlg.Size = New-Object System.Drawing.Size(720, 560)
+    $dlg.Size = New-Object System.Drawing.Size(920, 680)
+    $dlg.MinimumSize = New-Object System.Drawing.Size(700, 500)
     $dlg.StartPosition = 'CenterParent'
     $dlg.MinimizeBox = $false
-    $dlg.MaximizeBox = $false
 
     $dlgLayout = New-Object System.Windows.Forms.TableLayoutPanel
     $dlgLayout.Dock = 'Fill'
-    $dlgLayout.RowCount = 3
+    $dlgLayout.RowCount = 6
     $dlgLayout.ColumnCount = 1
+    $dlgLayout.Padding = New-Object System.Windows.Forms.Padding(10)
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 150)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 40)))
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 50)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 46)))
     $dlg.Controls.Add($dlgLayout)
 
-    $lblInventoryInfo = New-Object System.Windows.Forms.Label
-    $lblInventoryInfo.Text = "Erkannte Smartcard-Lesegeraete (inkl. virtueller TPM-Smartcards): $($readers.Count)"
-    $lblInventoryInfo.AutoSize = $true
-    $lblInventoryInfo.Margin = New-Object System.Windows.Forms.Padding(10, 10, 10, 4)
-    $dlgLayout.Controls.Add($lblInventoryInfo, 0, 0)
+    $lblReadersHeader = New-Object System.Windows.Forms.Label
+    $lblReadersHeader.Text = "Erkannte Smartcard-Lesegeraete (inkl. virtueller TPM-Smartcards): $($readers.Count)"
+    $lblReadersHeader.AutoSize = $true
+    $lblReadersHeader.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+    $dlgLayout.Controls.Add($lblReadersHeader, 0, 0)
 
-    $tree = New-Object System.Windows.Forms.TreeView
-    $tree.Dock = 'Fill'
-    $tree.Margin = New-Object System.Windows.Forms.Padding(10, 0, 10, 0)
-    $tree.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-    $dlgLayout.Controls.Add($tree, 0, 1)
+    $lvReaders = New-Object System.Windows.Forms.ListView
+    $lvReaders.Dock = 'Fill'
+    $lvReaders.View = 'Details'
+    $lvReaders.FullRowSelect = $true
+    $lvReaders.MultiSelect = $false
+    $lvReaders.GridLines = $true
+    $lvReaders.HideSelection = $false
+    [void]$lvReaders.Columns.Add('Lesegeraet', 340)
+    [void]$lvReaders.Columns.Add('Status', 90)
+    [void]$lvReaders.Columns.Add('Geraete-ID', 300)
+    $dlgLayout.Controls.Add($lvReaders, 0, 1)
 
-    if ($readers.Count -eq 0) {
-        [void]$tree.Nodes.Add('Keine Smartcard-Lesegeraete gefunden (auch keine virtuellen).')
-    }
+    $unmatchedSmartCardMarker = [pscustomobject]@{ IsMarker = $true; Kind = 'unmatched' }
+    $nonSmartCardMarker = [pscustomobject]@{ IsMarker = $true; Kind = 'other' }
 
     foreach ($reader in $readers) {
-        $readerNode = New-Object System.Windows.Forms.TreeNode("$($reader.FriendlyName)  [$($reader.Status)]")
-        $matchingCerts = @($certs | Where-Object { $_.Reader -and $_.Reader -eq $reader.FriendlyName })
-        if ($matchingCerts.Count -eq 0) {
-            [void]$readerNode.Nodes.Add('(keine eindeutig zuordenbaren Zertifikate gefunden)')
-        } else {
-            foreach ($c in $matchingCerts) {
-                [void]$readerNode.Nodes.Add("$($c.Subject)  -  gueltig bis $($c.NotAfter.ToString('yyyy-MM-dd'))  ($($c.Thumbprint))")
-            }
-        }
-        [void]$tree.Nodes.Add($readerNode)
+        $readerItem = New-Object System.Windows.Forms.ListViewItem($reader.FriendlyName)
+        [void]$readerItem.SubItems.Add([string]$reader.Status)
+        [void]$readerItem.SubItems.Add($reader.InstanceId)
+        $readerItem.Tag = $reader
+        [void]$lvReaders.Items.Add($readerItem)
     }
 
     $readerNames = @($readers | ForEach-Object { $_.FriendlyName })
-    $unmatched = @($certs | Where-Object { -not $_.Reader -or ($readerNames -notcontains $_.Reader) })
-    if ($unmatched.Count -gt 0) {
-        $otherNode = New-Object System.Windows.Forms.TreeNode('Weitere smartcard-gebundene Zertifikate (Lesegeraet nicht eindeutig zuordenbar):')
-        foreach ($c in $unmatched) {
-            [void]$otherNode.Nodes.Add("$($c.Subject)  -  gueltig bis $($c.NotAfter.ToString('yyyy-MM-dd'))  ($($c.Thumbprint))  [$($c.Provider)]")
-        }
-        [void]$tree.Nodes.Add($otherNode)
+    $unmatchedSmartCardCerts = @($certs | Where-Object { $_.IsSmartCard -and (-not $_.Reader -or ($readerNames -notcontains $_.Reader)) })
+    if ($unmatchedSmartCardCerts.Count -gt 0) {
+        $markerItem = New-Object System.Windows.Forms.ListViewItem("Weitere smartcard-gebundene Zertifikate (Lesegeraet nicht zuordenbar, $($unmatchedSmartCardCerts.Count))")
+        $markerItem.Tag = $unmatchedSmartCardMarker
+        [void]$lvReaders.Items.Add($markerItem)
     }
 
-    $tree.ExpandAll()
+    $otherCerts = @($certs | Where-Object { -not $_.IsSmartCard })
+    if ($otherCerts.Count -gt 0) {
+        $markerItem = New-Object System.Windows.Forms.ListViewItem("Sonstige Zertifikate mit privatem Schluessel (nicht als Smartcard erkannt, $($otherCerts.Count))")
+        $markerItem.Tag = $nonSmartCardMarker
+        [void]$lvReaders.Items.Add($markerItem)
+    }
+
+    if ($lvReaders.Items.Count -eq 0) {
+        [void]$lvReaders.Items.Add((New-Object System.Windows.Forms.ListViewItem('Keine Smartcard-Lesegeraete und keine smartcard-gebundenen Zertifikate gefunden.')))
+    }
+
+    $readerButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $readerButtonPanel.Dock = 'Fill'
+    $readerButtonPanel.FlowDirection = 'LeftToRight'
+    $dlgLayout.Controls.Add($readerButtonPanel, 0, 2)
+
+    $btnDeleteReader = New-Object System.Windows.Forms.Button
+    $btnDeleteReader.Text = 'Ausgewaehlte Smartcard loeschen...'
+    $btnDeleteReader.Size = New-Object System.Drawing.Size(240, 30)
+    $btnDeleteReader.Enabled = $false
+    $readerButtonPanel.Controls.Add($btnDeleteReader)
+
+    $lblCertsHeader = New-Object System.Windows.Forms.Label
+    $lblCertsHeader.Text = 'Zertifikate: (Lesegeraet oben auswaehlen)'
+    $lblCertsHeader.AutoSize = $true
+    $lblCertsHeader.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 4)
+    $dlgLayout.Controls.Add($lblCertsHeader, 0, 3)
+
+    $lvCerts = New-Object System.Windows.Forms.ListView
+    $lvCerts.Dock = 'Fill'
+    $lvCerts.View = 'Details'
+    $lvCerts.FullRowSelect = $true
+    $lvCerts.MultiSelect = $false
+    $lvCerts.GridLines = $true
+    $lvCerts.HideSelection = $false
+    [void]$lvCerts.Columns.Add('Subject', 300)
+    [void]$lvCerts.Columns.Add('Gueltig bis', 90)
+    [void]$lvCerts.Columns.Add('Thumbprint', 220)
+    [void]$lvCerts.Columns.Add('Provider', 200)
+    $dlgLayout.Controls.Add($lvCerts, 0, 4)
+
+    function Update-CertListForSelection {
+        $lvCerts.Items.Clear()
+        if ($lvReaders.SelectedItems.Count -eq 0) {
+            $lblCertsHeader.Text = 'Zertifikate: (Lesegeraet oben auswaehlen)'
+            $btnDeleteReader.Enabled = $false
+            return
+        }
+
+        $selectedTag = $lvReaders.SelectedItems[0].Tag
+        $matching = @()
+        if ($selectedTag -and $selectedTag.PSObject.Properties['IsMarker']) {
+            $btnDeleteReader.Enabled = $false
+            if ($selectedTag.Kind -eq 'unmatched') {
+                $lblCertsHeader.Text = 'Zertifikate: weitere smartcard-gebundene (Lesegeraet nicht zuordenbar)'
+                $matching = $unmatchedSmartCardCerts
+            } else {
+                $lblCertsHeader.Text = 'Zertifikate: sonstige mit privatem Schluessel (nicht als Smartcard erkannt)'
+                $matching = $otherCerts
+            }
+        } elseif ($selectedTag) {
+            $btnDeleteReader.Enabled = $true
+            $lblCertsHeader.Text = "Zertifikate auf: $($selectedTag.FriendlyName)"
+            $matching = @($certs | Where-Object { $_.Reader -eq $selectedTag.FriendlyName })
+        } else {
+            $btnDeleteReader.Enabled = $false
+        }
+
+        if ($matching.Count -eq 0) {
+            [void]$lvCerts.Items.Add((New-Object System.Windows.Forms.ListViewItem('(keine Zertifikate gefunden)')))
+            return
+        }
+        foreach ($c in $matching) {
+            $certItem = New-Object System.Windows.Forms.ListViewItem($c.Subject)
+            [void]$certItem.SubItems.Add($c.NotAfter.ToString('yyyy-MM-dd'))
+            [void]$certItem.SubItems.Add($c.Thumbprint)
+            $providerText = if ($c.Provider) { $c.Provider } elseif ($c.DetectionError) { "unbekannt (Fehler: $($c.DetectionError))" } else { 'unbekannt' }
+            [void]$certItem.SubItems.Add($providerText)
+            [void]$lvCerts.Items.Add($certItem)
+        }
+    }
+
+    $lvReaders.Add_SelectedIndexChanged({ Update-CertListForSelection })
+
+    $btnDeleteReader.Add_Click({
+        if ($lvReaders.SelectedItems.Count -eq 0) { return }
+        $selectedReader = $lvReaders.SelectedItems[0].Tag
+        if (-not $selectedReader -or $selectedReader.PSObject.Properties['IsMarker']) { return }
+
+        $confirm = [System.Windows.Forms.MessageBox]::Show(
+            "Virtuelle Smartcard '$($selectedReader.FriendlyName)' wirklich unwiderruflich loeschen?`r`n`r`nAlle darauf gespeicherten Schluessel gehen dabei verloren. Diese Aktion kann nicht rueckgaengig gemacht werden.",
+            'Smartcard loeschen', 'YesNo', 'Warning')
+        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $btnDeleteReader.Enabled = $false
+        Write-WizardLog -Message "Loesche virtuelle Smartcard: $($selectedReader.FriendlyName) ($($selectedReader.InstanceId))" -Level Command
+        $result = Remove-VirtualSmartCard -InstanceId $selectedReader.InstanceId
+        if ($result.Success) {
+            Write-WizardLog -Message "Virtuelle Smartcard geloescht: $($selectedReader.FriendlyName)" -Level Success
+            [System.Windows.Forms.MessageBox]::Show('Smartcard geloescht.', 'Erledigt', 'OK', 'Information') | Out-Null
+            $dlg.Close()
+            Show-VscInventoryDialog -Owner $Owner
+        } else {
+            Write-WizardLog -Message "Loeschen fehlgeschlagen (Exit-Code $($result.ExitCode)): $($selectedReader.FriendlyName)" -Level Error
+            [System.Windows.Forms.MessageBox]::Show("Loeschen fehlgeschlagen (Exit-Code $($result.ExitCode)). Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
+            $btnDeleteReader.Enabled = $true
+        }
+    })
 
     $dlgBtnPanel = New-Object System.Windows.Forms.FlowLayoutPanel
     $dlgBtnPanel.Dock = 'Fill'
     $dlgBtnPanel.FlowDirection = 'RightToLeft'
-    $dlgLayout.Controls.Add($dlgBtnPanel, 0, 2)
+    $dlgLayout.Controls.Add($dlgBtnPanel, 0, 5)
 
     $btnCloseInventory = New-Object System.Windows.Forms.Button
     $btnCloseInventory.Text = 'Schliessen'
