@@ -47,14 +47,16 @@ function New-WizardLabel {
     return $lbl
 }
 
-# Einfache Hint/Placeholder-TextBox: zeigt grauen Beispieltext, solange kein echter
+# Einfache Hint/Placeholder-Eingabe: zeigt grauen Beispieltext, solange kein echter
 # Wert eingetragen ist; verschwindet beim Fokussieren, kehrt beim Verlassen eines
 # leeren Feldes zurueck. Erkennung "ist gerade Placeholder" ueber ForeColor=Gray.
+# Funktioniert fuer TextBox und ComboBox gleichermassen (beide haben Text/ForeColor
+# sowie Enter/Leave von System.Windows.Forms.Control).
 $script:PlaceholderMap = @{}
 
 function Set-TextBoxPlaceholder {
     param(
-        [Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox,
+        [Parameter(Mandatory)][System.Windows.Forms.Control]$TextBox,
         [Parameter(Mandatory)][string]$Placeholder,
         [string]$Value
     )
@@ -83,7 +85,7 @@ function Set-TextBoxPlaceholder {
 
 function Set-TextBoxRealValue {
     param(
-        [Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox,
+        [Parameter(Mandatory)][System.Windows.Forms.Control]$TextBox,
         [Parameter(Mandatory)][string]$Value
     )
     $TextBox.Text = $Value
@@ -91,9 +93,21 @@ function Set-TextBoxRealValue {
 }
 
 function Get-TextBoxRealValue {
-    param([Parameter(Mandatory)][System.Windows.Forms.TextBox]$TextBox)
+    param([Parameter(Mandatory)][System.Windows.Forms.Control]$TextBox)
     if ($TextBox.ForeColor -eq [System.Drawing.Color]::Gray) { return '' }
     return $TextBox.Text
+}
+
+function Set-TemplateComboItem {
+    # Nur EIN Zertifikatstemplate wird konfiguriert (Einstellungen) - diese Comboboxen
+    # in Plan A/Plan B zeigen es lediglich vorausgewaehlt an.
+    param(
+        [Parameter(Mandatory)][System.Windows.Forms.ComboBox]$ComboBox,
+        [string]$Template
+    )
+    $ComboBox.Items.Clear()
+    if ($Template) { [void]$ComboBox.Items.Add($Template) }
+    if ($ComboBox.Items.Count -gt 0) { $ComboBox.SelectedIndex = 0 }
 }
 
 #region MAIN FORM
@@ -401,8 +415,7 @@ $cboTemplateA = New-Object System.Windows.Forms.ComboBox
 $cboTemplateA.Location = New-Object System.Drawing.Point(20, 46)
 $cboTemplateA.Size = New-Object System.Drawing.Size(300, 24)
 $cboTemplateA.DropDownStyle = 'DropDownList'
-[void]$cboTemplateA.Items.AddRange($config.Templates)
-if ($cboTemplateA.Items.Count -gt 0) { $cboTemplateA.SelectedIndex = 0 }
+Set-TemplateComboItem -ComboBox $cboTemplateA -Template $config.Template
 
 $btnRequestCertA = New-Object System.Windows.Forms.Button
 $btnRequestCertA.Text = 'Zertifikat anfordern'
@@ -785,8 +798,7 @@ $cboTemplateSubmitB = New-Object System.Windows.Forms.ComboBox
 $cboTemplateSubmitB.Location = New-Object System.Drawing.Point(230, 92)
 $cboTemplateSubmitB.Size = New-Object System.Drawing.Size(300, 24)
 $cboTemplateSubmitB.DropDownStyle = 'DropDownList'
-[void]$cboTemplateSubmitB.Items.AddRange($config.Templates)
-if ($cboTemplateSubmitB.Items.Count -gt 0) { $cboTemplateSubmitB.SelectedIndex = 0 }
+Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $config.Template
 
 $btnSubmitB = New-Object System.Windows.Forms.Button
 $btnSubmitB.Text = 'Einreichen'
@@ -1030,67 +1042,135 @@ $btnBackB.Add_Click({
 #region EINSTELLUNGEN TAB
 # ============================================================================
 
-$lblCfgCA = New-WizardLabel -Text 'CA-Konfigurationsstring (Server\CA-Name):' -X 20 -Y 20 -Width 500
+$settingsLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$settingsLayout.Dock = 'Top'
+$settingsLayout.AutoSize = $true
+$settingsLayout.AutoSizeMode = 'GrowAndShrink'
+$settingsLayout.ColumnCount = 2
+$settingsLayout.Padding = New-Object System.Windows.Forms.Padding(20, 16, 20, 16)
+[void]$settingsLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 280)))
+[void]$settingsLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$tabSettings.Controls.Add($settingsLayout)
+
+function Add-SettingsRow {
+    # Label in Spalte 0, Eingabefeld in Spalte 1, gleiche Zeile - spart gegenueber
+    # "Label ueber Feld" rund die Haelfte an vertikalem Platz.
+    param(
+        [Parameter(Mandatory)][string]$LabelText,
+        [Parameter(Mandatory)][System.Windows.Forms.Control]$InputControl
+    )
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = $LabelText
+    $lbl.Dock = 'Fill'
+    $lbl.TextAlign = 'MiddleLeft'
+    $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $lbl.Margin = New-Object System.Windows.Forms.Padding(0, 6, 10, 6)
+
+    $InputControl.Height = 24
+    $InputControl.Dock = 'Fill'
+    $InputControl.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
+
+    $rowIndex = $settingsLayout.RowCount
+    $settingsLayout.RowCount = $rowIndex + 1
+    [void]$settingsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $settingsLayout.Controls.Add($lbl, 0, $rowIndex)
+    $settingsLayout.Controls.Add($InputControl, 1, $rowIndex)
+}
+
+function Add-SettingsFullRow {
+    # Ein Control, das ueber beide Spalten der ganzen Zeilenbreite geht (Hinweistexte,
+    # Buttons, Ergebnisboxen). -Fill fuer Controls ohne eigenes AutoSize (z.B. eine
+    # Multiline-TextBox), damit sie die volle Zeilenbreite bekommen statt der
+    # winzigen TextBox-Standardbreite.
+    param(
+        [Parameter(Mandatory)][System.Windows.Forms.Control]$Control,
+        [switch]$Fill
+    )
+    $Control.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 10)
+    if ($Fill) { $Control.Dock = 'Fill' }
+    $rowIndex = $settingsLayout.RowCount
+    $settingsLayout.RowCount = $rowIndex + 1
+    [void]$settingsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $settingsLayout.Controls.Add($Control, 0, $rowIndex)
+    $settingsLayout.SetColumnSpan($Control, 2)
+}
+
 $txtCfgCA = New-Object System.Windows.Forms.TextBox
-$txtCfgCA.Location = New-Object System.Drawing.Point(20, 46)
-$txtCfgCA.Size = New-Object System.Drawing.Size(500, 24)
 Set-TextBoxPlaceholder -TextBox $txtCfgCA -Placeholder 'z.B. ca01.contoso.local\Contoso-Issuing-CA' -Value $config.CAConfig
+Add-SettingsRow -LabelText 'CA-Konfigurationsstring (Server\CA-Name):' -InputControl $txtCfgCA
 
-$lblCfgTemplates = New-WizardLabel -Text 'Zertifikatstemplates (kommagetrennt):' -X 20 -Y 84 -Width 500
-$txtCfgTemplates = New-Object System.Windows.Forms.TextBox
-$txtCfgTemplates.Location = New-Object System.Drawing.Point(20, 110)
-$txtCfgTemplates.Size = New-Object System.Drawing.Size(500, 24)
-Set-TextBoxPlaceholder -TextBox $txtCfgTemplates -Placeholder 'z.B. SmartcardLogon, SmartcardUser' -Value ($config.Templates -join ', ')
+$cboCfgTemplate = New-Object System.Windows.Forms.ComboBox
+$cboCfgTemplate.DropDownStyle = 'DropDown'
+Set-TextBoxPlaceholder -TextBox $cboCfgTemplate -Placeholder 'z.B. SmartcardLogon' -Value $config.Template
+Add-SettingsRow -LabelText 'Zertifikatstemplate (fuer VSC-Anmeldung):' -InputControl $cboCfgTemplate
 
-$lblCfgPrefix = New-WizardLabel -Text 'Namenspraefix fuer virtuelle Smartcards:' -X 20 -Y 148 -Width 500
 $txtCfgPrefix = New-Object System.Windows.Forms.TextBox
-$txtCfgPrefix.Location = New-Object System.Drawing.Point(20, 174)
-$txtCfgPrefix.Size = New-Object System.Drawing.Size(300, 24)
 $txtCfgPrefix.Text = $config.VscNamePrefix
+Add-SettingsRow -LabelText 'Namenspraefix fuer virtuelle Smartcards:' -InputControl $txtCfgPrefix
 
-$lblCfgJump = New-WizardLabel -Text 'RDP-Zielserver fuer Plan B:' -X 20 -Y 212 -Width 500
 $txtCfgJump = New-Object System.Windows.Forms.TextBox
-$txtCfgJump.Location = New-Object System.Drawing.Point(20, 238)
-$txtCfgJump.Size = New-Object System.Drawing.Size(500, 24)
 Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
+Add-SettingsRow -LabelText 'RDP-Zielserver fuer Plan B:' -InputControl $txtCfgJump
 
-$lblCfgCsp = New-WizardLabel -Text 'Crypto Service Provider (CSP) der virtuellen Smartcard:' -X 20 -Y 276 -Width 500
 $txtCfgCsp = New-Object System.Windows.Forms.TextBox
-$txtCfgCsp.Location = New-Object System.Drawing.Point(20, 302)
-$txtCfgCsp.Size = New-Object System.Drawing.Size(500, 24)
 $txtCfgCsp.Text = $config.CspName
+Add-SettingsRow -LabelText 'Crypto Service Provider (CSP):' -InputControl $txtCfgCsp
 
-$lblCfgDomain = New-WizardLabel -Text 'AD-Domaene oder Domain Controller (fuer automatische PKI-Erkennung):' -X 20 -Y 340 -Width 500
 $txtCfgDomain = New-Object System.Windows.Forms.TextBox
-$txtCfgDomain.Location = New-Object System.Drawing.Point(20, 366)
-$txtCfgDomain.Size = New-Object System.Drawing.Size(500, 24)
 $discoveryDomainDefault = if ($config.DiscoveryDomain) { $config.DiscoveryDomain } else { Get-DiscoveryDomainGuess }
 Set-TextBoxPlaceholder -TextBox $txtCfgDomain -Placeholder 'z.B. contoso.local oder dc01.contoso.local' -Value $discoveryDomainDefault
-$lblCfgDomainHint = New-WizardLabel -Text 'Auf Entra-joined/Workgroup-Rechnern meist noetig - hier wird kein Domain-Join vorausgesetzt, aber "serverloses" LDAP-Binding klappt ohne Domain-Join nicht. Vorschlag wird aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.' -X 20 -Y 392 -Width 780 -Height 34
+Add-SettingsRow -LabelText 'AD-Domaene / Domain Controller (PKI-Erkennung):' -InputControl $txtCfgDomain
 
-$lblCfgDiscover = New-WizardLabel -Text 'Automatische PKI-Erkennung (LDAP-Discovery der Enterprise-CAs + RPC-Erreichbarkeitstest):' -X 20 -Y 434 -Width 700
+$lblCfgDomainHint = New-Object System.Windows.Forms.Label
+$lblCfgDomainHint.Text = 'Auf Entra-joined/Workgroup-Rechnern meist noetig, da "serverloses" LDAP-Binding ohne Domain-Join nicht funktioniert. Vorschlag aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.'
+$lblCfgDomainHint.AutoSize = $true
+$lblCfgDomainHint.MaximumSize = New-Object System.Drawing.Size(760, 0)
+$lblCfgDomainHint.ForeColor = [System.Drawing.Color]::Gray
+$lblCfgDomainHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+Add-SettingsFullRow -Control $lblCfgDomainHint
+
+$discoverPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$discoverPanel.AutoSize = $true
+$discoverPanel.FlowDirection = 'LeftToRight'
+$discoverPanel.WrapContents = $false
+
+$lblCfgDiscover = New-Object System.Windows.Forms.Label
+$lblCfgDiscover.Text = 'Automatische PKI-Erkennung:'
+$lblCfgDiscover.AutoSize = $true
+$lblCfgDiscover.Margin = New-Object System.Windows.Forms.Padding(0, 8, 10, 0)
+$discoverPanel.Controls.Add($lblCfgDiscover)
 
 $btnDiscoverCfg = New-Object System.Windows.Forms.Button
 $btnDiscoverCfg.Text = 'PKI automatisch erkennen'
-$btnDiscoverCfg.Location = New-Object System.Drawing.Point(20, 460)
-$btnDiscoverCfg.Size = New-Object System.Drawing.Size(240, 32)
+$btnDiscoverCfg.Size = New-Object System.Drawing.Size(220, 30)
+$discoverPanel.Controls.Add($btnDiscoverCfg)
+Add-SettingsFullRow -Control $discoverPanel
 
 $txtDiscoverResultCfg = New-Object System.Windows.Forms.TextBox
-$txtDiscoverResultCfg.Location = New-Object System.Drawing.Point(20, 498)
-$txtDiscoverResultCfg.Size = New-Object System.Drawing.Size(780, 80)
 $txtDiscoverResultCfg.Multiline = $true
 $txtDiscoverResultCfg.ReadOnly = $true
 $txtDiscoverResultCfg.ScrollBars = 'Vertical'
+$txtDiscoverResultCfg.Height = 70
 $txtDiscoverResultCfg.Font = New-Object System.Drawing.Font('Consolas', 9)
+Add-SettingsFullRow -Control $txtDiscoverResultCfg -Fill
+
+$savePanel = New-Object System.Windows.Forms.FlowLayoutPanel
+$savePanel.AutoSize = $true
+$savePanel.FlowDirection = 'LeftToRight'
+$savePanel.WrapContents = $false
 
 $btnSaveConfig = New-Object System.Windows.Forms.Button
 $btnSaveConfig.Text = 'Speichern'
-$btnSaveConfig.Location = New-Object System.Drawing.Point(20, 588)
 $btnSaveConfig.Size = New-Object System.Drawing.Size(160, 32)
+$savePanel.Controls.Add($btnSaveConfig)
 
-$lblCfgSaved = New-WizardLabel -Text '' -X 190 -Y 594 -Width 300
+$lblCfgSaved = New-Object System.Windows.Forms.Label
+$lblCfgSaved.AutoSize = $true
+$lblCfgSaved.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$lblCfgSaved.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
+$savePanel.Controls.Add($lblCfgSaved)
 
-$tabSettings.Controls.AddRange(@($lblCfgCA, $txtCfgCA, $lblCfgTemplates, $txtCfgTemplates, $lblCfgPrefix, $txtCfgPrefix, $lblCfgJump, $txtCfgJump, $lblCfgCsp, $txtCfgCsp, $lblCfgDomain, $txtCfgDomain, $lblCfgDomainHint, $lblCfgDiscover, $btnDiscoverCfg, $txtDiscoverResultCfg, $btnSaveConfig, $lblCfgSaved))
+Add-SettingsFullRow -Control $savePanel
 
 $btnDiscoverCfg.Add_Click({
     $btnDiscoverCfg.Enabled = $false
@@ -1127,10 +1207,12 @@ $btnDiscoverCfg.Add_Click({
 
         $allTemplates = @($reachData.ReachableCas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
         if ($allTemplates.Count -gt 0) {
-            Set-TextBoxRealValue -TextBox $txtCfgTemplates -Value ($allTemplates -join ', ')
+            $cboCfgTemplate.Items.Clear()
+            [void]$cboCfgTemplate.Items.AddRange($allTemplates)
+            Set-TextBoxRealValue -TextBox $cboCfgTemplate -Value $allTemplates[0]
         }
 
-        $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und uebernommen - bitte pruefen und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
+        $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und uebernommen - bitte Template pruefen (Dropdown-Pfeil zeigt alle $($allTemplates.Count) auf der CA verfuegbaren Templates) und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
         Write-WizardLog -Message "Automatische Erkennung: $($reachData.ReachableCas.Count) erreichbare CA(s) gefunden." -Level Success
     } elseif ($reachData.AllCas.Count -gt 0) {
         $txtDiscoverResultCfg.Text = "$($reachData.AllCas.Count) CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n" + ($reachData.UnreachableCas -join "`r`n")
@@ -1148,7 +1230,7 @@ $btnDiscoverCfg.Add_Click({
 $btnSaveConfig.Add_Click({
     $newConfig = @{
         CAConfig      = Get-TextBoxRealValue -TextBox $txtCfgCA
-        Templates     = @((Get-TextBoxRealValue -TextBox $txtCfgTemplates) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        Template      = Get-TextBoxRealValue -TextBox $cboCfgTemplate
         VscNamePrefix = $txtCfgPrefix.Text
         RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
         CspName       = $txtCfgCsp.Text
@@ -1158,13 +1240,8 @@ $btnSaveConfig.Add_Click({
     Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
     $script:config = $newConfig
 
-    $cboTemplateA.Items.Clear()
-    [void]$cboTemplateA.Items.AddRange($newConfig.Templates)
-    if ($cboTemplateA.Items.Count -gt 0) { $cboTemplateA.SelectedIndex = 0 }
-
-    $cboTemplateSubmitB.Items.Clear()
-    [void]$cboTemplateSubmitB.Items.AddRange($newConfig.Templates)
-    if ($cboTemplateSubmitB.Items.Count -gt 0) { $cboTemplateSubmitB.SelectedIndex = 0 }
+    Set-TemplateComboItem -ComboBox $cboTemplateA -Template $newConfig.Template
+    Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $newConfig.Template
 
     $lblCfgSaved.ForeColor = [System.Drawing.Color]::ForestGreen
     $lblCfgSaved.Text = 'Gespeichert.'
@@ -1179,7 +1256,7 @@ $btnSaveConfig.Add_Click({
 Show-PlanAStep -Index 0
 Show-PlanBStep -Index 0
 
-$configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or (-not $config.Templates) -or (@($config.Templates).Count -eq 0)
+$configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($configIncomplete) {
     $tabs.SelectedTab = $tabSettings
 } else {

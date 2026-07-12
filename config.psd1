@@ -5,10 +5,10 @@
     # automatisch die Einstellungen.
     CAConfig      = ''
 
-    # Name(n) des/der Zertifikatstemplates fuer Smartcard-Logon-Zertifikate,
-    # die in der eigenen PKI-Umgebung existieren muessen. Leer ausgeliefert,
-    # siehe CAConfig.
-    Templates     = @()
+    # Name des Zertifikatstemplates fuer Smartcard-Logon-Zertifikate, das in der
+    # eigenen PKI-Umgebung existieren muss (genau eines - eine VSC-Anmeldung
+    # verwendet immer nur ein Template). Leer ausgeliefert, siehe CAConfig.
+    Template      = ''
 
     # Praefix fuer automatisch vorgeschlagene Namen virtueller Smartcards.
     VscNamePrefix = 'VSC'

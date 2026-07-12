@@ -42,7 +42,7 @@ wird:
 1. `VscWizard.bat` ausfuehren (startet `VscWizard.ps1` mit
    `-ExecutionPolicy Bypass` im aktuellen Benutzerkontext).
 2. `config.psd1` wird leer ausgeliefert (CA-Konfigurationsstring,
-   Zertifikatstemplates und RDP-Zielserver sind org-spezifisch und daher nicht
+   Zertifikatstemplate und RDP-Zielserver sind org-spezifisch und daher nicht
    vorbefuellt). Solange diese Werte fehlen, oeffnet der Wizard beim Start
    automatisch den Tab "Einstellungen" - dort entweder manuell eintragen oder
    per "PKI automatisch erkennen" befuellen lassen (siehe unten), dann
@@ -58,7 +58,7 @@ wird:
 - `modules/VscWizard.Core.psm1` - Nicht-GUI-Logik: Logging, Prozessausfuehrung,
   Erkennung von Domaenen-/TPM-Status, Erstellung der virtuellen Smartcard,
   CSR-Erstellung/-Einreichung/-Abschluss ueber `certreq`
-- `config.psd1` - Konfiguration (CA, Templates, RDP-Zielserver, etc.)
+- `config.psd1` - Konfiguration (CA, Template, RDP-Zielserver, etc.)
 - `VscWizard.bat` - Launcher
 
 ## Ablauf im Detail
@@ -104,17 +104,25 @@ wird:
 
 ### Einstellungen
 
-Leere Felder zeigen einen grauen Hinweistext (z.B. `z.B. ca01.contoso.local\
-Contoso-Issuing-CA`), der beim Klick ins Feld verschwindet und beim Verlassen
-eines leeren Feldes wieder erscheint - er wird nicht als echter Wert
-gespeichert.
+Kompaktes Grid-Layout (Label neben statt ueber dem Feld). Leere Felder zeigen
+einen grauen Hinweistext (z.B. `z.B. ca01.contoso.local\Contoso-Issuing-CA`),
+der beim Klick ins Feld verschwindet und beim Verlassen eines leeren Feldes
+wieder erscheint - er wird nicht als echter Wert gespeichert.
+
+Das **Zertifikatstemplate** ist ein Dropdown (mit manueller Eingabe
+kombinierbar) - es wird bewusst nur eines konfiguriert, da eine
+VSC-Anmeldung immer genau ein Template verwendet.
 
 Der Button **"PKI automatisch erkennen"** fragt die Enterprise-CAs direkt aus
 der AD-Konfigurationspartition ab (LDAP) und testet die RPC-Erreichbarkeit
 jeder gefundenen CA (`certutil -ping`, ca. 40 Sekunden Zeitlimit). Bei Erfolg
-werden CA-Konfigurationsstring und verfuegbare Templates direkt in die
-Felder geschrieben (als echte Werte, nicht nur als Hinweis) - anschliessend
-noch "Speichern" klicken, um sie dauerhaft in `config.psd1` zu uebernehmen.
+wird der CA-Konfigurationsstring direkt eingetragen und das
+Zertifikatstemplate-Dropdown mit allen auf der CA verfuegbaren Templates
+befuellt (erstes als Vorschlag vorausgewaehlt - im Dropdown ggf. das
+passende auswaehlen, z.B. ein "SmartcardLogon"/"SmartcardUser"-artiges
+Template statt eines fuer Verschluesselung/Webserver/etc.). Anschliessend
+noch "Speichern" klicken, um die Werte dauerhaft in `config.psd1` zu
+uebernehmen.
 Schlaegt die Erkennung fehl, zeigt das Ergebnisfeld die konkrete Ursache
 (LDAP-Fehler, CA gefunden aber per RPC nicht erreichbar, Zeitueberschreitung).
 
