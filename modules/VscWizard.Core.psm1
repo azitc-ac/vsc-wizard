@@ -8,6 +8,20 @@
 
 #Requires -Version 5.1
 
+# Wenn dieses Skript aus einer PowerShell-7(pwsh)-Umgebung heraus gestartet wird (z.B.
+# aus einem pwsh-Terminal oder von einem Prozess, der pwsh's PSModulePath-Eintraege
+# geerbt hat), steht "C:\Program Files\PowerShell\7\Modules" VOR dem nativen
+# Windows-PowerShell-5.1-Modulpfad in $env:PSModulePath. Windows PowerShell 5.1 laedt
+# dann beim Autoloading von Microsoft.PowerShell.Utility die dortige, fuer PowerShell 7
+# gebaute Modulvariante (die kein Import-PowerShellDataFile exportiert) statt der
+# eigenen - Import-VscWizardConfig scheitert dadurch bei JEDEM Start mit
+# "CommandNotFoundException", die gespeicherte config.psd1 wird nie geladen. Fix: das
+# native Modul explizit ueber den vollen Pfad laden (umgeht die PSModulePath-Suche).
+$nativeUtilityModule = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1'
+if (Test-Path $nativeUtilityModule) {
+    Import-Module $nativeUtilityModule -Force -ErrorAction SilentlyContinue
+}
+
 $script:Config = $null
 $script:ConfigPath = $null
 $script:LogBox = $null
@@ -21,7 +35,15 @@ function Import-VscWizardConfig {
     if (-not (Test-Path $Path)) {
         throw "Konfigurationsdatei nicht gefunden: $Path"
     }
-    $data = Import-PowerShellDataFile -Path $Path
+    try {
+        $data = Import-PowerShellDataFile -Path $Path -ErrorAction Stop
+    } catch {
+        # Nicht erneut werfen: ein leeres $data fuehrt dazu, dass der Wizard die Werte
+        # als fehlend behandelt und automatisch den Einstellungen-Tab oeffnet (siehe
+        # STARTUP-Region in VscWizard.ps1) - das ist nachvollziehbarer als ein
+        # uncaught Fehler vor dem eigentlichen GUI-Start.
+        $data = @{}
+    }
     $script:Config = $data
     $script:ConfigPath = $Path
     return $data

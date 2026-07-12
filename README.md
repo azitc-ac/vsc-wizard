@@ -46,6 +46,17 @@ wird:
   Services (Enterprise) CA
 - Fuer Plan B: ein per RDP erreichbarer Server mit Sicht auf die CA
 
+Hinweis fuer Umgebungen, in denen PowerShell 7 (pwsh) als Standard-Terminal
+genutzt wird: Wird `VscWizard.bat` aus einer pwsh-Umgebung heraus gestartet
+(z.B. Doppelklick aus einem pwsh-Terminal, oder ein Prozess, der pwsh's
+Umgebung geerbt hat), steht pwsh's Modulpfad in `$env:PSModulePath` vor dem
+nativen Windows-PowerShell-5.1-Pfad. Windows PowerShell 5.1 laedt dann beim
+Autoloading von `Microsoft.PowerShell.Utility` faelschlich die
+PowerShell-7-Modulvariante, die kein `Import-PowerShellDataFile` exportiert -
+die gespeicherte `config.psd1` wuerde dadurch bei jedem Start ignoriert
+werden. `VscWizard.Core.psm1` erzwingt deshalb beim Laden explizit das
+native Modul ueber den vollen Pfad (siehe Kommentar dort).
+
 ## Verwendung
 
 1. `VscWizard.bat` ausfuehren (startet `VscWizard.ps1` mit
