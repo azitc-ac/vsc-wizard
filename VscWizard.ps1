@@ -1,0 +1,940 @@
+<#
+.SYNOPSIS
+    VSC-Wizard - Wizard zur Beantragung virtueller Smartcards (TPM Virtual Smart Card) fuer AD-Administratoren.
+.DESCRIPTION
+    Fuehrt Schritt fuer Schritt durch die Erstellung einer virtuellen Smartcard und die
+    Zertifikatsbeantragung. Unterstuetzt zwei Szenarien als Tabs:
+
+      - Plan A: Domaenen-gebundener Rechner mit direkter Sicht auf die Enterprise-CA
+                (voll automatisiert, CSR-Erstellung und Einreichung in einem Schritt).
+      - Plan B: Entra-joined- oder Workgroup-Rechner ohne direkte CA-Sicht
+                (CSR wird lokal erzeugt, per RDP-Login als Zielbenutzer auf einen
+                CA-nahen Server eingereicht, Zertifikat wird zurueckkopiert und
+                lokal auf der virtuellen Smartcard hinterlegt).
+.NOTES
+    Erfordert Windows mit TPM (fuer tpmvscmgr.exe) sowie certreq.exe.
+    Die Erstellung der virtuellen Smartcard erfordert lokale Administratorrechte
+    (gezielte UAC-Elevation fuer diesen einen Schritt); alle uebrigen Schritte laufen
+    im normalen Benutzerkontext, da Zertifikate im Benutzer-Zertifikatsspeicher liegen.
+#>
+
+#Requires -Version 5.1
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+[System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
+
+Import-Module (Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1') -Force
+
+$script:ConfigPath = Join-Path $PSScriptRoot 'config.psd1'
+$config = Import-VscWizardConfig -Path $script:ConfigPath
+
+function New-WizardLabel {
+    param(
+        [string]$Text,
+        [int]$X,
+        [int]$Y,
+        [int]$Width = 760,
+        [int]$Height = 24,
+        [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular
+    )
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = $Text
+    $lbl.Location = New-Object System.Drawing.Point($X, $Y)
+    $lbl.Size = New-Object System.Drawing.Size($Width, $Height)
+    $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 9, $Style)
+    return $lbl
+}
+
+#region MAIN FORM
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen'
+$form.Size = New-Object System.Drawing.Size(940, 780)
+$form.StartPosition = 'CenterScreen'
+$form.MinimumSize = New-Object System.Drawing.Size(840, 660)
+
+$mainLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$mainLayout.Dock = 'Fill'
+$mainLayout.RowCount = 2
+$mainLayout.ColumnCount = 1
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 68)))
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 32)))
+$form.Controls.Add($mainLayout)
+
+$tabs = New-Object System.Windows.Forms.TabControl
+$tabs.Dock = 'Fill'
+$mainLayout.Controls.Add($tabs, 0, 0)
+
+$tabPlanA = New-Object System.Windows.Forms.TabPage
+$tabPlanA.Text = 'Plan A: AD-Domaene'
+$tabPlanB = New-Object System.Windows.Forms.TabPage
+$tabPlanB.Text = 'Plan B: Entra / Workgroup'
+$tabSettings = New-Object System.Windows.Forms.TabPage
+$tabSettings.Text = 'Einstellungen'
+$tabs.TabPages.AddRange(@($tabPlanA, $tabPlanB, $tabSettings))
+
+#endregion
+
+#region LOG PANEL
+
+$logGroup = New-Object System.Windows.Forms.GroupBox
+$logGroup.Text = 'Log / Diagnose'
+$logGroup.Dock = 'Fill'
+$mainLayout.Controls.Add($logGroup, 0, 1)
+
+$logLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$logLayout.Dock = 'Fill'
+$logLayout.RowCount = 2
+$logLayout.ColumnCount = 1
+[void]$logLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 34)))
+[void]$logLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$logGroup.Controls.Add($logLayout)
+
+$logToolbar = New-Object System.Windows.Forms.FlowLayoutPanel
+$logToolbar.Dock = 'Fill'
+$logToolbar.FlowDirection = 'RightToLeft'
+$logLayout.Controls.Add($logToolbar, 0, 0)
+
+$btnExportLog = New-Object System.Windows.Forms.Button
+$btnExportLog.Text = 'Log exportieren...'
+$btnExportLog.Size = New-Object System.Drawing.Size(140, 26)
+$logToolbar.Controls.Add($btnExportLog)
+
+$rtbLog = New-Object System.Windows.Forms.RichTextBox
+$rtbLog.Dock = 'Fill'
+$rtbLog.ReadOnly = $true
+$rtbLog.Font = New-Object System.Drawing.Font('Consolas', 9)
+$logLayout.Controls.Add($rtbLog, 0, 1)
+
+$btnExportLog.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'Textdatei (*.txt)|*.txt'
+    $dlg.FileName = "vscwizard-log-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $rtbLog.SaveFile($dlg.FileName, [System.Windows.Forms.RichTextBoxStreamType]::PlainText)
+    }
+})
+
+Initialize-WizardLog -LogBox $rtbLog
+Write-WizardLog -Message 'VSC-Wizard gestartet.' -Level Info
+
+#endregion
+
+# ============================================================================
+#region PLAN A TAB
+# ============================================================================
+
+$layoutA = New-Object System.Windows.Forms.TableLayoutPanel
+$layoutA.Dock = 'Fill'
+$layoutA.RowCount = 2
+$layoutA.ColumnCount = 1
+[void]$layoutA.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$layoutA.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 54)))
+$tabPlanA.Controls.Add($layoutA)
+
+$pnlStepsA = New-Object System.Windows.Forms.Panel
+$pnlStepsA.Dock = 'Fill'
+$layoutA.Controls.Add($pnlStepsA, 0, 0)
+
+$navA = New-Object System.Windows.Forms.TableLayoutPanel
+$navA.Dock = 'Fill'
+$navA.ColumnCount = 3
+[void]$navA.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$navA.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
+[void]$navA.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
+$layoutA.Controls.Add($navA, 0, 1)
+
+$lblStepA = New-Object System.Windows.Forms.Label
+$lblStepA.Dock = 'Fill'
+$lblStepA.TextAlign = 'MiddleLeft'
+$navA.Controls.Add($lblStepA, 0, 0)
+
+$btnBackA = New-Object System.Windows.Forms.Button
+$btnBackA.Text = '< Zurueck'
+$btnBackA.Dock = 'Fill'
+$navA.Controls.Add($btnBackA, 1, 0)
+
+$btnNextA = New-Object System.Windows.Forms.Button
+$btnNextA.Text = 'Weiter >'
+$btnNextA.Dock = 'Fill'
+$navA.Controls.Add($btnNextA, 2, 0)
+
+# --- Schritt A1: Status ---
+$pnlA1 = New-Object System.Windows.Forms.Panel
+$pnlA1.Dock = 'Fill'
+$pnlStepsA.Controls.Add($pnlA1)
+
+$lblJoinStateA = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
+$lblUserA = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
+$lblTpmA = New-WizardLabel -Text 'TPM: ...' -X 20 -Y 80
+$lblWarnA = New-WizardLabel -Text '' -X 20 -Y 120 -Style Bold
+$pnlA1.Controls.AddRange(@($lblJoinStateA, $lblUserA, $lblTpmA, $lblWarnA))
+
+# --- Schritt A2: VSC erstellen ---
+$pnlA2 = New-Object System.Windows.Forms.Panel
+$pnlA2.Dock = 'Fill'
+$pnlStepsA.Controls.Add($pnlA2)
+
+$lblCardNameA = New-WizardLabel -Text 'Name der virtuellen Smartcard:' -X 20 -Y 20 -Width 300
+$txtCardNameA = New-Object System.Windows.Forms.TextBox
+$txtCardNameA.Location = New-Object System.Drawing.Point(20, 46)
+$txtCardNameA.Size = New-Object System.Drawing.Size(300, 24)
+$txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
+
+$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt) sowie ein PIN-Dialog von Windows zur Vergabe der Karten-PIN.' -X 20 -Y 84 -Width 780 -Height 50
+
+$btnCreateVscA = New-Object System.Windows.Forms.Button
+$btnCreateVscA.Text = 'Virtuelle Smartcard erstellen'
+$btnCreateVscA.Location = New-Object System.Drawing.Point(20, 146)
+$btnCreateVscA.Size = New-Object System.Drawing.Size(240, 32)
+
+$lblVscResultA = New-WizardLabel -Text '' -X 20 -Y 190 -Width 780
+
+$pnlA2.Controls.AddRange(@($lblCardNameA, $txtCardNameA, $lblVscInfoA, $btnCreateVscA, $lblVscResultA))
+
+$btnCreateVscA.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtCardNameA.Text)) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte einen Kartennamen angeben.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnCreateVscA.Enabled = $false
+    $lblVscResultA.ForeColor = [System.Drawing.Color]::Black
+    $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC- und PIN-Dialog bestaetigen...'
+    $form.Refresh()
+
+    $result = New-VirtualSmartCard -CardName $txtCardNameA.Text
+    if ($result.Success) {
+        $script:PlanA_VscCreated = $true
+        $script:PlanA_CardName = $txtCardNameA.Text
+        $lblVscResultA.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblVscResultA.Text = 'Virtuelle Smartcard wurde erfolgreich erstellt.'
+    } else {
+        $lblVscResultA.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblVscResultA.Text = "Fehler bei der Erstellung (Exit-Code $($result.ExitCode)). Details siehe Log."
+    }
+    $btnCreateVscA.Enabled = $true
+})
+
+# --- Schritt A3: Zertifikat anfordern ---
+$pnlA3 = New-Object System.Windows.Forms.Panel
+$pnlA3.Dock = 'Fill'
+$pnlStepsA.Controls.Add($pnlA3)
+
+$lblTemplateA = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 20 -Width 300
+$cboTemplateA = New-Object System.Windows.Forms.ComboBox
+$cboTemplateA.Location = New-Object System.Drawing.Point(20, 46)
+$cboTemplateA.Size = New-Object System.Drawing.Size(300, 24)
+$cboTemplateA.DropDownStyle = 'DropDownList'
+[void]$cboTemplateA.Items.AddRange($config.Templates)
+if ($cboTemplateA.Items.Count -gt 0) { $cboTemplateA.SelectedIndex = 0 }
+
+$btnRequestCertA = New-Object System.Windows.Forms.Button
+$btnRequestCertA.Text = 'Zertifikat anfordern'
+$btnRequestCertA.Location = New-Object System.Drawing.Point(20, 84)
+$btnRequestCertA.Size = New-Object System.Drawing.Size(240, 32)
+
+$lblCertResultA = New-WizardLabel -Text '' -X 20 -Y 128 -Width 780 -Height 50
+
+$btnRetrieveA = New-Object System.Windows.Forms.Button
+$btnRetrieveA.Text = 'Zertifikat abrufen (bei Genehmigung)'
+$btnRetrieveA.Location = New-Object System.Drawing.Point(20, 190)
+$btnRetrieveA.Size = New-Object System.Drawing.Size(260, 32)
+$btnRetrieveA.Visible = $false
+
+$pnlA3.Controls.AddRange(@($lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
+
+$btnRequestCertA.Add_Click({
+    if (-not $cboTemplateA.SelectedItem) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnRequestCertA.Enabled = $false
+    $lblCertResultA.ForeColor = [System.Drawing.Color]::Black
+    $lblCertResultA.Text = 'Erstelle Zertifikatsanforderung - ggf. erscheint ein PIN-Dialog der Smartcard...'
+    $form.Refresh()
+
+    $script:PlanA_EnrollDir = Join-Path (Get-WizardWorkingDir) "PlanA-$($script:PlanA_CardName)"
+    $upn = Get-CurrentUpn
+    $subject = "CN=$env:USERNAME"
+
+    $csr = New-CertificateSigningRequest -Subject $subject -Upn $upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir
+    if (-not $csr.Success) {
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblCertResultA.Text = 'CSR-Erstellung fehlgeschlagen. Details siehe Log.'
+        $btnRequestCertA.Enabled = $true
+        return
+    }
+
+    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
+    if ($submit.Pending) {
+        $script:PlanA_PendingRequestId = $submit.RequestId
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). Bitte spaeter erneut abrufen."
+        $btnRetrieveA.Visible = $true
+        $btnRequestCertA.Enabled = $true
+        return
+    }
+    if (-not $submit.Success) {
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblCertResultA.Text = 'Antrag fehlgeschlagen. Details siehe Log.'
+        $btnRequestCertA.Enabled = $true
+        return
+    }
+
+    $complete = Complete-CertificateEnrollment -CerPath $submit.CerPath
+    if ($complete.Success) {
+        $script:PlanA_CertIssued = $true
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblCertResultA.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
+    } else {
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblCertResultA.Text = 'Uebernahme des Zertifikats fehlgeschlagen. Details siehe Log.'
+    }
+    $btnRequestCertA.Enabled = $true
+})
+
+$btnRetrieveA.Add_Click({
+    if (-not $script:PlanA_PendingRequestId) { return }
+    $recv = Receive-PendingCertificate -RequestId $script:PlanA_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanA_EnrollDir
+    if ($recv.Success) {
+        $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
+        if ($complete.Success) {
+            $script:PlanA_CertIssued = $true
+            $btnRetrieveA.Visible = $false
+            $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
+            $lblCertResultA.Text = 'Zertifikat wurde erfolgreich abgerufen und auf der virtuellen Smartcard hinterlegt.'
+        }
+    } else {
+        [System.Windows.Forms.MessageBox]::Show('Zertifikat ist noch nicht ausgestellt.', 'Hinweis', 'OK', 'Information') | Out-Null
+    }
+})
+
+# --- Schritt A4: Zusammenfassung ---
+$pnlA4 = New-Object System.Windows.Forms.Panel
+$pnlA4.Dock = 'Fill'
+$pnlStepsA.Controls.Add($pnlA4)
+
+$lblSummaryA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 140
+$btnResetA = New-Object System.Windows.Forms.Button
+$btnResetA.Text = 'Weitere Smartcard beantragen'
+$btnResetA.Location = New-Object System.Drawing.Point(20, 170)
+$btnResetA.Size = New-Object System.Drawing.Size(240, 32)
+
+$pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA))
+
+function Update-PlanASummary {
+    $summary = Get-IssuedCertificateSummary -SubjectContains $env:USERNAME
+    if ($summary) {
+        $lblSummaryA.Text = "Kartenname: $($script:PlanA_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGueltig ab: $($summary.NotBefore)`r`nGueltig bis: $($summary.NotAfter)"
+    } else {
+        $lblSummaryA.Text = 'Kein passendes Zertifikat gefunden.'
+    }
+}
+
+$btnResetA.Add_Click({
+    $script:PlanA_VscCreated = $false
+    $script:PlanA_CertIssued = $false
+    $script:PlanA_PendingRequestId = $null
+    $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
+    $lblVscResultA.Text = ''
+    $lblCertResultA.Text = ''
+    $btnRetrieveA.Visible = $false
+    Show-PlanAStep -Index 1
+})
+
+# --- Navigation Plan A ---
+$planAStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'Zertifikat anfordern', 'Zusammenfassung')
+
+function Update-PlanAStatus {
+    $joinState = Get-DomainJoinState
+    $tpm = Test-TpmReadiness
+    $upn = Get-CurrentUpn
+
+    $lblJoinStateA.Text = "Domaenen-Status: $($joinState.Mode)" + $(if ($joinState.Domain) { " ($($joinState.Domain))" } else { '' })
+    $lblUserA.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
+    $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
+
+    if ($joinState.Mode -ne 'ADDomain') {
+        $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblWarnA.Text = 'Dieser Rechner scheint nicht domaenen-gebunden zu sein. Fuer diesen Fall ist "Plan B" vorgesehen.'
+    } elseif (-not $tpm.Ready) {
+        $lblWarnA.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblWarnA.Text = 'Kein bereites TPM erkannt - die Erstellung einer virtuellen Smartcard ist eventuell nicht moeglich.'
+    } else {
+        $lblWarnA.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblWarnA.Text = 'Voraussetzungen erfuellt.'
+    }
+}
+
+function Show-PlanAStep {
+    param([int]$Index)
+    $panels = @($pnlA1, $pnlA2, $pnlA3, $pnlA4)
+    for ($i = 0; $i -lt $panels.Count; $i++) {
+        $panels[$i].Visible = ($i -eq $Index)
+    }
+    $script:PlanACurrentStep = $Index
+    $lblStepA.Text = "Schritt $($Index + 1) von $($panels.Count): $($planAStepTitles[$Index])"
+    $btnBackA.Enabled = ($Index -gt 0)
+    $btnNextA.Enabled = ($Index -lt $panels.Count - 1)
+
+    switch ($Index) {
+        0 { Update-PlanAStatus }
+        3 { Update-PlanASummary }
+    }
+}
+
+$btnNextA.Add_Click({
+    switch ($script:PlanACurrentStep) {
+        0 { Show-PlanAStep -Index 1 }
+        1 {
+            if (-not $script:PlanA_VscCreated) {
+                [System.Windows.Forms.MessageBox]::Show('Bitte zuerst die virtuelle Smartcard erstellen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+                return
+            }
+            Show-PlanAStep -Index 2
+        }
+        2 {
+            if (-not $script:PlanA_CertIssued) {
+                [System.Windows.Forms.MessageBox]::Show('Bitte zuerst das Zertifikat erfolgreich anfordern.', 'Hinweis', 'OK', 'Warning') | Out-Null
+                return
+            }
+            Show-PlanAStep -Index 3
+        }
+    }
+})
+
+$btnBackA.Add_Click({
+    if ($script:PlanACurrentStep -gt 0) {
+        Show-PlanAStep -Index ($script:PlanACurrentStep - 1)
+    }
+})
+
+#endregion
+
+# ============================================================================
+#region PLAN B TAB
+# ============================================================================
+
+$layoutB = New-Object System.Windows.Forms.TableLayoutPanel
+$layoutB.Dock = 'Fill'
+$layoutB.RowCount = 2
+$layoutB.ColumnCount = 1
+[void]$layoutB.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$layoutB.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 54)))
+$tabPlanB.Controls.Add($layoutB)
+
+$pnlStepsB = New-Object System.Windows.Forms.Panel
+$pnlStepsB.Dock = 'Fill'
+$layoutB.Controls.Add($pnlStepsB, 0, 0)
+
+$navB = New-Object System.Windows.Forms.TableLayoutPanel
+$navB.Dock = 'Fill'
+$navB.ColumnCount = 3
+[void]$navB.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$navB.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
+[void]$navB.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
+$layoutB.Controls.Add($navB, 0, 1)
+
+$lblStepB = New-Object System.Windows.Forms.Label
+$lblStepB.Dock = 'Fill'
+$lblStepB.TextAlign = 'MiddleLeft'
+$navB.Controls.Add($lblStepB, 0, 0)
+
+$btnBackB = New-Object System.Windows.Forms.Button
+$btnBackB.Text = '< Zurueck'
+$btnBackB.Dock = 'Fill'
+$navB.Controls.Add($btnBackB, 1, 0)
+
+$btnNextB = New-Object System.Windows.Forms.Button
+$btnNextB.Text = 'Weiter >'
+$btnNextB.Dock = 'Fill'
+$navB.Controls.Add($btnNextB, 2, 0)
+
+# --- Schritt B1: Status ---
+$pnlB1 = New-Object System.Windows.Forms.Panel
+$pnlB1.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB1)
+
+$lblJoinStateB = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
+$lblUserB = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
+$lblJumpServerB = New-WizardLabel -Text '' -X 20 -Y 80
+$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da dieser Rechner voraussichtlich keine direkte Sicht auf die Zertifizierungsstelle hat.' -X 20 -Y 116 -Width 780 -Height 60
+$pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblJumpServerB, $lblExplainB))
+
+# --- Schritt B2: VSC erstellen ---
+$pnlB2 = New-Object System.Windows.Forms.Panel
+$pnlB2.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB2)
+
+$lblCardNameB = New-WizardLabel -Text 'Name der virtuellen Smartcard:' -X 20 -Y 20 -Width 300
+$txtCardNameB = New-Object System.Windows.Forms.TextBox
+$txtCardNameB.Location = New-Object System.Drawing.Point(20, 46)
+$txtCardNameB.Size = New-Object System.Drawing.Size(300, 24)
+$txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
+
+$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt) sowie ein PIN-Dialog von Windows zur Vergabe der Karten-PIN.' -X 20 -Y 84 -Width 780 -Height 50
+
+$btnCreateVscB = New-Object System.Windows.Forms.Button
+$btnCreateVscB.Text = 'Virtuelle Smartcard erstellen'
+$btnCreateVscB.Location = New-Object System.Drawing.Point(20, 146)
+$btnCreateVscB.Size = New-Object System.Drawing.Size(240, 32)
+
+$lblVscResultB = New-WizardLabel -Text '' -X 20 -Y 190 -Width 780
+
+$pnlB2.Controls.AddRange(@($lblCardNameB, $txtCardNameB, $lblVscInfoB, $btnCreateVscB, $lblVscResultB))
+
+$btnCreateVscB.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtCardNameB.Text)) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte einen Kartennamen angeben.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnCreateVscB.Enabled = $false
+    $lblVscResultB.ForeColor = [System.Drawing.Color]::Black
+    $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC- und PIN-Dialog bestaetigen...'
+    $form.Refresh()
+
+    $result = New-VirtualSmartCard -CardName $txtCardNameB.Text
+    if ($result.Success) {
+        $script:PlanB_VscCreated = $true
+        $script:PlanB_CardName = $txtCardNameB.Text
+        $lblVscResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblVscResultB.Text = 'Virtuelle Smartcard wurde erfolgreich erstellt.'
+    } else {
+        $lblVscResultB.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblVscResultB.Text = "Fehler bei der Erstellung (Exit-Code $($result.ExitCode)). Details siehe Log."
+    }
+    $btnCreateVscB.Enabled = $true
+})
+
+# --- Schritt B3: CSR erstellen (lokal) ---
+$pnlB3 = New-Object System.Windows.Forms.Panel
+$pnlB3.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB3)
+
+$lblCsrInfoB = New-WizardLabel -Text 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.' -X 20 -Y 20 -Width 780 -Height 40
+
+$btnCreateCsrB = New-Object System.Windows.Forms.Button
+$btnCreateCsrB.Text = 'CSR erstellen'
+$btnCreateCsrB.Location = New-Object System.Drawing.Point(20, 66)
+$btnCreateCsrB.Size = New-Object System.Drawing.Size(240, 32)
+
+$lblCsrPathLabelB = New-WizardLabel -Text 'Pfad der CSR-Datei:' -X 20 -Y 110 -Width 300
+$txtCsrPathB = New-Object System.Windows.Forms.TextBox
+$txtCsrPathB.Location = New-Object System.Drawing.Point(20, 136)
+$txtCsrPathB.Size = New-Object System.Drawing.Size(560, 24)
+$txtCsrPathB.ReadOnly = $true
+
+$btnCopyCsrPathB = New-Object System.Windows.Forms.Button
+$btnCopyCsrPathB.Text = 'Pfad kopieren'
+$btnCopyCsrPathB.Location = New-Object System.Drawing.Point(590, 134)
+$btnCopyCsrPathB.Size = New-Object System.Drawing.Size(120, 28)
+
+$btnOpenCsrFolderB = New-Object System.Windows.Forms.Button
+$btnOpenCsrFolderB.Text = 'Ordner oeffnen'
+$btnOpenCsrFolderB.Location = New-Object System.Drawing.Point(20, 172)
+$btnOpenCsrFolderB.Size = New-Object System.Drawing.Size(160, 28)
+
+$pnlB3.Controls.AddRange(@($lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB))
+
+$btnCreateCsrB.Add_Click({
+    if (-not $script:PlanB_VscCreated) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst die virtuelle Smartcard erstellen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnCreateCsrB.Enabled = $false
+    $script:PlanB_EnrollDir = Join-Path (Get-WizardWorkingDir) "PlanB-$($script:PlanB_CardName)"
+    $upn = Get-CurrentUpn
+    $subject = "CN=$env:USERNAME"
+
+    $csr = New-CertificateSigningRequest -Subject $subject -Upn $upn -CspName $config.CspName -OutputDirectory $script:PlanB_EnrollDir
+    if ($csr.Success) {
+        $script:PlanB_CsrPath = $csr.CsrPath
+        $txtCsrPathB.Text = $csr.CsrPath
+    } else {
+        [System.Windows.Forms.MessageBox]::Show('CSR-Erstellung fehlgeschlagen. Details siehe Log.', 'Fehler', 'OK', 'Error') | Out-Null
+    }
+    $btnCreateCsrB.Enabled = $true
+})
+
+$btnCopyCsrPathB.Add_Click({
+    if ($txtCsrPathB.Text) { Set-WizardClipboard -Text $txtCsrPathB.Text }
+})
+
+$btnOpenCsrFolderB.Add_Click({
+    if ($txtCsrPathB.Text) { Open-WizardFolder -Path $txtCsrPathB.Text }
+})
+
+# --- Schritt B4: Uebergabe per RDP ---
+$pnlB4 = New-Object System.Windows.Forms.Panel
+$pnlB4.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB4)
+
+$lblHandoffB = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 220
+$pnlB4.Controls.Add($lblHandoffB)
+
+function Update-PlanBHandoff {
+    $lblHandoffB.Text = @"
+Naechste Schritte:
+
+1. Per RDP verbinden mit: $($config.RdpJumpServer)
+2. Dort als derselbe Benutzer anmelden: $env:USERDOMAIN\$env:USERNAME
+3. Die CSR-Datei auf den Server kopieren (z.B. ueber Zwischenablage/Laufwerksfreigabe):
+   $($script:PlanB_CsrPath)
+4. Diesen Wizard auf dem Server erneut starten, ebenfalls den Tab "Plan B" waehlen
+   und bis zu Schritt "Antrag einreichen (auf dem Server)" weiterklicken.
+
+Auf "Weiter" klicken, sobald du auf dem Server angemeldet bist.
+"@
+}
+
+# --- Schritt B5: Antrag einreichen (auf dem Server) ---
+$pnlB5 = New-Object System.Windows.Forms.Panel
+$pnlB5.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB5)
+
+$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszufuehren (angemeldet als Zielbenutzer):' -X 20 -Y 20 -Width 780
+
+$btnSelectCsrB = New-Object System.Windows.Forms.Button
+$btnSelectCsrB.Text = 'CSR-Datei auswaehlen...'
+$btnSelectCsrB.Location = New-Object System.Drawing.Point(20, 54)
+$btnSelectCsrB.Size = New-Object System.Drawing.Size(200, 30)
+
+$txtSelectedCsrB = New-Object System.Windows.Forms.TextBox
+$txtSelectedCsrB.Location = New-Object System.Drawing.Point(230, 58)
+$txtSelectedCsrB.Size = New-Object System.Drawing.Size(500, 24)
+$txtSelectedCsrB.ReadOnly = $true
+
+$lblTemplateSubmitB = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 96 -Width 200
+$cboTemplateSubmitB = New-Object System.Windows.Forms.ComboBox
+$cboTemplateSubmitB.Location = New-Object System.Drawing.Point(230, 92)
+$cboTemplateSubmitB.Size = New-Object System.Drawing.Size(300, 24)
+$cboTemplateSubmitB.DropDownStyle = 'DropDownList'
+[void]$cboTemplateSubmitB.Items.AddRange($config.Templates)
+if ($cboTemplateSubmitB.Items.Count -gt 0) { $cboTemplateSubmitB.SelectedIndex = 0 }
+
+$btnSubmitB = New-Object System.Windows.Forms.Button
+$btnSubmitB.Text = 'Einreichen'
+$btnSubmitB.Location = New-Object System.Drawing.Point(20, 130)
+$btnSubmitB.Size = New-Object System.Drawing.Size(200, 32)
+
+$btnRetrieveB = New-Object System.Windows.Forms.Button
+$btnRetrieveB.Text = 'Zertifikat abrufen (bei Genehmigung)'
+$btnRetrieveB.Location = New-Object System.Drawing.Point(230, 130)
+$btnRetrieveB.Size = New-Object System.Drawing.Size(260, 32)
+$btnRetrieveB.Visible = $false
+
+$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 174 -Width 780 -Height 40
+
+$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 218 -Width 400
+$txtCerPathB = New-Object System.Windows.Forms.TextBox
+$txtCerPathB.Location = New-Object System.Drawing.Point(20, 244)
+$txtCerPathB.Size = New-Object System.Drawing.Size(560, 24)
+$txtCerPathB.ReadOnly = $true
+
+$btnCopyCerPathB = New-Object System.Windows.Forms.Button
+$btnCopyCerPathB.Text = 'Pfad kopieren'
+$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 242)
+$btnCopyCerPathB.Size = New-Object System.Drawing.Size(120, 28)
+
+$btnOpenCerFolderB = New-Object System.Windows.Forms.Button
+$btnOpenCerFolderB.Text = 'Ordner oeffnen'
+$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 280)
+$btnOpenCerFolderB.Size = New-Object System.Drawing.Size(160, 28)
+
+$pnlB5.Controls.AddRange(@($lblSubmitInfoB, $btnSelectCsrB, $txtSelectedCsrB, $lblTemplateSubmitB, $cboTemplateSubmitB, $btnSubmitB, $btnRetrieveB, $lblSubmitResultB, $lblCerPathLabelB, $txtCerPathB, $btnCopyCerPathB, $btnOpenCerFolderB))
+
+$btnSelectCsrB.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'CSR-Dateien (*.csr;*.req)|*.csr;*.req|Alle Dateien (*.*)|*.*'
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $txtSelectedCsrB.Text = $dlg.FileName
+    }
+})
+
+$btnSubmitB.Add_Click({
+    if (-not $txtSelectedCsrB.Text) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CSR-Datei auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    if (-not $cboTemplateSubmitB.SelectedItem) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnSubmitB.Enabled = $false
+    $script:PlanB_SubmitDir = Split-Path $txtSelectedCsrB.Text -Parent
+
+    $submit = Submit-CertificateSigningRequest -CsrPath $txtSelectedCsrB.Text -CAConfig $config.CAConfig -TemplateName $cboTemplateSubmitB.SelectedItem -OutputDirectory $script:PlanB_SubmitDir
+    if ($submit.Pending) {
+        $script:PlanB_PendingRequestId = $submit.RequestId
+        $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId))."
+        $btnRetrieveB.Visible = $true
+    } elseif ($submit.Success) {
+        $txtCerPathB.Text = $submit.CerPath
+        $lblSubmitResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblSubmitResultB.Text = 'Zertifikat wurde ausgestellt.'
+    } else {
+        $lblSubmitResultB.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblSubmitResultB.Text = 'Antrag fehlgeschlagen. Details siehe Log.'
+    }
+    $btnSubmitB.Enabled = $true
+})
+
+$btnRetrieveB.Add_Click({
+    if (-not $script:PlanB_PendingRequestId) { return }
+    $recv = Receive-PendingCertificate -RequestId $script:PlanB_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanB_SubmitDir
+    if ($recv.Success) {
+        $txtCerPathB.Text = $recv.CerPath
+        $btnRetrieveB.Visible = $false
+        $lblSubmitResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblSubmitResultB.Text = 'Zertifikat wurde abgerufen.'
+    } else {
+        [System.Windows.Forms.MessageBox]::Show('Zertifikat ist noch nicht ausgestellt.', 'Hinweis', 'OK', 'Information') | Out-Null
+    }
+})
+
+$btnCopyCerPathB.Add_Click({
+    if ($txtCerPathB.Text) { Set-WizardClipboard -Text $txtCerPathB.Text }
+})
+
+$btnOpenCerFolderB.Add_Click({
+    if ($txtCerPathB.Text) { Open-WizardFolder -Path $txtCerPathB.Text }
+})
+
+# --- Schritt B6: Zertifikat abschliessen (lokal) ---
+$pnlB6 = New-Object System.Windows.Forms.Panel
+$pnlB6.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB6)
+
+$lblCompleteInfoB = New-WizardLabel -Text 'Zurueck auf dem lokalen Rechner: die vom Server zurueckkopierte Zertifikatsdatei (.cer) auswaehlen.' -X 20 -Y 20 -Width 780 -Height 40
+
+$btnSelectCerB = New-Object System.Windows.Forms.Button
+$btnSelectCerB.Text = 'CER-Datei auswaehlen...'
+$btnSelectCerB.Location = New-Object System.Drawing.Point(20, 66)
+$btnSelectCerB.Size = New-Object System.Drawing.Size(200, 30)
+
+$txtSelectedCerB = New-Object System.Windows.Forms.TextBox
+$txtSelectedCerB.Location = New-Object System.Drawing.Point(230, 70)
+$txtSelectedCerB.Size = New-Object System.Drawing.Size(500, 24)
+$txtSelectedCerB.ReadOnly = $true
+
+$btnCompleteB = New-Object System.Windows.Forms.Button
+$btnCompleteB.Text = 'Zertifikat abschliessen'
+$btnCompleteB.Location = New-Object System.Drawing.Point(20, 110)
+$btnCompleteB.Size = New-Object System.Drawing.Size(200, 32)
+
+$lblCompleteResultB = New-WizardLabel -Text '' -X 20 -Y 154 -Width 780 -Height 40
+
+$lblSummaryB = New-WizardLabel -Text '' -X 20 -Y 200 -Width 780 -Height 110
+
+$btnResetB = New-Object System.Windows.Forms.Button
+$btnResetB.Text = 'Weitere Smartcard beantragen'
+$btnResetB.Location = New-Object System.Drawing.Point(20, 320)
+$btnResetB.Size = New-Object System.Drawing.Size(240, 32)
+
+$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCompleteResultB, $lblSummaryB, $btnResetB))
+
+$btnSelectCerB.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Zertifikatsdateien (*.cer)|*.cer|Alle Dateien (*.*)|*.*'
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $txtSelectedCerB.Text = $dlg.FileName
+    }
+})
+
+function Update-PlanBSummary {
+    $summary = Get-IssuedCertificateSummary -SubjectContains $env:USERNAME
+    if ($summary) {
+        $lblSummaryB.Text = "Kartenname: $($script:PlanB_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGueltig ab: $($summary.NotBefore)`r`nGueltig bis: $($summary.NotAfter)"
+    } else {
+        $lblSummaryB.Text = 'Kein passendes Zertifikat gefunden.'
+    }
+}
+
+$btnCompleteB.Add_Click({
+    if (-not $txtSelectedCerB.Text) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CER-Datei auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnCompleteB.Enabled = $false
+    $complete = Complete-CertificateEnrollment -CerPath $txtSelectedCerB.Text
+    if ($complete.Success) {
+        $script:PlanB_CertIssued = $true
+        $lblCompleteResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblCompleteResultB.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
+        Update-PlanBSummary
+    } else {
+        $lblCompleteResultB.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblCompleteResultB.Text = 'Uebernahme fehlgeschlagen. Details siehe Log.'
+    }
+    $btnCompleteB.Enabled = $true
+})
+
+$btnResetB.Add_Click({
+    $script:PlanB_VscCreated = $false
+    $script:PlanB_CertIssued = $false
+    $script:PlanB_PendingRequestId = $null
+    $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
+    $lblVscResultB.Text = ''
+    $txtCsrPathB.Text = ''
+    $txtSelectedCsrB.Text = ''
+    $txtCerPathB.Text = ''
+    $txtSelectedCerB.Text = ''
+    $lblSubmitResultB.Text = ''
+    $lblCompleteResultB.Text = ''
+    $btnRetrieveB.Visible = $false
+    Show-PlanBStep -Index 1
+})
+
+# --- Navigation Plan B ---
+$planBStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'CSR erstellen', 'Uebergabe per RDP', 'Antrag einreichen (auf dem Server)', 'Zertifikat abschliessen (lokal)')
+
+function Update-PlanBStatus {
+    $joinState = Get-DomainJoinState
+    $upn = Get-CurrentUpn
+    $lblJoinStateB.Text = "Domaenen-Status: $($joinState.Mode)"
+    $lblUserB.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
+    $lblJumpServerB.Text = "CA-naher Server (RDP-Ziel): $($config.RdpJumpServer)"
+}
+
+function Show-PlanBStep {
+    param([int]$Index)
+    $panels = @($pnlB1, $pnlB2, $pnlB3, $pnlB4, $pnlB5, $pnlB6)
+    for ($i = 0; $i -lt $panels.Count; $i++) {
+        $panels[$i].Visible = ($i -eq $Index)
+    }
+    $script:PlanBCurrentStep = $Index
+    $lblStepB.Text = "Schritt $($Index + 1) von $($panels.Count): $($planBStepTitles[$Index])"
+    $btnBackB.Enabled = ($Index -gt 0)
+    $btnNextB.Enabled = ($Index -lt $panels.Count - 1)
+
+    switch ($Index) {
+        0 { Update-PlanBStatus }
+        3 { Update-PlanBHandoff }
+    }
+}
+
+$btnNextB.Add_Click({
+    switch ($script:PlanBCurrentStep) {
+        0 { Show-PlanBStep -Index 1 }
+        1 {
+            if (-not $script:PlanB_VscCreated) {
+                [System.Windows.Forms.MessageBox]::Show('Bitte zuerst die virtuelle Smartcard erstellen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+                return
+            }
+            Show-PlanBStep -Index 2
+        }
+        2 {
+            if (-not $script:PlanB_CsrPath) {
+                [System.Windows.Forms.MessageBox]::Show('Bitte zuerst die CSR erstellen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+                return
+            }
+            Show-PlanBStep -Index 3
+        }
+        3 { Show-PlanBStep -Index 4 }
+        4 {
+            if (-not $txtCerPathB.Text) {
+                [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den Antrag einreichen und das Zertifikat erhalten.', 'Hinweis', 'OK', 'Warning') | Out-Null
+                return
+            }
+            Show-PlanBStep -Index 5
+        }
+    }
+})
+
+$btnBackB.Add_Click({
+    if ($script:PlanBCurrentStep -gt 0) {
+        Show-PlanBStep -Index ($script:PlanBCurrentStep - 1)
+    }
+})
+
+#endregion
+
+# ============================================================================
+#region EINSTELLUNGEN TAB
+# ============================================================================
+
+$lblCfgCA = New-WizardLabel -Text 'CA-Konfigurationsstring (Server\CA-Name):' -X 20 -Y 20 -Width 500
+$txtCfgCA = New-Object System.Windows.Forms.TextBox
+$txtCfgCA.Location = New-Object System.Drawing.Point(20, 46)
+$txtCfgCA.Size = New-Object System.Drawing.Size(500, 24)
+$txtCfgCA.Text = $config.CAConfig
+
+$lblCfgTemplates = New-WizardLabel -Text 'Zertifikatstemplates (kommagetrennt):' -X 20 -Y 84 -Width 500
+$txtCfgTemplates = New-Object System.Windows.Forms.TextBox
+$txtCfgTemplates.Location = New-Object System.Drawing.Point(20, 110)
+$txtCfgTemplates.Size = New-Object System.Drawing.Size(500, 24)
+$txtCfgTemplates.Text = ($config.Templates -join ', ')
+
+$lblCfgPrefix = New-WizardLabel -Text 'Namenspraefix fuer virtuelle Smartcards:' -X 20 -Y 148 -Width 500
+$txtCfgPrefix = New-Object System.Windows.Forms.TextBox
+$txtCfgPrefix.Location = New-Object System.Drawing.Point(20, 174)
+$txtCfgPrefix.Size = New-Object System.Drawing.Size(300, 24)
+$txtCfgPrefix.Text = $config.VscNamePrefix
+
+$lblCfgJump = New-WizardLabel -Text 'RDP-Zielserver fuer Plan B:' -X 20 -Y 212 -Width 500
+$txtCfgJump = New-Object System.Windows.Forms.TextBox
+$txtCfgJump.Location = New-Object System.Drawing.Point(20, 238)
+$txtCfgJump.Size = New-Object System.Drawing.Size(500, 24)
+$txtCfgJump.Text = $config.RdpJumpServer
+
+$lblCfgCsp = New-WizardLabel -Text 'Crypto Service Provider (CSP) der virtuellen Smartcard:' -X 20 -Y 276 -Width 500
+$txtCfgCsp = New-Object System.Windows.Forms.TextBox
+$txtCfgCsp.Location = New-Object System.Drawing.Point(20, 302)
+$txtCfgCsp.Size = New-Object System.Drawing.Size(500, 24)
+$txtCfgCsp.Text = $config.CspName
+
+$btnSaveConfig = New-Object System.Windows.Forms.Button
+$btnSaveConfig.Text = 'Speichern'
+$btnSaveConfig.Location = New-Object System.Drawing.Point(20, 340)
+$btnSaveConfig.Size = New-Object System.Drawing.Size(160, 32)
+
+$lblCfgSaved = New-WizardLabel -Text '' -X 190 -Y 346 -Width 300
+
+$tabSettings.Controls.AddRange(@($lblCfgCA, $txtCfgCA, $lblCfgTemplates, $txtCfgTemplates, $lblCfgPrefix, $txtCfgPrefix, $lblCfgJump, $txtCfgJump, $lblCfgCsp, $txtCfgCsp, $btnSaveConfig, $lblCfgSaved))
+
+$btnSaveConfig.Add_Click({
+    $newConfig = @{
+        CAConfig      = $txtCfgCA.Text
+        Templates     = @($txtCfgTemplates.Text -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        VscNamePrefix = $txtCfgPrefix.Text
+        RdpJumpServer = $txtCfgJump.Text
+        CspName       = $txtCfgCsp.Text
+        WorkingDir    = $config.WorkingDir
+    }
+    Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
+    $script:config = $newConfig
+
+    $cboTemplateA.Items.Clear()
+    [void]$cboTemplateA.Items.AddRange($newConfig.Templates)
+    if ($cboTemplateA.Items.Count -gt 0) { $cboTemplateA.SelectedIndex = 0 }
+
+    $cboTemplateSubmitB.Items.Clear()
+    [void]$cboTemplateSubmitB.Items.AddRange($newConfig.Templates)
+    if ($cboTemplateSubmitB.Items.Count -gt 0) { $cboTemplateSubmitB.SelectedIndex = 0 }
+
+    $lblCfgSaved.ForeColor = [System.Drawing.Color]::ForestGreen
+    $lblCfgSaved.Text = 'Gespeichert.'
+})
+
+#endregion
+
+# ============================================================================
+#region STARTUP
+# ============================================================================
+
+Show-PlanAStep -Index 0
+Show-PlanBStep -Index 0
+
+$joinStateStartup = Get-DomainJoinState
+if ($joinStateStartup.Mode -eq 'ADDomain') {
+    $tabs.SelectedTab = $tabPlanA
+} else {
+    $tabs.SelectedTab = $tabPlanB
+}
+
+[void]$form.ShowDialog()
+
+#endregion
