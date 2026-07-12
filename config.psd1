@@ -21,6 +21,14 @@
     # Leer ausgeliefert - im Tab "Einstellungen" eintragen.
     RdpJumpServer = ''
 
+    # AD-Domaene (DNS-Name) oder konkreter Domain Controller/Server, gegen den die
+    # automatische PKI-Erkennung (LDAP) bindet. Auf domaenen-gebundenen Rechnern
+    # meist nicht noetig (serverloses LDAP-Binding funktioniert dort von selbst).
+    # Auf Entra-joined/Workgroup-Rechnern i.d.R. erforderlich, da dort kein
+    # Domain-Join-Kontext fuer serverloses Binding existiert. Leer ausgeliefert -
+    # der Wizard schlaegt beim ersten Start einen Wert aus der UPN-Domaene vor.
+    DiscoveryDomain = ''
+
     # Arbeitsverzeichnis fuer temporaere CSR-/CER-/Log-Dateien (wird bei Bedarf angelegt).
     # Unterstuetzt Windows-Umgebungsvariablen im Format %VARNAME%.
     WorkingDir    = '%TEMP%\VscWizard'

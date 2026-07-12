@@ -209,6 +209,19 @@ function Get-CurrentUpn {
     return $null
 }
 
+function Get-DiscoveryDomainGuess {
+    # Bestes-Effort-Vorschlag fuer die LDAP-Ziel-Domaene der PKI-Discovery.
+    # $env:USERDNSDOMAIN ist bei echten Domain-Logons gesetzt, bei Entra-joined/
+    # Workgroup-Rechnern i.d.R. NICHT (kein klassischer Domain-Logon). Fallback:
+    # Domaenenanteil der UPN - Achtung, kann vom tatsaechlichen AD-DNS-Namen
+    # abweichen, wenn ein abweichender UPN-Suffix konfiguriert ist; deshalb nur
+    # ein Vorschlag, manuell in den Einstellungen ueberschreibbar.
+    if ($env:USERDNSDOMAIN) { return $env:USERDNSDOMAIN }
+    $upn = Get-CurrentUpn
+    if ($upn -and $upn.Contains('@')) { return $upn.Split('@')[1] }
+    return ''
+}
+
 #endregion
 
 #region PKI-Erreichbarkeit (fuer Entra-joined/Workgroup-Rechner mit Netzwerkpfad ins Firmennetz,
@@ -218,16 +231,33 @@ function Find-EnterpriseCAs {
     # Fragt die Enterprise-CAs direkt aus der AD-Konfigurationspartition ab
     # (CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,...),
     # genau der Mechanismus, den auch die Windows-Zertifikatsanforderung intern nutzt.
+    #
+    # WICHTIG: Ohne -Server versucht .NET ein "serverless" LDAP-Binding, das auf lokal
+    # zwischengespeicherten Domain-Join-Informationen beruht (DsGetDcName). Ein
+    # Entra-joined/Workgroup-Rechner ist NICHT domaenen-gebunden und hat diese
+    # Informationen i.d.R. nicht - selbst mit gueltigem Kerberos-Ticket (Cloud
+    # Kerberos Trust) schlaegt serverless Binding dann fehl. Fuer diesen Fall
+    # -Server auf eine DNS-Domaene oder einen konkreten DC/Servernamen setzen.
+    #
     # Absichtlich ohne Write-WizardLog: wird typischerweise aus einem Start-Job heraus
     # aufgerufen, in dem kein GUI-Log-Kontext existiert.
-    param([int]$TimeoutSeconds = 8)
+    param(
+        [string]$Server,
+        [int]$TimeoutSeconds = 8
+    )
 
+    $out = [pscustomobject]@{ Cas = @(); Error = $null }
     try {
-        $rootDse = New-Object System.DirectoryServices.DirectoryEntry('LDAP://RootDSE')
+        $rootPath = if ($Server) { "LDAP://$Server/RootDSE" } else { 'LDAP://RootDSE' }
+        $rootDse = New-Object System.DirectoryServices.DirectoryEntry($rootPath)
         $configNC = $rootDse.Properties['configurationNamingContext'].Value
-        if (-not $configNC) { return @() }
+        if (-not $configNC) {
+            $out.Error = "Keine Antwort von $rootPath (configurationNamingContext leer)."
+            return $out
+        }
 
-        $casPath = "LDAP://CN=Enrollment Services,CN=Public Key Services,CN=Services,$configNC"
+        $casDn = "CN=Enrollment Services,CN=Public Key Services,CN=Services,$configNC"
+        $casPath = if ($Server) { "LDAP://$Server/$casDn" } else { "LDAP://$casDn" }
         $casEntry = New-Object System.DirectoryServices.DirectoryEntry($casPath)
         $searcher = New-Object System.DirectoryServices.DirectorySearcher($casEntry)
         $searcher.Filter = '(objectClass=pKIEnrollmentService)'
@@ -246,10 +276,14 @@ function Find-EnterpriseCAs {
                 Templates    = @($r.Properties['certificateTemplates'])
             }
         }
-        return @($cas)
+        $out.Cas = @($cas)
+        if ($out.Cas.Count -eq 0) {
+            $out.Error = 'LDAP-Verbindung erfolgreich, aber keine registrierten CAs (pKIEnrollmentService) gefunden.'
+        }
     } catch {
-        return @()
+        $out.Error = $_.Exception.Message
     }
+    return $out
 }
 
 function Test-CAConnectivity {
@@ -262,18 +296,34 @@ function Test-CAConnectivity {
 }
 
 function Get-PkiReachability {
-    # Kombiniert AD-Discovery und RPC-Erreichbarkeitstest; liefert nur tatsaechlich
-    # erreichbare CAs zurueck. Gedacht zum Aufruf in einem Start-Job mit Wait-Job -Timeout,
-    # da sowohl LDAP- als auch RPC-Aufrufe bei nicht erreichbaren Servern lange haengen koennen.
-    param([int]$TimeoutSeconds = 8)
+    # Kombiniert AD-Discovery und RPC-Erreichbarkeitstest. Gibt neben den erreichbaren
+    # CAs auch Diagnoseinformationen zurueck (LDAP-Fehler, per LDAP gefundene aber per
+    # RPC nicht erreichbare CAs), damit ein Fehlschlag nachvollziehbar ist statt nur
+    # "nichts gefunden". Gedacht zum Aufruf in einem Start-Job mit Wait-Job -Timeout,
+    # da sowohl LDAP- als auch RPC-Aufrufe bei nicht erreichbaren Servern lange
+    # haengen koennen.
+    param(
+        [string]$Server,
+        [int]$TimeoutSeconds = 8
+    )
 
-    $cas = Find-EnterpriseCAs -TimeoutSeconds $TimeoutSeconds
-    $reachable = foreach ($ca in $cas) {
+    $discovery = Find-EnterpriseCAs -Server $Server -TimeoutSeconds $TimeoutSeconds
+    $reachable = @()
+    $unreachable = @()
+    foreach ($ca in $discovery.Cas) {
         if (Test-CAConnectivity -ConfigString $ca.ConfigString -TimeoutSeconds $TimeoutSeconds) {
-            $ca
+            $reachable += $ca
+        } else {
+            $unreachable += $ca.ConfigString
         }
     }
-    return @($reachable)
+
+    [pscustomobject]@{
+        AllCas         = $discovery.Cas
+        ReachableCas   = @($reachable)
+        UnreachableCas = @($unreachable)
+        DiscoveryError = $discovery.Error
+    }
 }
 
 #endregion

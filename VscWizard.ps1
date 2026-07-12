@@ -127,6 +127,7 @@ $tabPlanB = New-Object System.Windows.Forms.TabPage
 $tabPlanB.Text = 'Plan B: Entra / Workgroup'
 $tabSettings = New-Object System.Windows.Forms.TabPage
 $tabSettings.Text = 'Einstellungen'
+$tabSettings.AutoScroll = $true
 $tabs.TabPages.AddRange(@($tabPlanA, $tabPlanB, $tabSettings))
 
 #endregion
@@ -1059,61 +1060,86 @@ $txtCfgCsp.Location = New-Object System.Drawing.Point(20, 302)
 $txtCfgCsp.Size = New-Object System.Drawing.Size(500, 24)
 $txtCfgCsp.Text = $config.CspName
 
-$lblCfgDiscover = New-WizardLabel -Text 'Automatische PKI-Erkennung (LDAP-Discovery der Enterprise-CAs + RPC-Erreichbarkeitstest):' -X 20 -Y 340 -Width 700
+$lblCfgDomain = New-WizardLabel -Text 'AD-Domaene oder Domain Controller (fuer automatische PKI-Erkennung):' -X 20 -Y 340 -Width 500
+$txtCfgDomain = New-Object System.Windows.Forms.TextBox
+$txtCfgDomain.Location = New-Object System.Drawing.Point(20, 366)
+$txtCfgDomain.Size = New-Object System.Drawing.Size(500, 24)
+$discoveryDomainDefault = if ($config.DiscoveryDomain) { $config.DiscoveryDomain } else { Get-DiscoveryDomainGuess }
+Set-TextBoxPlaceholder -TextBox $txtCfgDomain -Placeholder 'z.B. contoso.local oder dc01.contoso.local' -Value $discoveryDomainDefault
+$lblCfgDomainHint = New-WizardLabel -Text 'Auf Entra-joined/Workgroup-Rechnern meist noetig - hier wird kein Domain-Join vorausgesetzt, aber "serverloses" LDAP-Binding klappt ohne Domain-Join nicht. Vorschlag wird aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.' -X 20 -Y 392 -Width 780 -Height 34
+
+$lblCfgDiscover = New-WizardLabel -Text 'Automatische PKI-Erkennung (LDAP-Discovery der Enterprise-CAs + RPC-Erreichbarkeitstest):' -X 20 -Y 434 -Width 700
 
 $btnDiscoverCfg = New-Object System.Windows.Forms.Button
 $btnDiscoverCfg.Text = 'PKI automatisch erkennen'
-$btnDiscoverCfg.Location = New-Object System.Drawing.Point(20, 366)
+$btnDiscoverCfg.Location = New-Object System.Drawing.Point(20, 460)
 $btnDiscoverCfg.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblDiscoverResultCfg = New-WizardLabel -Text '' -X 270 -Y 372 -Width 500
+$txtDiscoverResultCfg = New-Object System.Windows.Forms.TextBox
+$txtDiscoverResultCfg.Location = New-Object System.Drawing.Point(20, 498)
+$txtDiscoverResultCfg.Size = New-Object System.Drawing.Size(780, 80)
+$txtDiscoverResultCfg.Multiline = $true
+$txtDiscoverResultCfg.ReadOnly = $true
+$txtDiscoverResultCfg.ScrollBars = 'Vertical'
+$txtDiscoverResultCfg.Font = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnSaveConfig = New-Object System.Windows.Forms.Button
 $btnSaveConfig.Text = 'Speichern'
-$btnSaveConfig.Location = New-Object System.Drawing.Point(20, 410)
+$btnSaveConfig.Location = New-Object System.Drawing.Point(20, 588)
 $btnSaveConfig.Size = New-Object System.Drawing.Size(160, 32)
 
-$lblCfgSaved = New-WizardLabel -Text '' -X 190 -Y 416 -Width 300
+$lblCfgSaved = New-WizardLabel -Text '' -X 190 -Y 594 -Width 300
 
-$tabSettings.Controls.AddRange(@($lblCfgCA, $txtCfgCA, $lblCfgTemplates, $txtCfgTemplates, $lblCfgPrefix, $txtCfgPrefix, $lblCfgJump, $txtCfgJump, $lblCfgCsp, $txtCfgCsp, $lblCfgDiscover, $btnDiscoverCfg, $lblDiscoverResultCfg, $btnSaveConfig, $lblCfgSaved))
+$tabSettings.Controls.AddRange(@($lblCfgCA, $txtCfgCA, $lblCfgTemplates, $txtCfgTemplates, $lblCfgPrefix, $txtCfgPrefix, $lblCfgJump, $txtCfgJump, $lblCfgCsp, $txtCfgCsp, $lblCfgDomain, $txtCfgDomain, $lblCfgDomainHint, $lblCfgDiscover, $btnDiscoverCfg, $txtDiscoverResultCfg, $btnSaveConfig, $lblCfgSaved))
 
 $btnDiscoverCfg.Add_Click({
     $btnDiscoverCfg.Enabled = $false
-    $lblDiscoverResultCfg.ForeColor = [System.Drawing.SystemColors]::WindowText
-    $lblDiscoverResultCfg.Text = 'Pruefe PKI-Erreichbarkeit (bis zu ca. 25 Sekunden)...'
+    $txtDiscoverResultCfg.Text = 'Pruefe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...'
     $form.Refresh()
 
     $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+    $domainHint = Get-TextBoxRealValue -TextBox $txtCfgDomain
     $job = Start-Job -ScriptBlock {
-        param($ModulePath, $Timeout)
+        param($ModulePath, $DomainHint, $Timeout)
         Import-Module $ModulePath -Force
-        Get-PkiReachability -TimeoutSeconds $Timeout
-    } -ArgumentList $modulePath, 8
+        Get-PkiReachability -Server $DomainHint -TimeoutSeconds $Timeout
+    } -ArgumentList $modulePath, $domainHint, 8
 
-    $completed = Wait-Job -Job $job -Timeout 25
-    $reachableCAs = @()
+    $completed = Wait-Job -Job $job -Timeout 40
+    $reachData = $null
     if ($completed) {
-        $reachableCAs = @(Receive-Job -Job $job)
+        $reachData = Receive-Job -Job $job
     } else {
         Stop-Job -Job $job
     }
     Remove-Job -Job $job -Force
 
-    if ($reachableCAs.Count -gt 0) {
-        $primary = $reachableCAs[0]
+    if (-not $completed) {
+        $txtDiscoverResultCfg.Text = 'Zeitueberschreitung (>40s). Domaene/DC-Feld pruefen oder Netzwerkverbindung (VPN/Private Access) sicherstellen.'
+        Write-WizardLog -Message 'Automatische Erkennung: Zeitueberschreitung.' -Level Error
+        $btnDiscoverCfg.Enabled = $true
+        return
+    }
+
+    if ($reachData.ReachableCas.Count -gt 0) {
+        $primary = $reachData.ReachableCas[0]
         Set-TextBoxRealValue -TextBox $txtCfgCA -Value $primary.ConfigString
 
-        $allTemplates = @($reachableCAs | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+        $allTemplates = @($reachData.ReachableCas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
         if ($allTemplates.Count -gt 0) {
             Set-TextBoxRealValue -TextBox $txtCfgTemplates -Value ($allTemplates -join ', ')
         }
 
-        $lblDiscoverResultCfg.ForeColor = [System.Drawing.Color]::ForestGreen
-        $lblDiscoverResultCfg.Text = "$($reachableCAs.Count) erreichbare CA(s) gefunden und uebernommen - bitte pruefen und Speichern."
-        Write-WizardLog -Message "Automatische Erkennung: $($reachableCAs.Count) erreichbare CA(s) gefunden." -Level Success
+        $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und uebernommen - bitte pruefen und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
+        Write-WizardLog -Message "Automatische Erkennung: $($reachData.ReachableCas.Count) erreichbare CA(s) gefunden." -Level Success
+    } elseif ($reachData.AllCas.Count -gt 0) {
+        $txtDiscoverResultCfg.Text = "$($reachData.AllCas.Count) CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n" + ($reachData.UnreachableCas -join "`r`n")
+        Write-WizardLog -Message "Automatische Erkennung: $($reachData.AllCas.Count) CA(s) gefunden, keine per RPC erreichbar." -Level Info
+    } elseif ($reachData.DiscoveryError) {
+        $txtDiscoverResultCfg.Text = "LDAP-Erkennung fehlgeschlagen: $($reachData.DiscoveryError)`r`n`r`nTipp: Domaene/DC-Feld oben pruefen (z.B. expliziten DC-Namen statt DNS-Domaene versuchen) und Netzwerkverbindung (VPN/Private Access) sicherstellen."
+        Write-WizardLog -Message "Automatische Erkennung fehlgeschlagen: $($reachData.DiscoveryError)" -Level Error
     } else {
-        $lblDiscoverResultCfg.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblDiscoverResultCfg.Text = 'Keine erreichbare CA gefunden. Bitte CA-Konfiguration manuell eintragen (oder Plan B/RDP verwenden).'
+        $txtDiscoverResultCfg.Text = 'Keine erreichbare CA gefunden.'
         Write-WizardLog -Message 'Automatische Erkennung: keine erreichbare CA gefunden.' -Level Info
     }
     $btnDiscoverCfg.Enabled = $true
@@ -1126,6 +1152,7 @@ $btnSaveConfig.Add_Click({
         VscNamePrefix = $txtCfgPrefix.Text
         RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
         CspName       = $txtCfgCsp.Text
+        DiscoveryDomain = Get-TextBoxRealValue -TextBox $txtCfgDomain
         WorkingDir    = $config.WorkingDir
     }
     Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath

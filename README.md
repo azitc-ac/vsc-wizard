@@ -111,10 +111,24 @@ gespeichert.
 
 Der Button **"PKI automatisch erkennen"** fragt die Enterprise-CAs direkt aus
 der AD-Konfigurationspartition ab (LDAP) und testet die RPC-Erreichbarkeit
-jeder gefundenen CA (`certutil -ping`, ca. 25 Sekunden Zeitlimit). Bei Erfolg
+jeder gefundenen CA (`certutil -ping`, ca. 40 Sekunden Zeitlimit). Bei Erfolg
 werden CA-Konfigurationsstring und verfuegbare Templates direkt in die
 Felder geschrieben (als echte Werte, nicht nur als Hinweis) - anschliessend
 noch "Speichern" klicken, um sie dauerhaft in `config.psd1` zu uebernehmen.
+Schlaegt die Erkennung fehl, zeigt das Ergebnisfeld die konkrete Ursache
+(LDAP-Fehler, CA gefunden aber per RPC nicht erreichbar, Zeitueberschreitung).
+
+Das Feld **"AD-Domaene oder Domain Controller"** ist fuer die Discovery
+wichtig: .NET versucht ohne diese Angabe ein "serverloses" LDAP-Binding, das
+auf lokalen Domain-Join-Informationen beruht. Auf einem domaenen-gebundenen
+Rechner klappt das von selbst; auf einem **Entra-joined- oder
+Workgroup-Rechner fehlt dieser Kontext praktisch immer** - selbst mit
+gueltigem Kerberos-Ticket (z.B. via Cloud Kerberos Trust) schlaegt die
+Erkennung dann ab, wenn dieses Feld leer bleibt. Der Wizard schlaegt beim
+ersten Oeffnen der Einstellungen automatisch einen Wert aus der
+UPN-Domaene vor (Achtung: kann vom tatsaechlichen AD-DNS-Namen abweichen,
+falls ein eigener UPN-Suffix konfiguriert ist - im Zweifel einen konkreten
+Domain-Controller-Namen eintragen, z.B. `dc01.contoso.local`).
 
 ## Manueller Testplan
 
