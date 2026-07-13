@@ -1177,6 +1177,8 @@ function Show-VscInventoryDialog {
     [System.Windows.Forms.Cursor]::Current = 'Default'
     if ($Owner) { $Owner.Cursor = 'Default' }
     Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegeraet(e), $($certs.Count) Zertifikat(e) mit privatem Schluessel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
+    foreach ($rd in $readers) { Write-WizardLog -Message "  Leser '$($rd.FriendlyName)' PcscName='$($rd.PcscName)'" -Level Info }
+    foreach ($ct in @($certs | Where-Object IsSmartCard)) { Write-WizardLog -Message "  SC-Cert Reader='$($ct.Reader)' Subject='$($ct.Subject.Substring(0,[Math]::Min(40,$ct.Subject.Length)))'" -Level Info }
 
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = 'Vorhandene virtuelle Smartcards'
