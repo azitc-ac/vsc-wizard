@@ -688,7 +688,21 @@ $btnOpenCsrFolderB.Text = 'Ordner oeffnen'
 $btnOpenCsrFolderB.Location = New-Object System.Drawing.Point(20, 172)
 $btnOpenCsrFolderB.Size = New-Object System.Drawing.Size(160, 28)
 
-$pnlB3.Controls.AddRange(@($lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB))
+$lblCsrTextLabelB = New-WizardLabel -Text 'CSR-Text (PEM) - Alternative zur Dateifreigabe: per RDP-Zwischenablage in den Einreichungshelfer (VscWizard.Submit.ps1) auf dem Zielserver einfuegen:' -X 20 -Y 216 -Width 780 -Height 34
+$txtCsrTextB = New-Object System.Windows.Forms.TextBox
+$txtCsrTextB.Location = New-Object System.Drawing.Point(20, 254)
+$txtCsrTextB.Size = New-Object System.Drawing.Size(780, 120)
+$txtCsrTextB.Multiline = $true
+$txtCsrTextB.ReadOnly = $true
+$txtCsrTextB.ScrollBars = 'Vertical'
+$txtCsrTextB.Font = New-Object System.Drawing.Font('Consolas', 9)
+
+$btnCopyCsrTextB = New-Object System.Windows.Forms.Button
+$btnCopyCsrTextB.Text = 'CSR-Text kopieren'
+$btnCopyCsrTextB.Location = New-Object System.Drawing.Point(20, 380)
+$btnCopyCsrTextB.Size = New-Object System.Drawing.Size(160, 28)
+
+$pnlB3.Controls.AddRange(@($lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB))
 
 $btnCreateCsrB.Add_Click({
     if (-not $script:PlanB_VscCreated) {
@@ -703,6 +717,11 @@ $btnCreateCsrB.Add_Click({
     if ($csr.Success) {
         $script:PlanB_CsrPath = $csr.CsrPath
         $txtCsrPathB.Text = $csr.CsrPath
+        try {
+            $txtCsrTextB.Text = Get-Content -Path $csr.CsrPath -Raw
+        } catch {
+            $txtCsrTextB.Text = ''
+        }
     } else {
         [System.Windows.Forms.MessageBox]::Show('CSR-Erstellung fehlgeschlagen. Details siehe Log.', 'Fehler', 'OK', 'Error') | Out-Null
     }
@@ -715,6 +734,10 @@ $btnCopyCsrPathB.Add_Click({
 
 $btnOpenCsrFolderB.Add_Click({
     if ($txtCsrPathB.Text) { Open-WizardFolder -Path $txtCsrPathB.Text }
+})
+
+$btnCopyCsrTextB.Add_Click({
+    if ($txtCsrTextB.Text) { Set-WizardClipboard -Text $txtCsrTextB.Text }
 })
 
 # --- Schritt B4: Uebergabe per RDP ---
@@ -756,52 +779,52 @@ $pnlB5 = New-Object System.Windows.Forms.Panel
 $pnlB5.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB5)
 
-$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszufuehren (angemeldet als Zielbenutzer):' -X 20 -Y 20 -Width 780
+$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszufuehren (angemeldet als Zielbenutzer): entweder hier im Wizard mit CSR-Datei, oder per Zwischenablage im schlankeren Einreichungshelfer VscWizard.Submit.ps1 (nimmt CSR-Text entgegen, kein Dateizugriff noetig).' -X 20 -Y 20 -Width 780 -Height 40
 
 $btnSelectCsrB = New-Object System.Windows.Forms.Button
 $btnSelectCsrB.Text = 'CSR-Datei auswaehlen...'
-$btnSelectCsrB.Location = New-Object System.Drawing.Point(20, 54)
+$btnSelectCsrB.Location = New-Object System.Drawing.Point(20, 70)
 $btnSelectCsrB.Size = New-Object System.Drawing.Size(200, 30)
 
 $txtSelectedCsrB = New-Object System.Windows.Forms.TextBox
-$txtSelectedCsrB.Location = New-Object System.Drawing.Point(230, 58)
+$txtSelectedCsrB.Location = New-Object System.Drawing.Point(230, 74)
 $txtSelectedCsrB.Size = New-Object System.Drawing.Size(500, 24)
 $txtSelectedCsrB.ReadOnly = $true
 
-$lblTemplateSubmitB = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 96 -Width 200
+$lblTemplateSubmitB = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 112 -Width 200
 $cboTemplateSubmitB = New-Object System.Windows.Forms.ComboBox
-$cboTemplateSubmitB.Location = New-Object System.Drawing.Point(230, 92)
+$cboTemplateSubmitB.Location = New-Object System.Drawing.Point(230, 108)
 $cboTemplateSubmitB.Size = New-Object System.Drawing.Size(300, 24)
 $cboTemplateSubmitB.DropDownStyle = 'DropDownList'
 Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $config.Template
 
 $btnSubmitB = New-Object System.Windows.Forms.Button
 $btnSubmitB.Text = 'Einreichen'
-$btnSubmitB.Location = New-Object System.Drawing.Point(20, 130)
+$btnSubmitB.Location = New-Object System.Drawing.Point(20, 146)
 $btnSubmitB.Size = New-Object System.Drawing.Size(200, 32)
 
 $btnRetrieveB = New-Object System.Windows.Forms.Button
 $btnRetrieveB.Text = 'Zertifikat abrufen (bei Genehmigung)'
-$btnRetrieveB.Location = New-Object System.Drawing.Point(230, 130)
+$btnRetrieveB.Location = New-Object System.Drawing.Point(230, 146)
 $btnRetrieveB.Size = New-Object System.Drawing.Size(260, 32)
 $btnRetrieveB.Visible = $false
 
-$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 174 -Width 780 -Height 40
+$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 190 -Width 780 -Height 40
 
-$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 218 -Width 400
+$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 234 -Width 400
 $txtCerPathB = New-Object System.Windows.Forms.TextBox
-$txtCerPathB.Location = New-Object System.Drawing.Point(20, 244)
+$txtCerPathB.Location = New-Object System.Drawing.Point(20, 260)
 $txtCerPathB.Size = New-Object System.Drawing.Size(560, 24)
 $txtCerPathB.ReadOnly = $true
 
 $btnCopyCerPathB = New-Object System.Windows.Forms.Button
 $btnCopyCerPathB.Text = 'Pfad kopieren'
-$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 242)
+$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 258)
 $btnCopyCerPathB.Size = New-Object System.Drawing.Size(120, 28)
 
 $btnOpenCerFolderB = New-Object System.Windows.Forms.Button
 $btnOpenCerFolderB.Text = 'Ordner oeffnen'
-$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 280)
+$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 296)
 $btnOpenCerFolderB.Size = New-Object System.Drawing.Size(160, 28)
 
 $pnlB5.Controls.AddRange(@($lblSubmitInfoB, $btnSelectCsrB, $txtSelectedCsrB, $lblTemplateSubmitB, $cboTemplateSubmitB, $btnSubmitB, $btnRetrieveB, $lblSubmitResultB, $lblCerPathLabelB, $txtCerPathB, $btnCopyCerPathB, $btnOpenCerFolderB))
@@ -869,7 +892,7 @@ $pnlB6 = New-Object System.Windows.Forms.Panel
 $pnlB6.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB6)
 
-$lblCompleteInfoB = New-WizardLabel -Text 'Zurueck auf dem lokalen Rechner: die vom Server zurueckkopierte Zertifikatsdatei (.cer) auswaehlen.' -X 20 -Y 20 -Width 780 -Height 40
+$lblCompleteInfoB = New-WizardLabel -Text 'Zurueck auf dem lokalen Rechner (im eigenen Konto): entweder die vom Server zurueckkopierte Zertifikatsdatei (.cer) auswaehlen, oder den Text direkt einfuegen (z.B. Ergebnis des Einreichungshelfers VscWizard.Submit.ps1).' -X 20 -Y 20 -Width 780 -Height 40
 
 $btnSelectCerB = New-Object System.Windows.Forms.Button
 $btnSelectCerB.Text = 'CER-Datei auswaehlen...'
@@ -882,20 +905,33 @@ $txtSelectedCerB.Size = New-Object System.Drawing.Size(500, 24)
 $txtSelectedCerB.ReadOnly = $true
 
 $btnCompleteB = New-Object System.Windows.Forms.Button
-$btnCompleteB.Text = 'Zertifikat abschliessen'
+$btnCompleteB.Text = 'Aus Datei uebernehmen'
 $btnCompleteB.Location = New-Object System.Drawing.Point(20, 110)
 $btnCompleteB.Size = New-Object System.Drawing.Size(200, 32)
 
-$lblCompleteResultB = New-WizardLabel -Text '' -X 20 -Y 154 -Width 780 -Height 40
+$lblCerTextLabelB = New-WizardLabel -Text '...oder CER-Text hier einfuegen:' -X 20 -Y 156 -Width 780
+$txtCerTextB = New-Object System.Windows.Forms.TextBox
+$txtCerTextB.Location = New-Object System.Drawing.Point(20, 182)
+$txtCerTextB.Size = New-Object System.Drawing.Size(780, 110)
+$txtCerTextB.Multiline = $true
+$txtCerTextB.ScrollBars = 'Vertical'
+$txtCerTextB.Font = New-Object System.Drawing.Font('Consolas', 9)
 
-$lblSummaryB = New-WizardLabel -Text '' -X 20 -Y 200 -Width 780 -Height 110
+$btnCompleteFromTextB = New-Object System.Windows.Forms.Button
+$btnCompleteFromTextB.Text = 'Aus Text uebernehmen'
+$btnCompleteFromTextB.Location = New-Object System.Drawing.Point(20, 300)
+$btnCompleteFromTextB.Size = New-Object System.Drawing.Size(200, 32)
+
+$lblCompleteResultB = New-WizardLabel -Text '' -X 20 -Y 344 -Width 780 -Height 40
+
+$lblSummaryB = New-WizardLabel -Text '' -X 20 -Y 390 -Width 780 -Height 110
 
 $btnResetB = New-Object System.Windows.Forms.Button
 $btnResetB.Text = 'Weitere Smartcard beantragen'
-$btnResetB.Location = New-Object System.Drawing.Point(20, 320)
+$btnResetB.Location = New-Object System.Drawing.Point(20, 510)
 $btnResetB.Size = New-Object System.Drawing.Size(240, 32)
 
-$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCompleteResultB, $lblSummaryB, $btnResetB))
+$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCerTextLabelB, $txtCerTextB, $btnCompleteFromTextB, $lblCompleteResultB, $lblSummaryB, $btnResetB))
 
 $btnSelectCerB.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -914,13 +950,10 @@ function Update-PlanBSummary {
     }
 }
 
-$btnCompleteB.Add_Click({
-    if (-not $txtSelectedCerB.Text) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CER-Datei auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
-        return
-    }
-    $btnCompleteB.Enabled = $false
-    $complete = Complete-CertificateEnrollment -CerPath $txtSelectedCerB.Text
+function Complete-PlanBEnrollment {
+    param([Parameter(Mandatory)][string]$CerPath)
+
+    $complete = Complete-CertificateEnrollment -CerPath $CerPath
     if ($complete.Success) {
         $script:PlanB_CertIssued = $true
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::ForestGreen
@@ -930,6 +963,28 @@ $btnCompleteB.Add_Click({
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::Firebrick
         $lblCompleteResultB.Text = 'Uebernahme fehlgeschlagen. Details siehe Log.'
     }
+}
+
+$btnCompleteFromTextB.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtCerTextB.Text)) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CER-Text einfuegen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnCompleteFromTextB.Enabled = $false
+    $pastedCerPath = Join-Path (Get-WizardWorkingDir) "PlanB-pasted-$([guid]::NewGuid()).cer"
+    Set-Content -Path $pastedCerPath -Value $txtCerTextB.Text -Encoding ASCII
+    Complete-PlanBEnrollment -CerPath $pastedCerPath
+    Remove-Item -Path $pastedCerPath -ErrorAction SilentlyContinue
+    $btnCompleteFromTextB.Enabled = $true
+})
+
+$btnCompleteB.Add_Click({
+    if (-not $txtSelectedCerB.Text) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CER-Datei auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $btnCompleteB.Enabled = $false
+    Complete-PlanBEnrollment -CerPath $txtSelectedCerB.Text
     $btnCompleteB.Enabled = $true
 })
 
@@ -940,9 +995,11 @@ $btnResetB.Add_Click({
     $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
     $lblVscResultB.Text = ''
     $txtCsrPathB.Text = ''
+    $txtCsrTextB.Text = ''
     $txtSelectedCsrB.Text = ''
     $txtCerPathB.Text = ''
     $txtSelectedCerB.Text = ''
+    $txtCerTextB.Text = ''
     $lblSubmitResultB.Text = ''
     $lblCompleteResultB.Text = ''
     $btnRetrieveB.Visible = $false

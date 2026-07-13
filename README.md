@@ -80,6 +80,31 @@ native Modul ueber den vollen Pfad (siehe Kommentar dort).
   CSR-Erstellung/-Einreichung/-Abschluss ueber `certreq`
 - `config.psd1` - Konfiguration (CA, Template, RDP-Zielserver, etc.)
 - `VscWizard.bat` - Launcher
+- `VscWizard.Submit.ps1` - eigenstaendiger Einreichungshelfer fuer die RDP-Sitzung
+  in Plan B, siehe Abschnitt "Einreichungshelfer" unten
+
+## Einreichungshelfer (VscWizard.Submit.ps1)
+
+Kleines, bewusst von `VscWizard.Core.psm1` unabhaengiges Begleitwerkzeug fuer die
+RDP-Sitzung in Plan B Schritt 5: nimmt eine per Zwischenablage eingefuegte
+Zertifikatsanforderung (CSR) als PEM-Text entgegen, reicht sie bei der CA ein
+(inkl. eigener automatischer PKI-Erkennung und Pending/Retrieve-Unterstuetzung)
+und gibt das ausgestellte Zertifikat wieder als PEM-Text zurueck (via
+`certutil -encode`), automatisch in die Zwischenablage kopiert.
+
+Da CSR-Dateien (`certreq -new`) und `certutil -encode`-Ausgaben ohnehin reiner
+PEM-Text sind, ist dafuer **keine Laufwerksfreigabe oder Dateitransfer** in die
+RDP-Sitzung noetig - nur RDP-Zwischenablage (Text). Dazu passend:
+
+- Plan B Schritt 3 ("CSR erstellen") zeigt den CSR-Inhalt zusaetzlich zum Dateipfad
+  als kopierbaren Text an ("CSR-Text kopieren").
+- Plan B Schritt 6 ("Zertifikat abschliessen") akzeptiert wahlweise eine
+  CER-Datei oder eingefuegten CER-Text als Alternative.
+
+Da das Skript keine Abhaengigkeiten zum restlichen Projekt hat, kann es im
+Zweifel auch als reiner Text per RDP-Zwischenablage in die Zielsitzung kopiert,
+dort in eine neue `.ps1`-Datei eingefuegt und direkt gestartet werden - ganz
+ohne das restliche Projekt mit rueberzukopieren.
 
 ## Ablauf im Detail
 
@@ -125,19 +150,25 @@ in beiden Faellen woanders/als andere Identitaet passieren muss).
 3. **CSR erstellen (lokal)**: `certreq -new` erzeugt eine an die Smartcard
    gebundene Zertifikatsanforderung mit dem Zielkonto (oder dem eigenen
    Konto) als Subject; laeuft ebenfalls im eigenen Benutzerkontext. Pfad
-   kann per Knopfdruck kopiert oder der Ordner geoeffnet werden.
+   kann per Knopfdruck kopiert oder der Ordner geoeffnet werden - alternativ
+   steht der CSR-Inhalt auch als kopierbarer PEM-Text bereit (fuer die
+   RDP-Zwischenablage, z.B. mit dem Einreichungshelfer, siehe unten).
 4. **Uebergabe per RDP**: Anleitung mit konkretem Zielserver und dem Konto,
    als das man sich dort anmelden soll (Zielkonto bei separatem Konto, sonst
-   das eigene); die CSR-Datei muss manuell auf den Server kopiert werden.
+   das eigene); CSR entweder als Datei (Laufwerksfreigabe) oder als Text
+   (RDP-Zwischenablage) rueberbringen.
 5. **Antrag einreichen (auf dem Server)**: Auf dem RDP-Zielserver, angemeldet
-   als das Konto aus Schritt 4, wird dieselbe Anwendung im gleichen Modus
-   weiter bedient: CSR-Datei auswaehlen, Template waehlen, einreichen. Das
-   ausgestellte Zertifikat (`certnew.cer`) wird lokal auf dem Server abgelegt
-   und muss zurueck auf den Ausgangsrechner kopiert werden.
+   als das Konto aus Schritt 4, entweder dieselbe Anwendung im gleichen Modus
+   weiter bedienen (CSR-Datei auswaehlen, Template waehlen, einreichen) oder
+   den schlankeren Einreichungshelfer `VscWizard.Submit.ps1` nutzen (CSR-Text
+   einfuegen, einreichen, Ergebnis als Text zurueck in die Zwischenablage).
+   Das ausgestellte Zertifikat muss zurueck auf den Ausgangsrechner - als
+   Datei oder als kopierter Text.
 6. **Zertifikat abschliessen (lokal)**: Zurueck auf dem Ausgangsrechner, im
    **eigenen** Benutzerkontext (nicht dem Zielkonto - `certreq` verwaltet den
    offenen Antrag im Profil des Kontos, das die CSR erstellt hat), wird die
-   `.cer`-Datei ausgewaehlt und per `certreq -accept` an den bereits auf der
+   `.cer`-Datei ausgewaehlt (oder der CER-Text eingefuegt) und per
+   `certreq -accept` an den bereits auf der
    Smartcard vorhandenen privaten Schluessel gebunden.
 
 ### Einstellungen
@@ -205,7 +236,10 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
    Netzwerksicht auf eine Test-CA durchspielen (inkl. Ablehnung/Timeout-Faelle
    und einem Template, das eine manuelle Genehmigung erfordert).
 2. **Plan B** auf einem Entra-joined- oder Workgroup-Testrechner durchspielen,
-   inklusive echtem RDP-Hop auf einen CA-nahen Server als Zielbenutzer.
+   inklusive echtem RDP-Hop auf einen CA-nahen Server als Zielbenutzer -
+   einmal mit Datei-Uebergabe (Laufwerksfreigabe), einmal rein per
+   RDP-Zwischenablage (CSR-Text kopieren -> `VscWizard.Submit.ps1` auf dem
+   Server -> CER-Text zurueckkopieren -> Schritt 6 per Text abschliessen).
 3. Fehlerfaelle pruefen: falsches Zertifikatstemplate, nicht erreichbare CA,
    abgelehnter UAC-Prompt, TPM nicht bereit.
 4. Log-Export im Tab "Log / Diagnose" pruefen.
