@@ -368,7 +368,10 @@ function Get-PkiReachability {
 function New-VirtualSmartCard {
     param(
         [Parameter(Mandatory)][string]$CardName,
-        [int]$PinPolicyMinLength = 8
+        # Mindest-PIN-Laenge fuer die virtuelle Smartcard. tpmvscmgr laesst technisch
+        # minimal 4 zu; 6 ist ein gaengiger Kompromiss zwischen Bedienbarkeit und
+        # Sicherheit (Windows-Smartcard-Standarddefault ist 8).
+        [int]$PinPolicyMinLength = 6
     )
 
     $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
