@@ -12,14 +12,21 @@
 # aus einem pwsh-Terminal oder von einem Prozess, der pwsh's PSModulePath-Eintraege
 # geerbt hat), steht "C:\Program Files\PowerShell\7\Modules" VOR dem nativen
 # Windows-PowerShell-5.1-Modulpfad in $env:PSModulePath. Windows PowerShell 5.1 laedt
-# dann beim Autoloading von Microsoft.PowerShell.Utility die dortige, fuer PowerShell 7
-# gebaute Modulvariante (die kein Import-PowerShellDataFile exportiert) statt der
-# eigenen - Import-VscWizardConfig scheitert dadurch bei JEDEM Start mit
-# "CommandNotFoundException", die gespeicherte config.psd1 wird nie geladen. Fix: das
-# native Modul explizit ueber den vollen Pfad laden (umgeht die PSModulePath-Suche).
-$nativeUtilityModule = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1'
-if (Test-Path $nativeUtilityModule) {
-    Import-Module $nativeUtilityModule -Force -ErrorAction SilentlyContinue
+# dann beim Autoloading eingebauter Module die dortige, fuer PowerShell 7 gebaute
+# Variante statt der eigenen - betroffen sind nicht nur Microsoft.PowerShell.Utility
+# (Import-PowerShellDataFile fehlt dann, config.psd1 wird nie geladen), sondern auch
+# Microsoft.PowerShell.Security: dessen falsch geladene Variante registriert das
+# "Cert:"-Laufwerk nicht, wodurch Get-ChildItem Cert:\CurrentUser\My mit "Ein Laufwerk
+# mit dem Namen 'Cert' ist nicht vorhanden" fehlschlaegt - auf echter Hardware
+# reproduziert, dadurch zeigte das Smartcard-Inventar trotz vorhandener Zertifikate
+# konsequent 0 Eintraege. Fix: die nativen Module explizit ueber den vollen Pfad laden
+# (umgeht die PSModulePath-Suche) - fuer jedes eingebaute Modul, von dem dieses Skript
+# abhaengt.
+foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.Management')) {
+    $nativeModulePath = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules\$nativeModuleName\$nativeModuleName.psd1"
+    if (Test-Path $nativeModulePath) {
+        Import-Module $nativeModulePath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $script:Config = $null
@@ -136,7 +143,11 @@ function Invoke-ExternalCommand {
         # 0 = kein Timeout (Standardverhalten). Bei Ueberschreitung wird der Prozess beendet
         # und Success=$false zurueckgegeben - wichtig fuer Netzwerkaufrufe (z.B. certutil -ping)
         # gegen eventuell nicht erreichbare Server.
-        [int]$TimeoutSeconds = 0
+        [int]$TimeoutSeconds = 0,
+        # Fuer haeufige interne Hintergrund-Aufrufe (z.B. ein Lookup pro Zertifikat), die fuer
+        # den Nutzer kein sinnvolles Log-Ereignis darstellen und das Log/Diagnose-Panel sonst
+        # mit vielen kleinen Eintraegen zumuellen wuerden.
+        [switch]$Silent
     )
 
     $quotedArgs = ($ArgumentList | ForEach-Object {
@@ -152,7 +163,7 @@ function Invoke-ExternalCommand {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
 
-    Write-WizardLog -Message "$FilePath $quotedArgs" -Level Command
+    if (-not $Silent) { Write-WizardLog -Message "$FilePath $quotedArgs" -Level Command }
 
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
@@ -166,7 +177,7 @@ function Invoke-ExternalCommand {
         $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
         if (-not $exited) {
             try { $proc.Kill() } catch { }
-            Write-WizardLog -Message "$FilePath $quotedArgs (Zeitueberschreitung nach $TimeoutSeconds s)" -Level Error
+            if (-not $Silent) { Write-WizardLog -Message "$FilePath $quotedArgs (Zeitueberschreitung nach $TimeoutSeconds s)" -Level Error }
             return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false }
         }
         $stdout = $stdoutTask.Result
@@ -177,8 +188,10 @@ function Invoke-ExternalCommand {
         $proc.WaitForExit()
     }
 
-    if ($stdout.Trim()) { Write-WizardLog -Message $stdout.Trim() -Level Output }
-    if ($stderr.Trim()) { Write-WizardLog -Message $stderr.Trim() -Level Error }
+    if (-not $Silent) {
+        if ($stdout.Trim()) { Write-WizardLog -Message $stdout.Trim() -Level Output }
+        if ($stderr.Trim()) { Write-WizardLog -Message $stderr.Trim() -Level Error }
+    }
 
     [pscustomobject]@{
         ExitCode = $proc.ExitCode
@@ -439,6 +452,20 @@ function Get-SmartCardCertificateInfo {
     #      RSACryptoServiceProvider-Objekt schlicht $null liefert (kein Fehler, aber
     #      auch kein Ergebnis - das war der Grund, warum bisher gar keine Zertifikate
     #      gefunden wurden).
+    #      WICHTIG: GetRSAPrivateKey() ist in .NET eine C#-Extension-Method
+    #      (RSACertificateExtensions), keine Instanzmethode - PowerShells Dot-Notation
+    #      ($Certificate.GetRSAPrivateKey()) loest Extension-Methods NICHT auf und
+    #      wirft "does not contain a method named 'GetRSAPrivateKey'". Muss deshalb
+    #      als statischer Aufruf erfolgen (siehe unten) - das war der eigentliche
+    #      Grund, warum auf echten CNG-Zertifikaten (der Normalfall auf aktuellen
+    #      Windows-Versionen) bislang GAR KEINE Zertifikate erkannt wurden.
+    #      Bekannte Einschraenkung: fuer CNG/KSP-Schluessel liefert dieser Weg zwar
+    #      den Provider, aber KEIN Reader (NCryptGetProperty mit "Smart Card Reader"
+    #      liefert bei der hier verwendeten Virtual-Smart-Card-KSP NTE_NOT_SUPPORTED,
+    #      auf echter Hardware getestet) - solche Zertifikate werden deshalb korrekt
+    #      als smartcard-gebunden erkannt, aber im Inventar-Dialog unter "weitere
+    #      smartcard-gebundene Zertifikate (Lesegeraet nicht zuordenbar)" einsortiert
+    #      statt unter ihrem konkreten Lesegeraet.
     # HardwareDevice (falls ermittelbar) ist ein zusaetzliches, von der Provider-Namen-
     # Heuristik unabhaengiges Signal.
     param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
@@ -457,22 +484,83 @@ function Get-SmartCardCertificateInfo {
     }
 
     if (-not $info.Provider) {
-        try {
-            $rsaKey = $Certificate.GetRSAPrivateKey()
-            if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
-                if ($rsaKey.Key -and $rsaKey.Key.Provider) {
-                    $info.Provider = $rsaKey.Key.Provider.Provider
-                }
-            } elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
-                $info.Provider = $rsaKey.CspKeyContainerInfo.ProviderName
-                $info.Reader = $rsaKey.CspKeyContainerInfo.Reader
-                $info.IsHardware = [bool]$rsaKey.CspKeyContainerInfo.HardwareDevice
-            }
-        } catch {
-            if (-not $info.DetectionError) { $info.DetectionError = $_.Exception.Message }
+        $cngResult = Get-SmartCardCngProviderInfo -Thumbprint $Certificate.Thumbprint
+        if ($cngResult.TimedOut) {
+            $info.DetectionError = 'Zeitueberschreitung beim CNG-Schluesselzugriff (evtl. verweist das Zertifikat auf eine bereits geloeschte virtuelle Smartcard).'
+        } elseif ($cngResult.Provider) {
+            $info.Provider = $cngResult.Provider
+            $info.Reader = $cngResult.Reader
+            $info.IsHardware = $cngResult.IsHardware
+        } elseif ($cngResult.DetectionError -and -not $info.DetectionError) {
+            $info.DetectionError = $cngResult.DetectionError
         }
     }
 
+    return $info
+}
+
+function Get-SmartCardCngProviderInfo {
+    # GetRSAPrivateKey().Key.Provider (CNG-Weg, siehe Get-SmartCardCertificateInfo)
+    # kann bei einem Zertifikat, dessen zugehoerige virtuelle Smartcard bereits
+    # geloescht wurde (Schluesselcontainer verweist auf eine nicht mehr vorhandene
+    # Karte), UNBEGRENZT blockieren - Windows' Smartcard-Ressourcenverwaltung wartet
+    # in diesem Fall auf das (nie kommende) Einstecken der Karte. Auf echter Hardware
+    # reproduziert: virtuelle Smartcard geloescht, zugehoeriges Zertifikat blieb im
+    # Speicher, GetRSAPrivateKey() haengt beim naechsten Aufruf fest und blockiert
+    # damit den GESAMTEN Wizard (Inventar-Dialog oeffnet sich nie). Deshalb NIE direkt
+    # im GUI-Prozess aufrufen - stattdessen in einem separaten, per Timeout zwangs-
+    # beendbaren Prozess (Invoke-ExternalCommand toetet den Prozess zuverlaessig bei
+    # Zeitueberschreitung, im Gegensatz zu einem im selben Prozess haengenden Thread).
+    param(
+        [Parameter(Mandatory)][string]$Thumbprint,
+        [int]$TimeoutSeconds = 3
+    )
+
+    # Dieses Skript laeuft als EIGENER Prozess (siehe unten) und importiert Core.psm1
+    # deshalb NICHT - braucht den nativen-Module-Fix vom Kopf dieser Datei also
+    # eigenstaendig, sonst fehlt in genau diesem Kindprozess das "Cert:"-Laufwerk
+    # (gleiche Ursache wie beim Hauptprozess, siehe Kommentar oben in dieser Datei).
+    # Immer neu schreiben (nicht nur bei Nichtvorhandensein) - sonst wuerde eine
+    # bereits von einer AELTEREN Skriptversion angelegte Datei liegen bleiben und
+    # Aenderungen an diesem Lookup-Skript wuerden nie wirksam.
+    $scriptPath = Join-Path (Get-WizardWorkingDir) 'cng-provider-lookup.ps1'
+    $lookupScript = @'
+param([Parameter(Mandatory)][string]$Thumbprint)
+foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.Management')) {
+    $nativeModulePath = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules\$nativeModuleName\$nativeModuleName.psd1"
+    if (Test-Path $nativeModulePath) {
+        Import-Module $nativeModulePath -Force -ErrorAction SilentlyContinue
+    }
+}
+$cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction Stop
+$rsaKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
+    if ($rsaKey.Key -and $rsaKey.Key.Provider) {
+        Write-Output "Provider=$($rsaKey.Key.Provider.Provider)"
+    }
+} elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
+    Write-Output "Provider=$($rsaKey.CspKeyContainerInfo.ProviderName)"
+    Write-Output "Reader=$($rsaKey.CspKeyContainerInfo.Reader)"
+    Write-Output "IsHardware=$([bool]$rsaKey.CspKeyContainerInfo.HardwareDevice)"
+}
+'@
+    Set-Content -Path $scriptPath -Value $lookupScript -Encoding UTF8
+
+    $result = Invoke-ExternalCommand -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-Thumbprint', $Thumbprint
+    ) -TimeoutSeconds $TimeoutSeconds -Silent
+
+    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; DetectionError = $null; TimedOut = $false }
+    if ($result.StdErr -eq 'Timeout') {
+        $info.TimedOut = $true
+        return $info
+    }
+    foreach ($line in ($result.StdOut -split "`r?`n")) {
+        if ($line -match '^Provider=(.*)$') { $info.Provider = $Matches[1] }
+        elseif ($line -match '^Reader=(.*)$') { $info.Reader = $Matches[1] }
+        elseif ($line -match '^IsHardware=(.*)$') { $info.IsHardware = [bool]::Parse($Matches[1]) }
+    }
+    if (-not $info.Provider -and $result.StdErr) { $info.DetectionError = $result.StdErr.Trim() }
     return $info
 }
 
@@ -486,7 +574,13 @@ function Get-SmartCardCertificates {
     # einfach nichts anzuzeigen.
     param([string]$StoreLocation = 'Cert:\CurrentUser\My')
 
-    $certs = Get-ChildItem -Path $StoreLocation -ErrorAction SilentlyContinue
+    $certs = $null
+    try {
+        $certs = Get-ChildItem -Path $StoreLocation -ErrorAction Stop
+    } catch {
+        Write-WizardLog -Message "Get-ChildItem $StoreLocation fehlgeschlagen: $($_.Exception.Message)" -Level Error
+    }
+    Write-WizardLog -Message "Get-SmartCardCertificates: Get-ChildItem $StoreLocation lieferte $(@($certs).Count) Eintraege (davon $(@($certs | Where-Object HasPrivateKey).Count) mit privatem Schluessel)." -Level Info
     $results = foreach ($cert in $certs) {
         if (-not $cert.HasPrivateKey) { continue }
         $info = Get-SmartCardCertificateInfo -Certificate $cert

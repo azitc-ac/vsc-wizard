@@ -134,37 +134,100 @@ $form.MinimumSize = New-Object System.Drawing.Size(840, 660)
 
 $mainLayout = New-Object System.Windows.Forms.TableLayoutPanel
 $mainLayout.Dock = 'Fill'
-$mainLayout.RowCount = 2
+$mainLayout.RowCount = 3
 $mainLayout.ColumnCount = 1
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 44)))
 [void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 68)))
 [void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 32)))
 $form.Controls.Add($mainLayout)
 
-$pnlTabHost = New-Object System.Windows.Forms.Panel
-$pnlTabHost.Dock = 'Fill'
-$mainLayout.Controls.Add($pnlTabHost, 0, 0)
+#endregion
 
-$tabs = New-Object System.Windows.Forms.TabControl
-$tabs.Dock = 'Fill'
-$pnlTabHost.Controls.Add($tabs)
-$tabs.Visible = $false
+#region TOP BAR (schrittunabhaengig - auf jedem Schritt sichtbar, u.a. fuer Einstellungen)
 
-$tabPlanA = New-Object System.Windows.Forms.TabPage
-$tabPlanA.Text = 'Plan A: AD-Domaene'
-$tabPlanB = New-Object System.Windows.Forms.TabPage
-$tabPlanB.Text = 'Plan B: Entra / Workgroup'
-$tabSettings = New-Object System.Windows.Forms.TabPage
-$tabSettings.Text = 'Einstellungen'
-$tabSettings.AutoScroll = $true
-$tabs.TabPages.AddRange(@($tabPlanA, $tabPlanB, $tabSettings))
+$topBar = New-Object System.Windows.Forms.TableLayoutPanel
+$topBar.Dock = 'Fill'
+$topBar.ColumnCount = 2
+$topBar.BackColor = [System.Drawing.SystemColors]::ControlLight
+[void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 160)))
+$mainLayout.Controls.Add($topBar, 0, 0)
+
+$lblGlobalStep = New-Object System.Windows.Forms.Label
+$lblGlobalStep.Dock = 'Fill'
+$lblGlobalStep.TextAlign = 'MiddleLeft'
+$lblGlobalStep.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$lblGlobalStep.Margin = New-Object System.Windows.Forms.Padding(14, 0, 0, 0)
+$topBar.Controls.Add($lblGlobalStep, 0, 0)
+
+$btnOpenSettings = New-Object System.Windows.Forms.Button
+$btnOpenSettings.Text = 'Einstellungen'
+$btnOpenSettings.Dock = 'Fill'
+$btnOpenSettings.Margin = New-Object System.Windows.Forms.Padding(6, 6, 10, 6)
+$topBar.Controls.Add($btnOpenSettings, 1, 0)
+$btnOpenSettings.Add_Click({ Show-SettingsDialog -Owner $form })
 
 #endregion
 
-#region LANDING (Kontoauswahl: angemeldeter Benutzer oder separates Konto)
+#region STEP HOST (Inhaltsbereich + gemeinsame Weiter/Zurueck-Navigation)
 
-$pnlLanding = New-Object System.Windows.Forms.Panel
-$pnlLanding.Dock = 'Fill'
-$pnlTabHost.Controls.Add($pnlLanding)
+$pnlStepHost = New-Object System.Windows.Forms.TableLayoutPanel
+$pnlStepHost.Dock = 'Fill'
+$pnlStepHost.RowCount = 2
+$pnlStepHost.ColumnCount = 1
+[void]$pnlStepHost.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$pnlStepHost.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 54)))
+$mainLayout.Controls.Add($pnlStepHost, 0, 1)
+
+$pnlContentArea = New-Object System.Windows.Forms.Panel
+$pnlContentArea.Dock = 'Fill'
+$pnlStepHost.Controls.Add($pnlContentArea, 0, 0)
+
+$navShared = New-Object System.Windows.Forms.TableLayoutPanel
+$navShared.Dock = 'Fill'
+$navShared.ColumnCount = 3
+[void]$navShared.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$navShared.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
+[void]$navShared.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
+$pnlStepHost.Controls.Add($navShared, 0, 1)
+
+$lblStepShared = New-Object System.Windows.Forms.Label
+$lblStepShared.Dock = 'Fill'
+$lblStepShared.TextAlign = 'MiddleLeft'
+$navShared.Controls.Add($lblStepShared, 0, 0)
+
+$btnBackShared = New-Object System.Windows.Forms.Button
+$btnBackShared.Text = '< Zurueck'
+$btnBackShared.Dock = 'Fill'
+$navShared.Controls.Add($btnBackShared, 1, 0)
+
+$btnNextShared = New-Object System.Windows.Forms.Button
+$btnNextShared.Text = 'Weiter >'
+$btnNextShared.Dock = 'Fill'
+$navShared.Controls.Add($btnNextShared, 2, 0)
+
+# $script:ActivePlan: $null = Schritt 1 (Moduswahl) ist aktiv, 'A'/'B' = der jeweilige
+# Schritt-Satz ist aktiv. Weiter/Zurueck werten dies aus, um an die richtige Stelle zu
+# delegieren (siehe Invoke-SharedNext/Back weiter unten, definiert nach Plan A/B).
+$script:ActivePlan = $null
+
+$tabPlanA = New-Object System.Windows.Forms.Panel
+$tabPlanA.Dock = 'Fill'
+$tabPlanA.Visible = $false
+$pnlContentArea.Controls.Add($tabPlanA)
+
+$tabPlanB = New-Object System.Windows.Forms.Panel
+$tabPlanB.Dock = 'Fill'
+$tabPlanB.Visible = $false
+$pnlContentArea.Controls.Add($tabPlanB)
+
+#endregion
+
+#region SCHRITT 1: MODUSWAHL (Kontoauswahl + Plan A/B)
+
+$pnlModeSelect = New-Object System.Windows.Forms.Panel
+$pnlModeSelect.Dock = 'Fill'
+$pnlContentArea.Controls.Add($pnlModeSelect)
 
 $lblLandingTitle = New-WizardLabel -Text 'Fuer wen soll die virtuelle Smartcard beantragt werden?' -X 20 -Y 20 -Width 780 -Style Bold
 
@@ -187,25 +250,69 @@ $txtOtherAccount.Enabled = $false
 
 $lblOtherExplain = New-WizardLabel -Text 'Karten- und CSR-Erstellung laufen ganz normal in deinem eigenen Benutzerkontext - dafuer ist keine gesonderte Anmeldung als Zielkonto noetig (die Smartcard-PIN ist unabhaengig vom Windows-Konto). Nur die spaetere Einreichung bei der CA muss aus Berechtigungsgruenden als Zielkonto erfolgen; Plan B fuehrt dich an der passenden Stelle dorthin (z.B. per RDP), die Uebernahme des fertigen Zertifikats erfolgt danach wieder hier.' -X 40 -Y 178 -Width 760 -Height 60
 
-$btnContinueSelf = New-Object System.Windows.Forms.Button
-$btnContinueSelf.Text = "Los geht's"
-$btnContinueSelf.Location = New-Object System.Drawing.Point(20, 250)
-$btnContinueSelf.Size = New-Object System.Drawing.Size(160, 32)
+$lblPlanChoiceTitle = New-WizardLabel -Text 'Welcher Ablauf?' -X 20 -Y 250 -Width 780 -Style Bold
 
-$lblLandingValidation = New-WizardLabel -Text '' -X 20 -Y 292 -Width 760
+$radPlanA = New-Object System.Windows.Forms.RadioButton
+$radPlanA.Text = 'Plan A: AD-Domaene (direkte CA-Sicht, automatisiert)'
+$radPlanA.Location = New-Object System.Drawing.Point(20, 284)
+$radPlanA.Size = New-Object System.Drawing.Size(760, 24)
+
+$radPlanB = New-Object System.Windows.Forms.RadioButton
+$radPlanB.Text = 'Plan B: Entra / Workgroup (CSR lokal, Einreichung per RDP-Zwischenschritt)'
+$radPlanB.Location = New-Object System.Drawing.Point(20, 310)
+$radPlanB.Size = New-Object System.Drawing.Size(760, 24)
+
+$lblPlanChoiceHint = New-WizardLabel -Text '' -X 40 -Y 340 -Width 740
+$lblPlanChoiceHint.ForeColor = [System.Drawing.Color]::DimGray
+
+$lblLandingValidation = New-WizardLabel -Text '' -X 20 -Y 380 -Width 760
 $lblLandingValidation.ForeColor = [System.Drawing.Color]::Firebrick
 
-$pnlLanding.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $btnContinueSelf, $lblLandingValidation))
+$pnlModeSelect.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $lblPlanChoiceTitle, $radPlanA, $radPlanB, $lblPlanChoiceHint, $lblLandingValidation))
+
+function Update-ModeSelectPlanChoice {
+    # Automatische Vorauswahl anhand des erkannten Domaenen-Status - vom Nutzer
+    # jederzeit ueberschreibbar (z.B. Entra-joined mit Cloud Kerberos Trust + direkter
+    # CA-Sicht kann trotzdem Plan A nutzen, siehe README).
+    $joinState = Get-DomainJoinState
+    if ($radOther.Checked) {
+        # Plan A unterstuetzt kein separates Konto (die Einreichung liefe sonst unter
+        # der eigenen statt der Zielkonto-Identitaet) - deshalb hier fest auf Plan B.
+        $radPlanA.Enabled = $false
+        $radPlanB.Checked = $true
+        $lblPlanChoiceHint.Text = 'Fuer ein separates Konto ist immer Plan B noetig (die Einreichung muss als Zielkonto erfolgen, z.B. per RDP).'
+    } else {
+        $radPlanA.Enabled = $true
+        if ($joinState.Mode -eq 'ADDomain') {
+            $radPlanA.Checked = $true
+            $lblPlanChoiceHint.Text = "Automatisch erkannt: Domaenen-Status $($joinState.Mode) - Plan A vorausgewaehlt."
+        } else {
+            $radPlanB.Checked = $true
+            $lblPlanChoiceHint.Text = "Automatisch erkannt: Domaenen-Status $($joinState.Mode) - Plan B vorausgewaehlt (bei direkter CA-Sicht trotzdem Plan A moeglich)."
+        }
+    }
+}
 
 $radSelf.Add_CheckedChanged({
-    if ($radSelf.Checked) { $txtOtherAccount.Enabled = $false }
+    if ($radSelf.Checked) { $txtOtherAccount.Enabled = $false; Update-ModeSelectPlanChoice }
 })
 
 $radOther.Add_CheckedChanged({
-    if ($radOther.Checked) { $txtOtherAccount.Enabled = $true }
+    if ($radOther.Checked) { $txtOtherAccount.Enabled = $true; Update-ModeSelectPlanChoice }
 })
 
-$btnContinueSelf.Add_Click({
+function Show-ModeSelectStep {
+    $script:ActivePlan = $null
+    $tabPlanA.Visible = $false
+    $tabPlanB.Visible = $false
+    $pnlModeSelect.Visible = $true
+    Update-ModeSelectPlanChoice
+    $lblGlobalStep.Text = 'Schritt 1: Modus'
+    $btnBackShared.Enabled = $false
+    $btnNextShared.Enabled = $true
+}
+
+function Invoke-ModeSelectNextClick {
     if ($radOther.Checked) {
         if ([string]::IsNullOrWhiteSpace($txtOtherAccount.Text)) {
             $lblLandingValidation.Text = 'Bitte ein Zielkonto angeben.'
@@ -216,10 +323,17 @@ $btnContinueSelf.Add_Click({
         $script:TargetAccount = $null
     }
     $lblLandingValidation.Text = ''
-    $pnlLanding.Visible = $false
-    $tabs.Visible = $true
-    $tabs.BringToFront()
-})
+    $pnlModeSelect.Visible = $false
+    if ($radPlanA.Checked) {
+        $script:ActivePlan = 'A'
+        $tabPlanA.Visible = $true
+        Show-PlanAStep -Index 0
+    } else {
+        $script:ActivePlan = 'B'
+        $tabPlanB.Visible = $true
+        Show-PlanBStep -Index 0
+    }
+}
 
 #endregion
 
@@ -228,7 +342,7 @@ $btnContinueSelf.Add_Click({
 $logGroup = New-Object System.Windows.Forms.GroupBox
 $logGroup.Text = 'Log / Diagnose'
 $logGroup.Dock = 'Fill'
-$mainLayout.Controls.Add($logGroup, 0, 1)
+$mainLayout.Controls.Add($logGroup, 0, 2)
 
 $logLayout = New-Object System.Windows.Forms.TableLayoutPanel
 $logLayout.Dock = 'Fill'
@@ -272,40 +386,9 @@ Write-WizardLog -Message 'VSC-Wizard gestartet.' -Level Info
 #region PLAN A TAB
 # ============================================================================
 
-$layoutA = New-Object System.Windows.Forms.TableLayoutPanel
-$layoutA.Dock = 'Fill'
-$layoutA.RowCount = 2
-$layoutA.ColumnCount = 1
-[void]$layoutA.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$layoutA.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 54)))
-$tabPlanA.Controls.Add($layoutA)
-
 $pnlStepsA = New-Object System.Windows.Forms.Panel
 $pnlStepsA.Dock = 'Fill'
-$layoutA.Controls.Add($pnlStepsA, 0, 0)
-
-$navA = New-Object System.Windows.Forms.TableLayoutPanel
-$navA.Dock = 'Fill'
-$navA.ColumnCount = 3
-[void]$navA.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$navA.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
-[void]$navA.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
-$layoutA.Controls.Add($navA, 0, 1)
-
-$lblStepA = New-Object System.Windows.Forms.Label
-$lblStepA.Dock = 'Fill'
-$lblStepA.TextAlign = 'MiddleLeft'
-$navA.Controls.Add($lblStepA, 0, 0)
-
-$btnBackA = New-Object System.Windows.Forms.Button
-$btnBackA.Text = '< Zurueck'
-$btnBackA.Dock = 'Fill'
-$navA.Controls.Add($btnBackA, 1, 0)
-
-$btnNextA = New-Object System.Windows.Forms.Button
-$btnNextA.Text = 'Weiter >'
-$btnNextA.Dock = 'Fill'
-$navA.Controls.Add($btnNextA, 2, 0)
+$tabPlanA.Controls.Add($pnlStepsA)
 
 # --- Schritt A1: Status ---
 $pnlA1 = New-Object System.Windows.Forms.Panel
@@ -526,9 +609,10 @@ function Show-PlanAStep {
         $panels[$i].Visible = ($i -eq $Index)
     }
     $script:PlanACurrentStep = $Index
-    $lblStepA.Text = "Schritt $($Index + 1) von $($panels.Count): $($planAStepTitles[$Index])"
-    $btnBackA.Enabled = ($Index -gt 0)
-    $btnNextA.Enabled = ($Index -lt $panels.Count - 1)
+    # Globale Schrittnummer: +1, da Schritt 1 (Moduswahl) davor liegt.
+    $lblGlobalStep.Text = "Schritt $($Index + 2) von $($panels.Count + 1): $($planAStepTitles[$Index])"
+    $btnBackShared.Enabled = $true
+    $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
 
     switch ($Index) {
         0 { Update-PlanAStatus }
@@ -536,7 +620,7 @@ function Show-PlanAStep {
     }
 }
 
-$btnNextA.Add_Click({
+function Invoke-PlanANextClick {
     switch ($script:PlanACurrentStep) {
         0 { Show-PlanAStep -Index 1 }
         1 {
@@ -554,13 +638,16 @@ $btnNextA.Add_Click({
             Show-PlanAStep -Index 3
         }
     }
-})
+}
 
-$btnBackA.Add_Click({
+function Invoke-PlanABackClick {
     if ($script:PlanACurrentStep -gt 0) {
         Show-PlanAStep -Index ($script:PlanACurrentStep - 1)
+    } else {
+        $tabPlanA.Visible = $false
+        Show-ModeSelectStep
     }
-})
+}
 
 #endregion
 
@@ -568,40 +655,9 @@ $btnBackA.Add_Click({
 #region PLAN B TAB
 # ============================================================================
 
-$layoutB = New-Object System.Windows.Forms.TableLayoutPanel
-$layoutB.Dock = 'Fill'
-$layoutB.RowCount = 2
-$layoutB.ColumnCount = 1
-[void]$layoutB.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$layoutB.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 54)))
-$tabPlanB.Controls.Add($layoutB)
-
 $pnlStepsB = New-Object System.Windows.Forms.Panel
 $pnlStepsB.Dock = 'Fill'
-$layoutB.Controls.Add($pnlStepsB, 0, 0)
-
-$navB = New-Object System.Windows.Forms.TableLayoutPanel
-$navB.Dock = 'Fill'
-$navB.ColumnCount = 3
-[void]$navB.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$navB.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
-[void]$navB.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
-$layoutB.Controls.Add($navB, 0, 1)
-
-$lblStepB = New-Object System.Windows.Forms.Label
-$lblStepB.Dock = 'Fill'
-$lblStepB.TextAlign = 'MiddleLeft'
-$navB.Controls.Add($lblStepB, 0, 0)
-
-$btnBackB = New-Object System.Windows.Forms.Button
-$btnBackB.Text = '< Zurueck'
-$btnBackB.Dock = 'Fill'
-$navB.Controls.Add($btnBackB, 1, 0)
-
-$btnNextB = New-Object System.Windows.Forms.Button
-$btnNextB.Text = 'Weiter >'
-$btnNextB.Dock = 'Fill'
-$navB.Controls.Add($btnNextB, 2, 0)
+$tabPlanB.Controls.Add($pnlStepsB)
 
 # --- Schritt B1: Status ---
 $pnlB1 = New-Object System.Windows.Forms.Panel
@@ -1030,9 +1086,10 @@ function Show-PlanBStep {
         $panels[$i].Visible = ($i -eq $Index)
     }
     $script:PlanBCurrentStep = $Index
-    $lblStepB.Text = "Schritt $($Index + 1) von $($panels.Count): $($planBStepTitles[$Index])"
-    $btnBackB.Enabled = ($Index -gt 0)
-    $btnNextB.Enabled = ($Index -lt $panels.Count - 1)
+    # Globale Schrittnummer: +1, da Schritt 1 (Moduswahl) davor liegt.
+    $lblGlobalStep.Text = "Schritt $($Index + 2) von $($panels.Count + 1): $($planBStepTitles[$Index])"
+    $btnBackShared.Enabled = $true
+    $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
 
     switch ($Index) {
         0 { Update-PlanBStatus }
@@ -1040,7 +1097,7 @@ function Show-PlanBStep {
     }
 }
 
-$btnNextB.Add_Click({
+function Invoke-PlanBNextClick {
     switch ($script:PlanBCurrentStep) {
         0 { Show-PlanBStep -Index 1 }
         1 {
@@ -1066,78 +1123,60 @@ $btnNextB.Add_Click({
             Show-PlanBStep -Index 5
         }
     }
-})
+}
 
-$btnBackB.Add_Click({
+function Invoke-PlanBBackClick {
     if ($script:PlanBCurrentStep -gt 0) {
         Show-PlanBStep -Index ($script:PlanBCurrentStep - 1)
+    } else {
+        $tabPlanB.Visible = $false
+        Show-ModeSelectStep
+    }
+}
+
+#endregion
+
+# ============================================================================
+#region GEMEINSAME NAVIGATION (Weiter/Zurueck delegieren je nach $script:ActivePlan)
+# ============================================================================
+
+$btnNextShared.Add_Click({
+    switch ($script:ActivePlan) {
+        'A' { Invoke-PlanANextClick }
+        'B' { Invoke-PlanBNextClick }
+        default { Invoke-ModeSelectNextClick }
+    }
+})
+
+$btnBackShared.Add_Click({
+    switch ($script:ActivePlan) {
+        'A' { Invoke-PlanABackClick }
+        'B' { Invoke-PlanBBackClick }
+        default { }
     }
 })
 
 #endregion
 
 # ============================================================================
-#region EINSTELLUNGEN TAB
+#region EINSTELLUNGEN-DIALOG (schrittunabhaengig ueber den Button in der Kopfleiste erreichbar)
 # ============================================================================
-
-$settingsLayout = New-Object System.Windows.Forms.TableLayoutPanel
-$settingsLayout.Dock = 'Top'
-$settingsLayout.AutoSize = $true
-$settingsLayout.AutoSizeMode = 'GrowAndShrink'
-$settingsLayout.ColumnCount = 2
-$settingsLayout.Padding = New-Object System.Windows.Forms.Padding(20, 16, 20, 16)
-[void]$settingsLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 280)))
-[void]$settingsLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-$tabSettings.Controls.Add($settingsLayout)
-
-function Add-SettingsRow {
-    # Label in Spalte 0, Eingabefeld in Spalte 1, gleiche Zeile - spart gegenueber
-    # "Label ueber Feld" rund die Haelfte an vertikalem Platz.
-    param(
-        [Parameter(Mandatory)][string]$LabelText,
-        [Parameter(Mandatory)][System.Windows.Forms.Control]$InputControl
-    )
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text = $LabelText
-    $lbl.Dock = 'Fill'
-    $lbl.TextAlign = 'MiddleLeft'
-    $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-    $lbl.Margin = New-Object System.Windows.Forms.Padding(0, 6, 10, 6)
-
-    $InputControl.Height = 24
-    $InputControl.Dock = 'Fill'
-    $InputControl.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
-
-    $rowIndex = $settingsLayout.RowCount
-    $settingsLayout.RowCount = $rowIndex + 1
-    [void]$settingsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    $settingsLayout.Controls.Add($lbl, 0, $rowIndex)
-    $settingsLayout.Controls.Add($InputControl, 1, $rowIndex)
-}
-
-function Add-SettingsFullRow {
-    # Ein Control, das ueber beide Spalten der ganzen Zeilenbreite geht (Hinweistexte,
-    # Buttons, Ergebnisboxen). -Fill fuer Controls ohne eigenes AutoSize (z.B. eine
-    # Multiline-TextBox), damit sie die volle Zeilenbreite bekommen statt der
-    # winzigen TextBox-Standardbreite.
-    param(
-        [Parameter(Mandatory)][System.Windows.Forms.Control]$Control,
-        [switch]$Fill
-    )
-    $Control.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 10)
-    if ($Fill) { $Control.Dock = 'Fill' }
-    $rowIndex = $settingsLayout.RowCount
-    $settingsLayout.RowCount = $rowIndex + 1
-    [void]$settingsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    $settingsLayout.Controls.Add($Control, 0, $rowIndex)
-    $settingsLayout.SetColumnSpan($Control, 2)
-}
 
 function Show-VscInventoryDialog {
     param([System.Windows.Forms.Form]$Owner)
 
+    # Die Zertifikatserkennung kann durch den Timeout-Schutz gegen haengende
+    # CNG-Schluesselzugriffe (siehe Get-SmartCardCngProviderInfo in Core.psm1) je nach
+    # Anzahl der Zertifikate und ggf. verwaisten VSC-Verweisen mehrere Sekunden bis
+    # niedrige zweistellige Sekunden dauern - Wartecursor als sichtbares Feedback,
+    # sonst wirkt die App in dieser Zeit eingefroren.
+    if ($Owner) { $Owner.Cursor = 'WaitCursor'; $Owner.Refresh() }
+    [System.Windows.Forms.Cursor]::Current = 'WaitCursor'
     $readers = Get-VirtualSmartCardReaders
     $certs = Get-SmartCardCertificates
+    [System.Windows.Forms.Cursor]::Current = 'Default'
+    if ($Owner) { $Owner.Cursor = 'Default' }
+    Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegeraet(e), $($certs.Count) Zertifikat(e) mit privatem Schluessel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
 
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = 'Vorhandene virtuelle Smartcards'
@@ -1152,10 +1191,10 @@ function Show-VscInventoryDialog {
     $dlgLayout.ColumnCount = 1
     $dlgLayout.Padding = New-Object System.Windows.Forms.Padding(10)
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 150)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 35)))
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 40)))
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 65)))
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 46)))
     $dlg.Controls.Add($dlgLayout)
 
@@ -1330,163 +1369,253 @@ function Show-VscInventoryDialog {
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
 }
 
-$btnShowInventory = New-Object System.Windows.Forms.Button
-$btnShowInventory.Text = 'Vorhandene virtuelle Smartcards anzeigen...'
-$btnShowInventory.Size = New-Object System.Drawing.Size(280, 30)
-Add-SettingsFullRow -Control $btnShowInventory
-$btnShowInventory.Add_Click({ Show-VscInventoryDialog -Owner $form })
+function Show-SettingsDialog {
+    param([System.Windows.Forms.Form]$Owner)
 
-$txtCfgCA = New-Object System.Windows.Forms.TextBox
-Set-TextBoxPlaceholder -TextBox $txtCfgCA -Placeholder 'z.B. ca01.contoso.local\Contoso-Issuing-CA' -Value $config.CAConfig
-Add-SettingsRow -LabelText 'CA-Konfigurationsstring (Server\CA-Name):' -InputControl $txtCfgCA
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Einstellungen'
+    $dlg.Size = New-Object System.Drawing.Size(760, 720)
+    $dlg.MinimumSize = New-Object System.Drawing.Size(620, 480)
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false
 
-$cboCfgTemplate = New-Object System.Windows.Forms.ComboBox
-$cboCfgTemplate.DropDownStyle = 'DropDown'
-Set-TextBoxPlaceholder -TextBox $cboCfgTemplate -Placeholder 'z.B. SmartcardLogon' -Value $config.Template
-Add-SettingsRow -LabelText 'Zertifikatstemplate (fuer VSC-Anmeldung):' -InputControl $cboCfgTemplate
+    $dlgLayout = New-Object System.Windows.Forms.TableLayoutPanel
+    $dlgLayout.Dock = 'Fill'
+    $dlgLayout.RowCount = 2
+    $dlgLayout.ColumnCount = 1
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 56)))
+    $dlg.Controls.Add($dlgLayout)
 
-$txtCfgPrefix = New-Object System.Windows.Forms.TextBox
-$txtCfgPrefix.Text = $config.VscNamePrefix
-Add-SettingsRow -LabelText 'Namenspraefix fuer virtuelle Smartcards:' -InputControl $txtCfgPrefix
+    # Scrollbarer Inhaltsbereich fuer die Felder - dadurch bleibt die Speichern-Zeile
+    # unten IMMER voll sichtbar (eigene, fixe Zeile ausserhalb des Scrollbereichs),
+    # egal wie viele Felder/Hinweistexte oben Platz brauchen oder wie klein das
+    # Dialogfenster gerade ist.
+    $scrollPanel = New-Object System.Windows.Forms.Panel
+    $scrollPanel.Dock = 'Fill'
+    $scrollPanel.AutoScroll = $true
+    $dlgLayout.Controls.Add($scrollPanel, 0, 0)
 
-$txtCfgJump = New-Object System.Windows.Forms.TextBox
-Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
-Add-SettingsRow -LabelText 'RDP-Zielserver fuer Plan B:' -InputControl $txtCfgJump
+    $settingsLayout = New-Object System.Windows.Forms.TableLayoutPanel
+    $settingsLayout.Dock = 'Top'
+    $settingsLayout.AutoSize = $true
+    $settingsLayout.AutoSizeMode = 'GrowAndShrink'
+    $settingsLayout.ColumnCount = 2
+    $settingsLayout.Padding = New-Object System.Windows.Forms.Padding(20, 16, 20, 16)
+    [void]$settingsLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 280)))
+    [void]$settingsLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    $scrollPanel.Controls.Add($settingsLayout)
 
-$txtCfgCsp = New-Object System.Windows.Forms.TextBox
-$txtCfgCsp.Text = $config.CspName
-Add-SettingsRow -LabelText 'Crypto Service Provider (CSP):' -InputControl $txtCfgCsp
+    function Add-SettingsRow {
+        # Label in Spalte 0, Eingabefeld in Spalte 1, gleiche Zeile - spart gegenueber
+        # "Label ueber Feld" rund die Haelfte an vertikalem Platz.
+        param(
+            [Parameter(Mandatory)][string]$LabelText,
+            [Parameter(Mandatory)][System.Windows.Forms.Control]$InputControl
+        )
+        $lbl = New-Object System.Windows.Forms.Label
+        $lbl.Text = $LabelText
+        $lbl.Dock = 'Fill'
+        $lbl.TextAlign = 'MiddleLeft'
+        $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+        $lbl.Margin = New-Object System.Windows.Forms.Padding(0, 6, 10, 6)
 
-$txtCfgDomain = New-Object System.Windows.Forms.TextBox
-$discoveryDomainDefault = if ($config.DiscoveryDomain) { $config.DiscoveryDomain } else { Get-DiscoveryDomainGuess }
-Set-TextBoxPlaceholder -TextBox $txtCfgDomain -Placeholder 'z.B. contoso.local oder dc01.contoso.local' -Value $discoveryDomainDefault
-Add-SettingsRow -LabelText 'AD-Domaene / Domain Controller (PKI-Erkennung):' -InputControl $txtCfgDomain
+        $InputControl.Height = 24
+        $InputControl.Dock = 'Fill'
+        $InputControl.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
 
-$lblCfgDomainHint = New-Object System.Windows.Forms.Label
-$lblCfgDomainHint.Text = 'Auf Entra-joined/Workgroup-Rechnern meist noetig, da "serverloses" LDAP-Binding ohne Domain-Join nicht funktioniert. Vorschlag aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.'
-$lblCfgDomainHint.AutoSize = $true
-$lblCfgDomainHint.MaximumSize = New-Object System.Drawing.Size(760, 0)
-$lblCfgDomainHint.ForeColor = [System.Drawing.Color]::Gray
-$lblCfgDomainHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
-Add-SettingsFullRow -Control $lblCfgDomainHint
-
-$discoverPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-$discoverPanel.AutoSize = $true
-$discoverPanel.FlowDirection = 'LeftToRight'
-$discoverPanel.WrapContents = $false
-
-$lblCfgDiscover = New-Object System.Windows.Forms.Label
-$lblCfgDiscover.Text = 'Automatische PKI-Erkennung:'
-$lblCfgDiscover.AutoSize = $true
-$lblCfgDiscover.Margin = New-Object System.Windows.Forms.Padding(0, 8, 10, 0)
-$discoverPanel.Controls.Add($lblCfgDiscover)
-
-$btnDiscoverCfg = New-Object System.Windows.Forms.Button
-$btnDiscoverCfg.Text = 'PKI automatisch erkennen'
-$btnDiscoverCfg.Size = New-Object System.Drawing.Size(220, 30)
-$discoverPanel.Controls.Add($btnDiscoverCfg)
-Add-SettingsFullRow -Control $discoverPanel
-
-$txtDiscoverResultCfg = New-Object System.Windows.Forms.TextBox
-$txtDiscoverResultCfg.Multiline = $true
-$txtDiscoverResultCfg.ReadOnly = $true
-$txtDiscoverResultCfg.ScrollBars = 'Vertical'
-$txtDiscoverResultCfg.Height = 70
-$txtDiscoverResultCfg.Font = New-Object System.Drawing.Font('Consolas', 9)
-Add-SettingsFullRow -Control $txtDiscoverResultCfg -Fill
-
-$savePanel = New-Object System.Windows.Forms.FlowLayoutPanel
-$savePanel.AutoSize = $true
-$savePanel.FlowDirection = 'LeftToRight'
-$savePanel.WrapContents = $false
-
-$btnSaveConfig = New-Object System.Windows.Forms.Button
-$btnSaveConfig.Text = 'Speichern'
-$btnSaveConfig.Size = New-Object System.Drawing.Size(160, 32)
-$savePanel.Controls.Add($btnSaveConfig)
-
-$lblCfgSaved = New-Object System.Windows.Forms.Label
-$lblCfgSaved.AutoSize = $true
-$lblCfgSaved.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-$lblCfgSaved.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
-$savePanel.Controls.Add($lblCfgSaved)
-
-Add-SettingsFullRow -Control $savePanel
-
-$btnDiscoverCfg.Add_Click({
-    $btnDiscoverCfg.Enabled = $false
-    $txtDiscoverResultCfg.Text = 'Pruefe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...'
-    $form.Refresh()
-
-    $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
-    $domainHint = Get-TextBoxRealValue -TextBox $txtCfgDomain
-    $job = Start-Job -ScriptBlock {
-        param($ModulePath, $DomainHint, $Timeout)
-        Import-Module $ModulePath -Force
-        Get-PkiReachability -Server $DomainHint -TimeoutSeconds $Timeout
-    } -ArgumentList $modulePath, $domainHint, 8
-
-    $completed = Wait-Job -Job $job -Timeout 40
-    $reachData = $null
-    if ($completed) {
-        $reachData = Receive-Job -Job $job
-    } else {
-        Stop-Job -Job $job
-    }
-    Remove-Job -Job $job -Force
-
-    if (-not $completed) {
-        $txtDiscoverResultCfg.Text = 'Zeitueberschreitung (>40s). Domaene/DC-Feld pruefen oder Netzwerkverbindung (VPN/Private Access) sicherstellen.'
-        Write-WizardLog -Message 'Automatische Erkennung: Zeitueberschreitung.' -Level Error
-        $btnDiscoverCfg.Enabled = $true
-        return
+        $rowIndex = $settingsLayout.RowCount
+        $settingsLayout.RowCount = $rowIndex + 1
+        [void]$settingsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+        $settingsLayout.Controls.Add($lbl, 0, $rowIndex)
+        $settingsLayout.Controls.Add($InputControl, 1, $rowIndex)
     }
 
-    if ($reachData.ReachableCas.Count -gt 0) {
-        $primary = $reachData.ReachableCas[0]
-        Set-TextBoxRealValue -TextBox $txtCfgCA -Value $primary.ConfigString
+    function Add-SettingsFullRow {
+        # Ein Control, das ueber beide Spalten der ganzen Zeilenbreite geht (Hinweistexte,
+        # Buttons, Ergebnisboxen). -Fill fuer Controls ohne eigenes AutoSize (z.B. eine
+        # Multiline-TextBox), damit sie die volle Zeilenbreite bekommen statt der
+        # winzigen TextBox-Standardbreite.
+        param(
+            [Parameter(Mandatory)][System.Windows.Forms.Control]$Control,
+            [switch]$Fill
+        )
+        $Control.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 10)
+        if ($Fill) { $Control.Dock = 'Fill' }
+        $rowIndex = $settingsLayout.RowCount
+        $settingsLayout.RowCount = $rowIndex + 1
+        [void]$settingsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+        $settingsLayout.Controls.Add($Control, 0, $rowIndex)
+        $settingsLayout.SetColumnSpan($Control, 2)
+    }
 
-        $allTemplates = @($reachData.ReachableCas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
-        if ($allTemplates.Count -gt 0) {
-            $cboCfgTemplate.Items.Clear()
-            [void]$cboCfgTemplate.Items.AddRange($allTemplates)
-            Set-TextBoxRealValue -TextBox $cboCfgTemplate -Value $allTemplates[0]
+    $btnShowInventory = New-Object System.Windows.Forms.Button
+    $btnShowInventory.Text = 'Vorhandene virtuelle Smartcards anzeigen...'
+    $btnShowInventory.Size = New-Object System.Drawing.Size(280, 30)
+    Add-SettingsFullRow -Control $btnShowInventory
+    $btnShowInventory.Add_Click({ Show-VscInventoryDialog -Owner $dlg })
+
+    $txtCfgCA = New-Object System.Windows.Forms.TextBox
+    Set-TextBoxPlaceholder -TextBox $txtCfgCA -Placeholder 'z.B. ca01.contoso.local\Contoso-Issuing-CA' -Value $config.CAConfig
+    Add-SettingsRow -LabelText 'CA-Konfigurationsstring (Server\CA-Name):' -InputControl $txtCfgCA
+
+    $cboCfgTemplate = New-Object System.Windows.Forms.ComboBox
+    $cboCfgTemplate.DropDownStyle = 'DropDown'
+    Set-TextBoxPlaceholder -TextBox $cboCfgTemplate -Placeholder 'z.B. SmartcardLogon' -Value $config.Template
+    Add-SettingsRow -LabelText 'Zertifikatstemplate (fuer VSC-Anmeldung):' -InputControl $cboCfgTemplate
+
+    $txtCfgPrefix = New-Object System.Windows.Forms.TextBox
+    $txtCfgPrefix.Text = $config.VscNamePrefix
+    Add-SettingsRow -LabelText 'Namenspraefix fuer virtuelle Smartcards:' -InputControl $txtCfgPrefix
+
+    $txtCfgJump = New-Object System.Windows.Forms.TextBox
+    Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
+    Add-SettingsRow -LabelText 'RDP-Zielserver fuer Plan B:' -InputControl $txtCfgJump
+
+    $txtCfgCsp = New-Object System.Windows.Forms.TextBox
+    $txtCfgCsp.Text = $config.CspName
+    Add-SettingsRow -LabelText 'Crypto Service Provider (CSP):' -InputControl $txtCfgCsp
+
+    $txtCfgDomain = New-Object System.Windows.Forms.TextBox
+    $discoveryDomainDefault = if ($config.DiscoveryDomain) { $config.DiscoveryDomain } else { Get-DiscoveryDomainGuess }
+    Set-TextBoxPlaceholder -TextBox $txtCfgDomain -Placeholder 'z.B. contoso.local oder dc01.contoso.local' -Value $discoveryDomainDefault
+    Add-SettingsRow -LabelText 'AD-Domaene / Domain Controller (PKI-Erkennung):' -InputControl $txtCfgDomain
+
+    $lblCfgDomainHint = New-Object System.Windows.Forms.Label
+    $lblCfgDomainHint.Text = 'Auf Entra-joined/Workgroup-Rechnern meist noetig, da "serverloses" LDAP-Binding ohne Domain-Join nicht funktioniert. Vorschlag aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.'
+    $lblCfgDomainHint.AutoSize = $true
+    $lblCfgDomainHint.MaximumSize = New-Object System.Drawing.Size(760, 0)
+    $lblCfgDomainHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblCfgDomainHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+    Add-SettingsFullRow -Control $lblCfgDomainHint
+
+    $discoverPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $discoverPanel.AutoSize = $true
+    $discoverPanel.FlowDirection = 'LeftToRight'
+    $discoverPanel.WrapContents = $false
+
+    $lblCfgDiscover = New-Object System.Windows.Forms.Label
+    $lblCfgDiscover.Text = 'Automatische PKI-Erkennung:'
+    $lblCfgDiscover.AutoSize = $true
+    $lblCfgDiscover.Margin = New-Object System.Windows.Forms.Padding(0, 8, 10, 0)
+    $discoverPanel.Controls.Add($lblCfgDiscover)
+
+    $btnDiscoverCfg = New-Object System.Windows.Forms.Button
+    $btnDiscoverCfg.Text = 'PKI automatisch erkennen'
+    $btnDiscoverCfg.Size = New-Object System.Drawing.Size(220, 30)
+    $discoverPanel.Controls.Add($btnDiscoverCfg)
+    Add-SettingsFullRow -Control $discoverPanel
+
+    $txtDiscoverResultCfg = New-Object System.Windows.Forms.TextBox
+    $txtDiscoverResultCfg.Multiline = $true
+    $txtDiscoverResultCfg.ReadOnly = $true
+    $txtDiscoverResultCfg.ScrollBars = 'Vertical'
+    $txtDiscoverResultCfg.Height = 70
+    $txtDiscoverResultCfg.Font = New-Object System.Drawing.Font('Consolas', 9)
+    Add-SettingsFullRow -Control $txtDiscoverResultCfg -Fill
+
+    $footerPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $footerPanel.Dock = 'Fill'
+    $footerPanel.FlowDirection = 'RightToLeft'
+    $dlgLayout.Controls.Add($footerPanel, 0, 1)
+
+    $btnCloseSettings = New-Object System.Windows.Forms.Button
+    $btnCloseSettings.Text = 'Schliessen'
+    $btnCloseSettings.Size = New-Object System.Drawing.Size(120, 32)
+    $btnCloseSettings.Margin = New-Object System.Windows.Forms.Padding(10)
+    $footerPanel.Controls.Add($btnCloseSettings)
+    $btnCloseSettings.Add_Click({ $dlg.Close() })
+
+    $btnSaveConfig = New-Object System.Windows.Forms.Button
+    $btnSaveConfig.Text = 'Speichern'
+    $btnSaveConfig.Size = New-Object System.Drawing.Size(160, 32)
+    $btnSaveConfig.Margin = New-Object System.Windows.Forms.Padding(10)
+    $footerPanel.Controls.Add($btnSaveConfig)
+
+    $lblCfgSaved = New-Object System.Windows.Forms.Label
+    $lblCfgSaved.AutoSize = $true
+    $lblCfgSaved.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $lblCfgSaved.TextAlign = 'MiddleRight'
+    $lblCfgSaved.Margin = New-Object System.Windows.Forms.Padding(10, 18, 0, 0)
+    $footerPanel.Controls.Add($lblCfgSaved)
+
+    $btnDiscoverCfg.Add_Click({
+        $btnDiscoverCfg.Enabled = $false
+        $txtDiscoverResultCfg.Text = 'Pruefe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...'
+        $dlg.Refresh()
+
+        $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+        $domainHint = Get-TextBoxRealValue -TextBox $txtCfgDomain
+        $job = Start-Job -ScriptBlock {
+            param($ModulePath, $DomainHint, $Timeout)
+            Import-Module $ModulePath -Force
+            Get-PkiReachability -Server $DomainHint -TimeoutSeconds $Timeout
+        } -ArgumentList $modulePath, $domainHint, 8
+
+        $completed = Wait-Job -Job $job -Timeout 40
+        $reachData = $null
+        if ($completed) {
+            $reachData = Receive-Job -Job $job
+        } else {
+            Stop-Job -Job $job
+        }
+        Remove-Job -Job $job -Force
+
+        if (-not $completed) {
+            $txtDiscoverResultCfg.Text = 'Zeitueberschreitung (>40s). Domaene/DC-Feld pruefen oder Netzwerkverbindung (VPN/Private Access) sicherstellen.'
+            Write-WizardLog -Message 'Automatische Erkennung: Zeitueberschreitung.' -Level Error
+            $btnDiscoverCfg.Enabled = $true
+            return
         }
 
-        $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und uebernommen - bitte Template pruefen (Dropdown-Pfeil zeigt alle $($allTemplates.Count) auf der CA verfuegbaren Templates) und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
-        Write-WizardLog -Message "Automatische Erkennung: $($reachData.ReachableCas.Count) erreichbare CA(s) gefunden." -Level Success
-    } elseif ($reachData.AllCas.Count -gt 0) {
-        $txtDiscoverResultCfg.Text = "$($reachData.AllCas.Count) CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n" + ($reachData.UnreachableCas -join "`r`n")
-        Write-WizardLog -Message "Automatische Erkennung: $($reachData.AllCas.Count) CA(s) gefunden, keine per RPC erreichbar." -Level Info
-    } elseif ($reachData.DiscoveryError) {
-        $txtDiscoverResultCfg.Text = "LDAP-Erkennung fehlgeschlagen: $($reachData.DiscoveryError)`r`n`r`nTipp: Domaene/DC-Feld oben pruefen (z.B. expliziten DC-Namen statt DNS-Domaene versuchen) und Netzwerkverbindung (VPN/Private Access) sicherstellen."
-        Write-WizardLog -Message "Automatische Erkennung fehlgeschlagen: $($reachData.DiscoveryError)" -Level Error
-    } else {
-        $txtDiscoverResultCfg.Text = 'Keine erreichbare CA gefunden.'
-        Write-WizardLog -Message 'Automatische Erkennung: keine erreichbare CA gefunden.' -Level Info
-    }
-    $btnDiscoverCfg.Enabled = $true
-})
+        if ($reachData.ReachableCas.Count -gt 0) {
+            $primary = $reachData.ReachableCas[0]
+            Set-TextBoxRealValue -TextBox $txtCfgCA -Value $primary.ConfigString
 
-$btnSaveConfig.Add_Click({
-    $newConfig = @{
-        CAConfig      = Get-TextBoxRealValue -TextBox $txtCfgCA
-        Template      = Get-TextBoxRealValue -TextBox $cboCfgTemplate
-        VscNamePrefix = $txtCfgPrefix.Text
-        RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
-        CspName       = $txtCfgCsp.Text
-        DiscoveryDomain = Get-TextBoxRealValue -TextBox $txtCfgDomain
-        WorkingDir    = $config.WorkingDir
-    }
-    Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
-    $script:config = $newConfig
+            $allTemplates = @($reachData.ReachableCas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+            if ($allTemplates.Count -gt 0) {
+                $cboCfgTemplate.Items.Clear()
+                [void]$cboCfgTemplate.Items.AddRange($allTemplates)
+                Set-TextBoxRealValue -TextBox $cboCfgTemplate -Value $allTemplates[0]
+            }
 
-    Set-TemplateComboItem -ComboBox $cboTemplateA -Template $newConfig.Template
-    Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $newConfig.Template
+            $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und uebernommen - bitte Template pruefen (Dropdown-Pfeil zeigt alle $($allTemplates.Count) auf der CA verfuegbaren Templates) und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
+            Write-WizardLog -Message "Automatische Erkennung: $($reachData.ReachableCas.Count) erreichbare CA(s) gefunden." -Level Success
+        } elseif ($reachData.AllCas.Count -gt 0) {
+            $txtDiscoverResultCfg.Text = "$($reachData.AllCas.Count) CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n" + ($reachData.UnreachableCas -join "`r`n")
+            Write-WizardLog -Message "Automatische Erkennung: $($reachData.AllCas.Count) CA(s) gefunden, keine per RPC erreichbar." -Level Info
+        } elseif ($reachData.DiscoveryError) {
+            $txtDiscoverResultCfg.Text = "LDAP-Erkennung fehlgeschlagen: $($reachData.DiscoveryError)`r`n`r`nTipp: Domaene/DC-Feld oben pruefen (z.B. expliziten DC-Namen statt DNS-Domaene versuchen) und Netzwerkverbindung (VPN/Private Access) sicherstellen."
+            Write-WizardLog -Message "Automatische Erkennung fehlgeschlagen: $($reachData.DiscoveryError)" -Level Error
+        } else {
+            $txtDiscoverResultCfg.Text = 'Keine erreichbare CA gefunden.'
+            Write-WizardLog -Message 'Automatische Erkennung: keine erreichbare CA gefunden.' -Level Info
+        }
+        $btnDiscoverCfg.Enabled = $true
+    })
 
-    $lblCfgSaved.ForeColor = [System.Drawing.Color]::ForestGreen
-    $lblCfgSaved.Text = 'Gespeichert.'
-})
+    $btnSaveConfig.Add_Click({
+        $newConfig = @{
+            CAConfig      = Get-TextBoxRealValue -TextBox $txtCfgCA
+            Template      = Get-TextBoxRealValue -TextBox $cboCfgTemplate
+            VscNamePrefix = $txtCfgPrefix.Text
+            RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
+            CspName       = $txtCfgCsp.Text
+            DiscoveryDomain = Get-TextBoxRealValue -TextBox $txtCfgDomain
+            WorkingDir    = $config.WorkingDir
+        }
+        Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
+        $script:config = $newConfig
+
+        Set-TemplateComboItem -ComboBox $cboTemplateA -Template $newConfig.Template
+        Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $newConfig.Template
+
+        $lblCfgSaved.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblCfgSaved.Text = 'Gespeichert.'
+    })
+
+    if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
+}
 
 #endregion
 
@@ -1494,19 +1623,14 @@ $btnSaveConfig.Add_Click({
 #region STARTUP
 # ============================================================================
 
-Show-PlanAStep -Index 0
-Show-PlanBStep -Index 0
+Show-ModeSelectStep
 
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($configIncomplete) {
-    $tabs.SelectedTab = $tabSettings
-} else {
-    $joinStateStartup = Get-DomainJoinState
-    if ($joinStateStartup.Mode -eq 'ADDomain') {
-        $tabs.SelectedTab = $tabPlanA
-    } else {
-        $tabs.SelectedTab = $tabPlanB
-    }
+    # Erst oeffnen, sobald das Hauptfenster tatsaechlich angezeigt wird (Shown-Event) -
+    # ein modaler Dialog mit -Owner vor dem ersten Show() des Owners fuehrt sonst zu
+    # unzuverlaessigem Fensterverhalten.
+    $form.Add_Shown({ Show-SettingsDialog -Owner $form })
 }
 
 [void]$form.ShowDialog()
