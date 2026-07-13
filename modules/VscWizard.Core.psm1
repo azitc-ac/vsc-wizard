@@ -365,6 +365,27 @@ function Get-PkiReachability {
 
 #region Virtuelle Smartcard
 
+function Get-RecentVscEventLog {
+    # tpmvscmgr's eigentliche Fehlerausgabe laeuft ueber die interaktive Konsole und
+    # kann deshalb NICHT umgeleitet/mitgeloggt werden (siehe New-VirtualSmartCard).
+    # Windows protokolliert die VSC-Operationen aber zusaetzlich im Event-Log - von
+    # dort holen wir nach einem Versuch die relevanten Eintraege, um im Fehlerfall
+    # einen aussagekraeftigen Grund zeigen zu koennen statt nur eines Exit-Codes.
+    param([Parameter(Mandatory)][datetime]$Since)
+
+    $logNames = @(
+        'Microsoft-Windows-SmartCard-TPM-VCard-Module/Operational',
+        'Microsoft-Windows-SmartCard-TPM-VCard-Module/Admin'
+    )
+    $entries = foreach ($logName in $logNames) {
+        try {
+            Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = $Since } -ErrorAction Stop |
+                Select-Object TimeCreated, Id, LevelDisplayName, Message
+        } catch { }
+    }
+    return @($entries | Sort-Object TimeCreated)
+}
+
 function New-VirtualSmartCard {
     param(
         [Parameter(Mandatory)][string]$CardName,
@@ -379,7 +400,7 @@ function New-VirtualSmartCard {
 
     if (Test-IsElevated) {
         $result = Invoke-ExternalCommand -FilePath $tpmvscmgr -ArgumentList $vscArgs
-        return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = $result.StdOut; Success = $result.Success }
+        return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = $result.StdOut; Success = $result.Success; Message = $null }
     }
 
     # tpmvscmgr benoetigt lokale Administratorrechte - nur fuer diesen Schritt wird
@@ -394,12 +415,54 @@ function New-VirtualSmartCard {
     # eigenes, voll interaktives Konsolenfenster bekommt.
     Write-WizardLog -Message "Starte erhoehten Prozess (eigenes Konsolenfenster, PIN-Eingabe dort erforderlich): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
 
-    $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait
+    $startTime = Get-Date
+    try {
+        $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait -ErrorAction Stop
+    } catch {
+        # Haeufigster Fall: UAC abgebrochen ("Der Vorgang wurde durch den Benutzer
+        # abgebrochen"). Ohne dieses catch fluege die Exception ungeloggt bis in die
+        # WinForms-Ereignisschleife - genau das "Log nicht aussagekraeftig"-Symptom.
+        $msg = "Erhoehter Prozess konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
+        Write-WizardLog -Message $msg -Level Error
+        return [pscustomobject]@{ ExitCode = $null; Output = $null; Success = $false; Message = $msg }
+    }
+
+    # ExitCode kann bei RunAs in Einzelfaellen $null sein - dann als Erfolgssignal
+    # zusaetzlich pruefen, ob die Karte jetzt tatsaechlich existiert.
+    $exitCode = $proc.ExitCode
+    $cardExists = [bool](@(Get-VirtualSmartCardReaders) | Where-Object { $_.FriendlyName -eq $CardName })
+    $success = ($exitCode -eq 0) -or ($null -eq $exitCode -and $cardExists)
+
+    if ($success) {
+        Write-WizardLog -Message "tpmvscmgr create erfolgreich (Exit-Code $exitCode, Karte '$CardName' vorhanden=$cardExists)." -Level Success
+        return [pscustomobject]@{ ExitCode = $exitCode; Output = $null; Success = $true; Message = $null }
+    }
+
+    # Fehlerfall: Exit-Code (dezimal + hex) protokollieren und die eigentliche Ursache
+    # aus dem Event-Log nachreichen, da tpmvscmgr sie nur auf der Konsole ausgibt.
+    $hex = if ($null -ne $exitCode) { '0x{0:X8}' -f $exitCode } else { '(kein Exit-Code)' }
+    Write-WizardLog -Message "tpmvscmgr create fehlgeschlagen. Exit-Code: $exitCode ($hex). Karte '$CardName' vorhanden=$cardExists." -Level Error
+
+    $reason = $null
+    $events = Get-RecentVscEventLog -Since $startTime
+    $notable = @($events | Where-Object { $_.LevelDisplayName -in @('Fehler', 'Error', 'Warnung', 'Warning', 'Kritisch', 'Critical') })
+    if ($notable.Count -eq 0) { $notable = $events }   # sonst wenigstens die Info-Eintraege
+    if ($notable.Count -gt 0) {
+        Write-WizardLog -Message "Event-Log (SmartCard-TPM-VCard-Module) zum Zeitpunkt des Versuchs:" -Level Info
+        foreach ($ev in $notable) {
+            $line = "  [$($ev.TimeCreated.ToString('HH:mm:ss'))] [$($ev.LevelDisplayName)] (Id $($ev.Id)) $(($ev.Message -replace '\s+', ' ').Trim())"
+            Write-WizardLog -Message $line -Level Output
+        }
+        $reason = ($notable | Select-Object -Last 1).Message -replace '\s+', ' '
+    } else {
+        Write-WizardLog -Message "Kein passender Event-Log-Eintrag gefunden. Haeufige Ursachen: PIN zu kurz/entspricht nicht der Richtlinie, PIN-Bestaetigung stimmt nicht ueberein, TPM nicht bereit, oder der Vorgang wurde im Konsolenfenster abgebrochen." -Level Info
+    }
 
     [pscustomobject]@{
-        ExitCode = $proc.ExitCode
+        ExitCode = $exitCode
         Output   = $null
-        Success  = ($proc.ExitCode -eq 0)
+        Success  = $false
+        Message  = if ($reason) { $reason.Trim() } else { "Exit-Code $exitCode ($hex)" }
     }
 }
 

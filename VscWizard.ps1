@@ -433,7 +433,12 @@ $btnCreateVscA.Add_Click({
     $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestaetigen, dann im separaten Konsolenfenster die PIN eingeben...'
     $form.Refresh()
 
-    $result = New-VirtualSmartCard -CardName $txtCardNameA.Text
+    try {
+        $result = New-VirtualSmartCard -CardName $txtCardNameA.Text
+    } catch {
+        $result = [pscustomobject]@{ Success = $false; ExitCode = $null; Message = $_.Exception.Message }
+        Write-WizardLog -Message "Unerwarteter Fehler bei der VSC-Erstellung: $($_.Exception.Message)" -Level Error
+    }
     if ($result.Success) {
         $script:PlanA_VscCreated = $true
         $script:PlanA_CardName = $txtCardNameA.Text
@@ -441,7 +446,8 @@ $btnCreateVscA.Add_Click({
         $lblVscResultA.Text = 'Virtuelle Smartcard wurde erfolgreich erstellt.'
     } else {
         $lblVscResultA.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblVscResultA.Text = "Fehler bei der Erstellung (Exit-Code $($result.ExitCode)). Details siehe Log."
+        $detail = if ($result.Message) { $result.Message } else { "Exit-Code $($result.ExitCode)" }
+        $lblVscResultA.Text = "Fehler bei der Erstellung: $detail (Details siehe Log)."
     }
     $btnCreateVscA.Enabled = $true
 })
@@ -703,7 +709,12 @@ $btnCreateVscB.Add_Click({
     $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestaetigen, dann im separaten Konsolenfenster die PIN eingeben...'
     $form.Refresh()
 
-    $result = New-VirtualSmartCard -CardName $txtCardNameB.Text
+    try {
+        $result = New-VirtualSmartCard -CardName $txtCardNameB.Text
+    } catch {
+        $result = [pscustomobject]@{ Success = $false; ExitCode = $null; Message = $_.Exception.Message }
+        Write-WizardLog -Message "Unerwarteter Fehler bei der VSC-Erstellung: $($_.Exception.Message)" -Level Error
+    }
     if ($result.Success) {
         $script:PlanB_VscCreated = $true
         $script:PlanB_CardName = $txtCardNameB.Text
@@ -711,7 +722,8 @@ $btnCreateVscB.Add_Click({
         $lblVscResultB.Text = 'Virtuelle Smartcard wurde erfolgreich erstellt.'
     } else {
         $lblVscResultB.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblVscResultB.Text = "Fehler bei der Erstellung (Exit-Code $($result.ExitCode)). Details siehe Log."
+        $detail = if ($result.Message) { $result.Message } else { "Exit-Code $($result.ExitCode)" }
+        $lblVscResultB.Text = "Fehler bei der Erstellung: $detail (Details siehe Log)."
     }
     $btnCreateVscB.Enabled = $true
 })
