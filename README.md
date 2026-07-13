@@ -2,7 +2,11 @@
 
 Ein Wizard-Tool fuer AD-Administratoren zur Beantragung virtueller Smartcards
 (TPM Virtual Smart Card). Fuehrt Schritt fuer Schritt durch die Erstellung der
-Karte und die Zertifikatsbeantragung und unterstuetzt zwei Szenarien als Tabs:
+Karte und die Zertifikatsbeantragung. Der Ablauf ist als durchgaengige
+Schrittfolge aufgebaut (Schritt 1: Modus- und Kontowahl, danach die einzelnen
+Beantragungsschritte mit "Weiter"/"Zurueck") mit einer schrittunabhaengigen
+Kopfleiste, ueber die jederzeit die Einstellungen erreichbar sind. Es gibt zwei
+Szenarien, die in Schritt 1 gewaehlt werden:
 
 - **Plan A - AD-Domaene**: Rechner ist domaenen-gebunden und hat direkte Sicht
   auf die Enterprise-CA. Kartenerstellung und Zertifikatsbeantragung laufen in
@@ -17,8 +21,9 @@ Die Beantragung laeuft im Benutzerkontext, in dem der Wizard gestartet wurde
 UAC-Elevation an) - das gilt unabhaengig davon, fuer wen die Smartcard
 gedacht ist, siehe naechster Abschnitt.
 
-Beim Start fragt der Wizard zunaechst, **fuer wen** die Smartcard beantragt
-wird:
+In Schritt 1 fragt der Wizard zunaechst, **fuer wen** die Smartcard beantragt
+wird (und welcher der beiden Ablaeufe genutzt wird - anhand des erkannten
+Domaenen-Status vorausgewaehlt, aber frei aenderbar):
 
 - **Fuer mich**: normaler Ablauf, alles im aktuell angemeldeten
   Benutzerkontext.
@@ -51,11 +56,14 @@ genutzt wird: Wird `VscWizard.bat` aus einer pwsh-Umgebung heraus gestartet
 (z.B. Doppelklick aus einem pwsh-Terminal, oder ein Prozess, der pwsh's
 Umgebung geerbt hat), steht pwsh's Modulpfad in `$env:PSModulePath` vor dem
 nativen Windows-PowerShell-5.1-Pfad. Windows PowerShell 5.1 laedt dann beim
-Autoloading von `Microsoft.PowerShell.Utility` faelschlich die
-PowerShell-7-Modulvariante, die kein `Import-PowerShellDataFile` exportiert -
-die gespeicherte `config.psd1` wuerde dadurch bei jedem Start ignoriert
-werden. `VscWizard.Core.psm1` erzwingt deshalb beim Laden explizit das
-native Modul ueber den vollen Pfad (siehe Kommentar dort).
+Autoloading eingebauter Module faelschlich die PowerShell-7-Variante. Betroffen
+waren `Microsoft.PowerShell.Utility` (ohne `Import-PowerShellDataFile` - die
+gespeicherte `config.psd1` wurde dadurch bei jedem Start ignoriert) und
+`Microsoft.PowerShell.Security` (die Variante registriert das `Cert:`-Laufwerk
+nicht - das Smartcard-Inventar zeigte dadurch trotz vorhandener Zertifikate
+nichts an). `VscWizard.Core.psm1` erzwingt deshalb beim Laden explizit die
+nativen Module ueber ihren vollen Pfad (siehe Kommentar dort) - auch im
+Kindprozess, der die CNG-Schluesselinfos ermittelt.
 
 ## Verwendung
 
@@ -64,17 +72,17 @@ native Modul ueber den vollen Pfad (siehe Kommentar dort).
 2. `config.psd1` wird leer ausgeliefert (CA-Konfigurationsstring,
    Zertifikatstemplate und RDP-Zielserver sind org-spezifisch und daher nicht
    vorbefuellt). Solange diese Werte fehlen, oeffnet der Wizard beim Start
-   automatisch den Tab "Einstellungen" - dort entweder manuell eintragen oder
-   per "PKI automatisch erkennen" befuellen lassen (siehe unten), dann
-   "Speichern". Danach wird beim naechsten Start automatisch der passende
-   Tab (Plan A/Plan B) vorausgewaehlt.
-3. Passenden Tab waehlen (wird anhand des erkannten Domaenen-Status
-   vorausgewaehlt) und dem Wizard folgen.
+   automatisch den **Einstellungen**-Dialog (jederzeit ueber den Knopf in der
+   Kopfleiste erreichbar) - dort entweder manuell eintragen oder per "PKI
+   automatisch erkennen" befuellen lassen (siehe unten), dann "Speichern".
+3. In Schritt 1 Konto und Ablauf (Plan A/Plan B) waehlen (Plan wird anhand des
+   erkannten Domaenen-Status vorausgewaehlt) und dem Wizard mit "Weiter" folgen.
 
 ## Aufbau
 
-- `VscWizard.ps1` - GUI/Wizard-Flow (WinForms), zwei Tabs (Plan A/Plan B)
-  sowie ein Einstellungen-Tab
+- `VscWizard.ps1` - GUI/Wizard-Flow (WinForms): schrittbasierter Ablauf
+  (Moduswahl + Plan A/Plan B) mit gemeinsamer "Weiter"/"Zurueck"-Navigation und
+  einer Kopfleiste, die die Einstellungen als Dialog oeffnet
 - `modules/VscWizard.Core.psm1` - Nicht-GUI-Logik: Logging, Prozessausfuehrung,
   Erkennung von Domaenen-/TPM-Status, Erstellung der virtuellen Smartcard,
   CSR-Erstellung/-Einreichung/-Abschluss ueber `certreq`
@@ -143,7 +151,7 @@ in beiden Faellen woanders/als andere Identitaet passieren muss).
    Einstellungen) kann auch fuer Entra-joined-Rechner mit Cloud Kerberos
    Trust und einer VPN-/Private-Access-Verbindung dazu fuehren, dass direkter
    PKI-Zugriff besteht - in dem Fall (sofern kein separates Konto involviert
-   ist) einfach in Tab "Plan A" wechseln, statt den manuellen RDP-Ablauf zu
+   ist) einfach in Schritt 1 "Plan A" waehlen, statt den manuellen RDP-Ablauf zu
    durchlaufen.
 2. **Virtuelle Smartcard erstellen**: wie bei Plan A - im eigenen
    Benutzerkontext, unabhaengig vom Zielkonto.
@@ -173,24 +181,37 @@ in beiden Faellen woanders/als andere Identitaet passieren muss).
 
 ### Einstellungen
 
+Die Einstellungen sind ein ueber die Kopfleiste (Knopf **"Einstellungen"**)
+jederzeit erreichbarer Dialog. Die Eingabefelder liegen in einem scrollbaren
+Bereich; die Zeile mit **"Speichern"**/**"Schliessen"** ist unten fest verankert
+und daher immer sichtbar, unabhaengig von der Fenstergroesse.
+
 Der Button **"Vorhandene virtuelle Smartcards anzeigen..."** oeffnet einen
-Dialog (Master-Detail: Lesegeraete oben, Zertifikate des ausgewaehlten
+weiteren Dialog (Master-Detail: Lesegeraete oben, Zertifikate des ausgewaehlten
 Lesegeraets unten, beide als Listen mit Spalten statt Baumtext) mit allen
 auf diesem Rechner erkannten Smartcard-Lesegeraeten (inkl. virtueller
 TPM-Smartcards, da `tpmvscmgr` selbst keinen "list"-Befehl kennt - die
 Erkennung laeuft ueber die PnP-Geraeteklasse fuer Smartcard-Lesegeraete).
 Lesegeraet auswaehlen zeigt die zugehoerigen Zertifikate aus dem
-Benutzer-Zertifikatsspeicher (Subject, Gueltigkeit, Thumbprint, Provider).
-Zertifikate, die zwar als smartcard-gebunden erkannt aber keinem
-Lesegeraet eindeutig zugeordnet werden konnten, sowie alle sonstigen
-Zertifikate mit privatem Schluessel (zur Fehlersuche, falls die
-Smartcard-Erkennung im Einzelfall nicht greift), erscheinen als eigene
-Eintraege in der Lesegeraete-Liste.
+Benutzer-Zertifikatsspeicher (Subject, Gueltigkeit, Thumbprint, Provider). Die
+Zuordnung Zertifikat -> Lesegeraet erfolgt ueber den PC/SC-Lesegeraetenamen
+("Microsoft Virtual Smart Card N"): das Zertifikat meldet ihn ueber die
+NCrypt-Property `SmartCardReader`, das PnP-Lesegeraet traegt ihn (ueber seine
+`DEVPKEY_Device_Children`-Kennung) als PcscName - so landet jedes Zertifikat
+unter seinem konkreten Lesegeraet. Der Scan kann durch den Timeout-Schutz gegen
+haengende CNG-Schluesselzugriffe (verwaiste Verweise auf bereits geloeschte
+Karten) einige Sekunden dauern; solange laeuft ein Wartecursor.
+
+Zertifikate, die zwar als smartcard-gebunden erkannt, aber keinem vorhandenen
+Lesegeraet zugeordnet werden konnten (z.B. Verweis auf eine bereits geloeschte
+Karte), sowie alle sonstigen Zertifikate mit privatem Schluessel (zur
+Fehlersuche), erscheinen als eigene Sammel-Eintraege in der Lesegeraete-Liste -
+diese tauchen nur auf, wenn es entsprechende Zertifikate gibt.
 
 **"Ausgewaehlte Smartcard loeschen..."** ruft `tpmvscmgr destroy` fuer das
 ausgewaehlte Lesegeraet auf (nach Sicherheitsabfrage) - unwiderruflich,
 alle darauf gespeicherten Schluessel gehen dabei verloren. Nur fuer echte
-Lesegeraete verfuegbar, nicht fuer die beiden Sammel-Eintraege.
+Lesegeraete verfuegbar, nicht fuer die Sammel-Eintraege.
 
 Kompaktes Grid-Layout (Label neben statt ueber dem Feld). Leere Felder zeigen
 einen grauen Hinweistext (z.B. `z.B. ca01.contoso.local\Contoso-Issuing-CA`),
@@ -242,7 +263,7 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
    Server -> CER-Text zurueckkopieren -> Schritt 6 per Text abschliessen).
 3. Fehlerfaelle pruefen: falsches Zertifikatstemplate, nicht erreichbare CA,
    abgelehnter UAC-Prompt, TPM nicht bereit.
-4. Log-Export im Tab "Log / Diagnose" pruefen.
+4. Log-Export im Bereich "Log / Diagnose" (unten im Hauptfenster) pruefen.
 
 ## Bekannte Einschraenkungen (v1)
 
