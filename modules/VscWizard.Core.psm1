@@ -387,82 +387,90 @@ function Get-RecentVscEventLog {
 }
 
 function New-VirtualSmartCard {
+    # Erstellt eine virtuelle Smartcard ueber die COM-API (ITpmVirtualSmartCardManager)
+    # statt ueber tpmvscmgr.exe. Vorteil: die PIN wird in einem echten, maskierten
+    # GUI-Dialog abgefragt und der API direkt uebergeben - kein rohes Konsolenfenster,
+    # keine ins Leere laufende PIN-Abfrage, und ein echter HRESULT als Fehlersignal.
+    #
+    # Die COM-Aufrufe erfordern lokale Administratorrechte UND muessen in kompiliertem
+    # C# erfolgen (PowerShell kann diese reinen IUnknown-Interfaces nicht aufrufen).
+    # Beides erledigt der eleviert gestartete Helfer VscWizard.CreateHelper.ps1, der
+    # dort auch den PIN-Dialog zeigt (die PIN verlaesst also nie den elevierten Prozess).
+    #
+    # Der Helfer wird nach C:\Users\Public kopiert und von dort gestartet: bei einer
+    # Ueber-die-Schulter-Elevation (der angemeldete Benutzer ist kein Admin, es wird
+    # ein separates Admin-Konto verwendet) kann dieses Admin-Konto das Benutzerprofil
+    # des angemeldeten Benutzers (z.B. OneDrive-Ordner) nicht zwangslaeufig lesen -
+    # C:\Users\Public ist fuer beide Konten zugaenglich. Aus demselben Grund liegt auch
+    # die Ergebnisdatei dort.
     param(
         [Parameter(Mandatory)][string]$CardName,
-        # Mindest-PIN-Laenge fuer die virtuelle Smartcard. tpmvscmgr laesst technisch
-        # minimal 4 zu; 6 ist ein gaengiger Kompromiss zwischen Bedienbarkeit und
-        # Sicherheit (Windows-Smartcard-Standarddefault ist 8).
-        [int]$PinPolicyMinLength = 6
+        [int]$PinPolicyMinLength = 8
     )
 
-    $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
-    $vscArgs = @('create', '/name', $CardName, '/AdminKey', 'RANDOM', '/PIN', 'PROMPT', '/PINPolicyMinLength', $PinPolicyMinLength, '/generate')
-
-    if (Test-IsElevated) {
-        $result = Invoke-ExternalCommand -FilePath $tpmvscmgr -ArgumentList $vscArgs
-        return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = $result.StdOut; Success = $result.Success; Message = $null }
+    $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.ps1'
+    if (-not (Test-Path $helperSource)) {
+        $msg = "Helfer-Skript nicht gefunden: $helperSource"
+        Write-WizardLog -Message $msg -Level Error
+        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
     }
 
-    # tpmvscmgr benoetigt lokale Administratorrechte - nur fuer diesen Schritt wird
-    # gezielt ein erhoehter Prozess gestartet, der Rest der App laeuft im normalen
-    # Benutzerkontext (wichtig fuer die spaetere Zertifikatsbindung).
-    #
-    # WICHTIG: tpmvscmgr fragt die PIN interaktiv UEBER DIE KONSOLE ab (kein GUI-
-    # Dialog!). Stdout/Stderr duerfen deshalb NICHT umgeleitet werden - sonst laeuft
-    # die Prompt-Anzeige ins Leere und der Prozess haengt auf eine Eingabe, die nie
-    # ankommt (leeres/unveraendertes Konsolenfenster). tpmvscmgr wird deshalb direkt
-    # elevated gestartet (kein umschliessender powershell-Wrapper), damit es sein
-    # eigenes, voll interaktives Konsolenfenster bekommt.
-    Write-WizardLog -Message "Starte erhoehten Prozess (eigenes Konsolenfenster, PIN-Eingabe dort erforderlich): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
+    $publicDir = Join-Path $env:SystemDrive 'Users\Public'
+    $token = [guid]::NewGuid().ToString('N')
+    $helperCopy = Join-Path $publicDir "vscwizard-createhelper-$token.ps1"
+    $resultPath = Join-Path $publicDir "vscwizard-createresult-$token.txt"
 
-    $startTime = Get-Date
     try {
-        $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait -ErrorAction Stop
+        Copy-Item -Path $helperSource -Destination $helperCopy -Force -ErrorAction Stop
     } catch {
-        # Haeufigster Fall: UAC abgebrochen ("Der Vorgang wurde durch den Benutzer
-        # abgebrochen"). Ohne dieses catch fluege die Exception ungeloggt bis in die
-        # WinForms-Ereignisschleife - genau das "Log nicht aussagekraeftig"-Symptom.
+        $msg = "Helfer konnte nicht nach $publicDir kopiert werden: $($_.Exception.Message)"
+        Write-WizardLog -Message $msg -Level Error
+        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+    }
+
+    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperCopy,
+        '-CardName', $CardName, '-MinPinLength', $PinPolicyMinLength, '-ResultPath', $resultPath)
+
+    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' ueber die COM-API (elevierter Helfer, PIN-Dialog dort)." -Level Command
+
+    try {
+        if (Test-IsElevated) {
+            Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Wait -WindowStyle Hidden -ErrorAction Stop
+        } else {
+            # -Verb RunAs fordert die Elevation an (UAC); der Helfer laeuft dann als
+            # Admin und zeigt seinen eigenen PIN-Dialog.
+            Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Verb RunAs -Wait -ErrorAction Stop
+        }
+    } catch {
+        Remove-Item $helperCopy -ErrorAction SilentlyContinue
         $msg = "Erhoehter Prozess konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
         Write-WizardLog -Message $msg -Level Error
-        return [pscustomobject]@{ ExitCode = $null; Output = $null; Success = $false; Message = $msg }
+        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
     }
 
-    # ExitCode kann bei RunAs in Einzelfaellen $null sein - dann als Erfolgssignal
-    # zusaetzlich pruefen, ob die Karte jetzt tatsaechlich existiert.
-    $exitCode = $proc.ExitCode
-    $cardExists = [bool](@(Get-VirtualSmartCardReaders) | Where-Object { $_.FriendlyName -eq $CardName })
-    $success = ($exitCode -eq 0) -or ($null -eq $exitCode -and $cardExists)
-
-    if ($success) {
-        Write-WizardLog -Message "tpmvscmgr create erfolgreich (Exit-Code $exitCode, Karte '$CardName' vorhanden=$cardExists)." -Level Success
-        return [pscustomobject]@{ ExitCode = $exitCode; Output = $null; Success = $true; Message = $null }
-    }
-
-    # Fehlerfall: Exit-Code (dezimal + hex) protokollieren und die eigentliche Ursache
-    # aus dem Event-Log nachreichen, da tpmvscmgr sie nur auf der Konsole ausgibt.
-    $hex = if ($null -ne $exitCode) { '0x{0:X8}' -f $exitCode } else { '(kein Exit-Code)' }
-    Write-WizardLog -Message "tpmvscmgr create fehlgeschlagen. Exit-Code: $exitCode ($hex). Karte '$CardName' vorhanden=$cardExists." -Level Error
-
-    $reason = $null
-    $events = Get-RecentVscEventLog -Since $startTime
-    $notable = @($events | Where-Object { $_.LevelDisplayName -in @('Fehler', 'Error', 'Warnung', 'Warning', 'Kritisch', 'Critical') })
-    if ($notable.Count -eq 0) { $notable = $events }   # sonst wenigstens die Info-Eintraege
-    if ($notable.Count -gt 0) {
-        Write-WizardLog -Message "Event-Log (SmartCard-TPM-VCard-Module) zum Zeitpunkt des Versuchs:" -Level Info
-        foreach ($ev in $notable) {
-            $line = "  [$($ev.TimeCreated.ToString('HH:mm:ss'))] [$($ev.LevelDisplayName)] (Id $($ev.Id)) $(($ev.Message -replace '\s+', ' ').Trim())"
-            Write-WizardLog -Message $line -Level Output
+    # Ergebnis auslesen (key=value je Zeile).
+    $res = @{ Success = 'False'; HResult = ''; InstanceId = ''; Message = '' }
+    if (Test-Path $resultPath) {
+        foreach ($line in (Get-Content -Path $resultPath -ErrorAction SilentlyContinue)) {
+            $idx = $line.IndexOf('=')
+            if ($idx -gt 0) { $res[$line.Substring(0, $idx)] = $line.Substring($idx + 1) }
         }
-        $reason = ($notable | Select-Object -Last 1).Message -replace '\s+', ' '
     } else {
-        Write-WizardLog -Message "Kein passender Event-Log-Eintrag gefunden. Haeufige Ursachen: PIN zu kurz/entspricht nicht der Richtlinie, PIN-Bestaetigung stimmt nicht ueberein, TPM nicht bereit, oder der Vorgang wurde im Konsolenfenster abgebrochen." -Level Info
+        $res.Message = 'Kein Ergebnis vom elevierten Helfer erhalten (Prozess evtl. abgebrochen).'
     }
+    Remove-Item $helperCopy, $resultPath -ErrorAction SilentlyContinue
 
-    [pscustomobject]@{
-        ExitCode = $exitCode
-        Output   = $null
-        Success  = $false
-        Message  = if ($reason) { $reason.Trim() } else { "Exit-Code $exitCode ($hex)" }
+    $success = ($res.Success -eq 'True')
+    if ($success) {
+        Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId))." -Level Success
+    } else {
+        Write-WizardLog -Message "Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" })" -Level Error
+    }
+    return [pscustomobject]@{
+        Success    = $success
+        InstanceId = $res.InstanceId
+        HResult    = $res.HResult
+        Message    = $res.Message
     }
 }
 
