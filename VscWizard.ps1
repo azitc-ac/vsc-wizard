@@ -1227,8 +1227,11 @@ function Show-VscInventoryDialog {
         [void]$lvReaders.Items.Add($readerItem)
     }
 
-    $readerNames = @($readers | ForEach-Object { $_.FriendlyName })
-    $unmatchedSmartCardCerts = @($certs | Where-Object { $_.IsSmartCard -and (-not $_.Reader -or ($readerNames -notcontains $_.Reader)) })
+    # Zuordnung Zertifikat -> Lesegeraet ueber den PC/SC-Namen ("Microsoft Virtual
+    # Smart Card N"): das Zertifikat meldet ihn als .Reader, das Lesegeraet traegt ihn
+    # als .PcscName (siehe Get-VirtualSmartCardReaders / Get-SmartCardCngProviderInfo).
+    $readerPcscNames = @($readers | ForEach-Object { $_.PcscName } | Where-Object { $_ })
+    $unmatchedSmartCardCerts = @($certs | Where-Object { $_.IsSmartCard -and (-not $_.Reader -or ($readerPcscNames -notcontains $_.Reader)) })
     if ($unmatchedSmartCardCerts.Count -gt 0) {
         $markerItem = New-Object System.Windows.Forms.ListViewItem("Weitere smartcard-gebundene Zertifikate (Lesegeraet nicht zuordenbar, $($unmatchedSmartCardCerts.Count))")
         $markerItem.Tag = $unmatchedSmartCardMarker
@@ -1298,7 +1301,7 @@ function Show-VscInventoryDialog {
         } elseif ($selectedTag) {
             $btnDeleteReader.Enabled = $true
             $lblCertsHeader.Text = "Zertifikate auf: $($selectedTag.FriendlyName)"
-            $matching = @($certs | Where-Object { $_.Reader -eq $selectedTag.FriendlyName })
+            $matching = @($certs | Where-Object { $_.Reader -and $selectedTag.PcscName -and $_.Reader -eq $selectedTag.PcscName })
         } else {
             $btnDeleteReader.Enabled = $false
         }

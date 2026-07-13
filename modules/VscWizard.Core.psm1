@@ -405,9 +405,35 @@ function Get-VirtualSmartCardReaders {
     # ueber die PnP-Geraeteklasse fuer Smartcard-Lesegeraete erkannt, unter der sich
     # auch TPM Virtual Smart Cards (mit dem bei der Erstellung vergebenen Namen als
     # FriendlyName) einordnen.
+    #
+    # PcscName: der PC/SC-Lesegeraetename ("Microsoft Virtual Smart Card N"), unter dem
+    # ein Zertifikat seinen Schluessel meldet (CNG-Property "SmartCardReader", siehe
+    # Get-SmartCardCngProviderInfo). Der PnP-FriendlyName (der bei der Erstellung
+    # vergebene VSC-Name, z.B. "VSC-T0") und dieser PC/SC-Name teilen keinen gemeinsamen
+    # Text - die Verknuepfung steht aber deterministisch in der PnP-Child-/BusRelations-
+    # Eigenschaft des Lesegeraets als Token "Microsoft_Virtual_Smart_Card_N" (die
+    # SCFILTER-Kindknoten-Kennung). Darueber laesst sich jedes Zertifikat exakt seinem
+    # Lesegeraet zuordnen, statt es in den Sammel-Eintrag "nicht zuordenbar" zu werfen.
     try {
         $readers = Get-PnpDevice -Class SmartCardReader -PresentOnly -ErrorAction Stop
-        return @($readers | Select-Object -Property FriendlyName, InstanceId, Status)
+        return @($readers | ForEach-Object {
+            $pcscName = $null
+            try {
+                $children = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_Children' -ErrorAction Stop).Data
+                foreach ($child in @($children)) {
+                    if ("$child" -match 'Microsoft_Virtual_Smart_Card_(\d+)') {
+                        $pcscName = "Microsoft Virtual Smart Card $($Matches[1])"
+                        break
+                    }
+                }
+            } catch { }
+            [pscustomobject]@{
+                FriendlyName = $_.FriendlyName
+                InstanceId   = $_.InstanceId
+                Status       = $_.Status
+                PcscName     = $pcscName
+            }
+        })
     } catch {
         return @()
     }
@@ -459,13 +485,12 @@ function Get-SmartCardCertificateInfo {
     #      als statischer Aufruf erfolgen (siehe unten) - das war der eigentliche
     #      Grund, warum auf echten CNG-Zertifikaten (der Normalfall auf aktuellen
     #      Windows-Versionen) bislang GAR KEINE Zertifikate erkannt wurden.
-    #      Bekannte Einschraenkung: fuer CNG/KSP-Schluessel liefert dieser Weg zwar
-    #      den Provider, aber KEIN Reader (NCryptGetProperty mit "Smart Card Reader"
-    #      liefert bei der hier verwendeten Virtual-Smart-Card-KSP NTE_NOT_SUPPORTED,
-    #      auf echter Hardware getestet) - solche Zertifikate werden deshalb korrekt
-    #      als smartcard-gebunden erkannt, aber im Inventar-Dialog unter "weitere
-    #      smartcard-gebundene Zertifikate (Lesegeraet nicht zuordenbar)" einsortiert
-    #      statt unter ihrem konkreten Lesegeraet.
+    #      Reader-Zuordnung fuer CNG/KSP-Schluessel: ueber die NCrypt-Property
+    #      "SmartCardReader" (der korrekte Name OHNE Leerzeichen - "Smart Card Reader"
+    #      MIT Leerzeichen liefert NTE_NOT_SUPPORTED, das war urspruenglich der
+    #      Trugschluss "Reader nicht ermittelbar"). Liefert den PC/SC-Namen
+    #      ("Microsoft Virtual Smart Card N"), der ueber Get-VirtualSmartCardReaders
+    #      (PcscName) dem PnP-Lesegeraet zugeordnet wird.
     # HardwareDevice (falls ermittelbar) ist ein zusaetzliches, von der Provider-Namen-
     # Heuristik unabhaengiges Signal.
     param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
@@ -535,8 +560,16 @@ foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.Power
 $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction Stop
 $rsaKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
 if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
-    if ($rsaKey.Key -and $rsaKey.Key.Provider) {
-        Write-Output "Provider=$($rsaKey.Key.Provider.Provider)"
+    $k = $rsaKey.Key
+    if ($k -and $k.Provider) {
+        Write-Output "Provider=$($k.Provider.Provider)"
+        # NCrypt-Property "SmartCardReader" (ohne Leerzeichen!) - PC/SC-Lesegeraetename.
+        # Fehlt bei Nicht-Smartcard-CNG-Schluesseln; dann still ueberspringen.
+        try {
+            $prop = $k.GetProperty('SmartCardReader', [System.Security.Cryptography.CngPropertyOptions]::None)
+            $readerName = [System.Text.Encoding]::Unicode.GetString($prop.GetValue()).TrimEnd([char]0)
+            if ($readerName) { Write-Output "Reader=$readerName" }
+        } catch { }
     }
 } elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
     Write-Output "Provider=$($rsaKey.CspKeyContainerInfo.ProviderName)"
