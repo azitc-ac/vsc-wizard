@@ -101,7 +101,7 @@ function Find-ReachableCA {
         $rootPath = if ($Server) { "LDAP://$Server/RootDSE" } else { 'LDAP://RootDSE' }
         $rootDse = New-Object System.DirectoryServices.DirectoryEntry($rootPath)
         $configNC = $rootDse.Properties['configurationNamingContext'].Value
-        if (-not $configNC) { return @() }
+        if (-not $configNC) { return , @() }
 
         $casDn = "CN=Enrollment Services,CN=Public Key Services,CN=Services,$configNC"
         $casPath = if ($Server) { "LDAP://$Server/$casDn" } else { "LDAP://$casDn" }
@@ -110,7 +110,13 @@ function Find-ReachableCA {
         $searcher.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
         [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'dNSHostName', 'certificateTemplates'))
 
+        # Attribute defensiv lesen: je nach Bind-Ziel koennen Ergebnisse ohne die
+        # erwarteten Attribute auftauchen (z.B. bei versehentlichem Bind gegen eine
+        # fremde/oeffentliche Domaene) - ungeschuetztes ['cn'][0] wirft dann
+        # "Cannot index into a null array".
         $cas = foreach ($r in $searcher.FindAll()) {
+            if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
+            if (-not $r.Properties['dNSHostName'] -or $r.Properties['dNSHostName'].Count -eq 0) { continue }
             $name = $r.Properties['cn'][0]
             $srv = $r.Properties['dNSHostName'][0]
             [pscustomobject]@{ Name = $name; ConfigString = "$srv\$name"; Templates = @($r.Properties['certificateTemplates']) }
@@ -120,10 +126,15 @@ function Find-ReachableCA {
             $ping = Invoke-Tool -FilePath 'certutil.exe' -ArgumentList @('-ping', '-config', $ca.ConfigString) -TimeoutSeconds $TimeoutSeconds
             if ($ping.Success) { $ca }
         }
-        return @($reachable)
+        # Als Array-Objekt (Komma-Operator) zurueckgeben: PowerShell packt ein
+        # einelementiges @(...) beim Funktionsreturn wieder aus, und ein einzelnes
+        # PSCustomObject hat in Windows PowerShell 5.1 KEINE synthetische
+        # .Count-Eigenschaft (erst ab PowerShell 6.1) - der Aufrufer saehe dann
+        # trotz erfolgreichem Fund "Count = null" und wuerfe das Ergebnis weg.
+        return , @($reachable)
     } catch {
         Write-Status "LDAP-Erkennung fehlgeschlagen: $($_.Exception.Message)"
-        return @()
+        return , @()
     }
 }
 
@@ -255,7 +266,9 @@ $btnDiscover.Add_Click({
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     $form.Refresh()
 
-    $cas = Find-ReachableCA -Server $txtDomain.Text.Trim()
+    # @() am Aufrufer als zweite Absicherung gegen das Array-Unwrapping (s. Kommentar
+    # in Find-ReachableCA).
+    $cas = @(Find-ReachableCA -Server $txtDomain.Text.Trim())
     if ($cas.Count -gt 0) {
         $txtCA.Text = $cas[0].ConfigString
         $allTemplates = @($cas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
