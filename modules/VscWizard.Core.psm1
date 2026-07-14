@@ -732,6 +732,15 @@ _continue_ = "upn=$Upn&"
 "@
     }
 
+    # ProviderType/KeySpec sind reine CAPI-Konstrukte (Legacy-CSPs wie der
+    # "Microsoft Base Smart Card Crypto Provider"). Fuer einen CNG-KSP (z.B.
+    # "Microsoft Smart Card Key Storage Provider") duerfen sie NICHT gesetzt
+    # werden, sonst lehnt certreq die Kombination ab - dort waehlt certreq den
+    # CNG-Pfad allein anhand des Provider-Namens. Heuristik: "Key Storage
+    # Provider" im Namen = KSP.
+    $isKsp = $CspName -match 'Key Storage Provider'
+    $capiBlock = if ($isKsp) { '' } else { "KeySpec = 1`r`nProviderType = 1`r`n" }
+
     # Hinweis: KeyLength/KeyUsage/HashAlgorithm sind gaengige Defaults fuer
     # Smartcard-Logon-Zertifikate und koennen bei Bedarf an das eigene
     # Zertifikatstemplate angepasst werden.
@@ -743,12 +752,10 @@ Signature="`$Windows NT`$"
 Subject = "$Subject"
 Exportable = FALSE
 KeyLength = 2048
-KeySpec = 1
 KeyUsage = 0xA0
 MachineKeySet = FALSE
 ProviderName = "$CspName"
-ProviderType = 1
-RequestType = PKCS10
+$($capiBlock)RequestType = PKCS10
 HashAlgorithm = SHA256
 $sanBlock
 "@

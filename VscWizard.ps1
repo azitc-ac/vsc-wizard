@@ -1489,9 +1489,18 @@ function Show-SettingsDialog {
     Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
     Add-SettingsRow -LabelText 'RDP-Zielserver fuer Plan B:' -InputControl $txtCfgJump
 
-    $txtCfgCsp = New-Object System.Windows.Forms.TextBox
+    # Editierbares Dropdown mit den beiden Standard-Smartcard-Providern: der Legacy-CSP
+    # (CAPI, fuer V1/V2-Templates) und der CNG-KSP (fuer V3/V4-Templates). Die
+    # INF-Erzeugung (New-EnrollmentInfFile) erkennt den KSP am Namen und laesst dann
+    # die CAPI-Direktiven ProviderType/KeySpec weg.
+    $txtCfgCsp = New-Object System.Windows.Forms.ComboBox
+    $txtCfgCsp.DropDownStyle = 'DropDown'
+    [void]$txtCfgCsp.Items.AddRange(@(
+        'Microsoft Base Smart Card Crypto Provider',
+        'Microsoft Smart Card Key Storage Provider'
+    ))
     $txtCfgCsp.Text = $config.CspName
-    Add-SettingsRow -LabelText 'Crypto Service Provider (CSP):' -InputControl $txtCfgCsp
+    Add-SettingsRow -LabelText 'Provider (CSP/KSP, muss zum Template passen):' -InputControl $txtCfgCsp
 
     $txtCfgDomain = New-Object System.Windows.Forms.TextBox
     $discoveryDomainDefault = if ($config.DiscoveryDomain) { $config.DiscoveryDomain } else { Get-DiscoveryDomainGuess }

@@ -195,6 +195,17 @@ jederzeit erreichbarer Dialog. Die Eingabefelder liegen in einem scrollbaren
 Bereich; die Zeile mit **"Speichern"**/**"Schliessen"** ist unten fest verankert
 und daher immer sichtbar, unabhaengig von der Fenstergroesse.
 
+Das **Provider-Feld** (CSP/KSP) ist ein editierbares Dropdown mit den beiden
+Standard-Smartcard-Providern und muss zum gewaehlten Zertifikatstemplate
+passen: der Legacy-CSP "Microsoft Base Smart Card Crypto Provider" (CAPI,
+Template-Schema V1/V2) oder der CNG-KSP "Microsoft Smart Card Key Storage
+Provider" (Template-Schema V3/V4 - empfohlen, sofern keine reine
+CAPI-Altanwendung das Zertifikat nutzen muss; fuer die Smartcard-Anmeldung
+selbst sind beide gleichwertig). Die INF-Erzeugung erkennt einen KSP am
+Namensbestandteil "Key Storage Provider" und laesst dann die reinen
+CAPI-Direktiven (`ProviderType`, `KeySpec`) weg, die ein KSP nicht
+akzeptiert.
+
 Der Button **"Vorhandene virtuelle Smartcards anzeigen..."** oeffnet einen
 weiteren Dialog (Master-Detail: Lesegeraete oben, Zertifikate des ausgewaehlten
 Lesegeraets unten, beide als Listen mit Spalten statt Baumtext) mit allen
