@@ -86,6 +86,9 @@ Kindprozess, der die CNG-Schluesselinfos ermittelt.
 - `modules/VscWizard.Core.psm1` - Nicht-GUI-Logik: Logging, Prozessausfuehrung,
   Erkennung von Domaenen-/TPM-Status, Erstellung der virtuellen Smartcard,
   CSR-Erstellung/-Einreichung/-Abschluss ueber `certreq`
+- `modules/VscWizard.CreateHelper.cs` - C#-Quellcode des elevierten
+  Erstellungshelfers (COM-Interop + PIN-Dialog); wird zur Laufzeit per
+  `csc.exe` zu einer fensterlosen winexe kompiliert, siehe "Ablauf im Detail"
 - `config.psd1` - Konfiguration (CA, Template, RDP-Zielserver, etc.)
 - `VscWizard.bat` - Launcher
 - `VscWizard.Submit.ps1` - eigenstaendiger Einreichungshelfer fuer die RDP-Sitzung
@@ -126,10 +129,20 @@ laufen wuerde.
 1. **Status**: Domaenen-Status, TPM-Status und angemeldeter Benutzer werden
    automatisch geprueft.
 2. **Virtuelle Smartcard erstellen**: laeuft ueber die COM-API
-   (`ITpmVirtualSmartCardManager`) in einem gezielt elevierten Helfer
-   (`modules/VscWizard.CreateHelper.ps1`), der einen echten maskierten
-   PIN-Dialog zeigt (PIN + Bestaetigung; die PIN verlaesst den elevierten
-   Prozess nie). Die PIN-Mindestlaenge betraegt 6 Zeichen und wird ueber
+   (`ITpmVirtualSmartCardManager`) in einem gezielt elevierten Helfer.
+   Dessen Quellcode liegt als `modules/VscWizard.CreateHelper.cs` vor und
+   wird zur Laufzeit mit dem `csc.exe` des .NET Framework zu einer
+   `/target:winexe`-Anwendung kompiliert: eine Fenster-Exe hat **kein
+   Konsolenfenster** - es erscheint ausschliesslich der echte maskierte
+   PIN-Dialog (PIN + Bestaetigung; die PIN verlaesst den elevierten Prozess
+   nie). csc erzeugt architekturneutrales IL (AnyCPU), das beim Start nativ
+   laeuft (auf ARM64 als ARM64-Prozess) - der native TPM-COM-Server ist
+   damit unabhaengig vom kompilierenden Prozess immer erreichbar. Nach der
+   Erstellung ermittelt der Wizard den PC/SC-Namen der neuen Karte
+   ("Microsoft Virtual Smart Card N") und zeigt ihn an - unter DIESEM Namen
+   (nicht dem vergebenen Kartennamen!) erscheint die Karte in
+   Windows-Kartenauswahl-Dialogen, z.B. bei der Zertifikatsanforderung.
+   Die PIN-Mindestlaenge betraegt 6 Zeichen und wird ueber
    `ITpmVirtualSmartCardManager2::CreateVirtualSmartCardWithPinPolicy` mit
    einer serialisierten PIN-Policy (dokumentiertes MS-TPMVSC-Format
    "PinPolicySerialization": 8 Little-Endian-DWORDs - Reserved=1, minLength,

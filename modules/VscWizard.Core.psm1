@@ -391,6 +391,16 @@ function Get-RecentVscEventLog {
     return @($entries | Sort-Object TimeCreated)
 }
 
+function Get-FrameworkCscPath {
+    # csc.exe des .NET Framework (v4.x) - auf jedem Windows 10/11 vorhanden.
+    # Framework64 bevorzugt; das erzeugte AnyCPU-IL ist ohnehin architekturneutral.
+    foreach ($frameworkDir in @('Framework64', 'Framework')) {
+        $csc = Join-Path $env:WINDIR "Microsoft.NET\$frameworkDir\v4.0.30319\csc.exe"
+        if (Test-Path $csc) { return $csc }
+    }
+    return $null
+}
+
 function New-VirtualSmartCard {
     # Erstellt eine virtuelle Smartcard ueber die COM-API (ITpmVirtualSmartCardManager)
     # statt ueber tpmvscmgr.exe. Vorteil: die PIN wird in einem echten, maskierten
@@ -399,15 +409,19 @@ function New-VirtualSmartCard {
     #
     # Die COM-Aufrufe erfordern lokale Administratorrechte UND muessen in kompiliertem
     # C# erfolgen (PowerShell kann diese reinen IUnknown-Interfaces nicht aufrufen).
-    # Beides erledigt der eleviert gestartete Helfer VscWizard.CreateHelper.ps1, der
-    # dort auch den PIN-Dialog zeigt (die PIN verlaesst also nie den elevierten Prozess).
+    # Der Helfer (VscWizard.CreateHelper.cs) wird dafuer zur Laufzeit mit dem csc.exe
+    # des .NET Framework zu einer /target:winexe-Anwendung kompiliert und eleviert
+    # gestartet: eine Fenster-Exe hat KEIN Konsolenfenster - es erscheint
+    # ausschliesslich der PIN-Dialog (die PIN verlaesst den elevierten Prozess nie).
+    # csc erzeugt architekturneutrales IL (AnyCPU), das beim Start nativ laeuft
+    # (auf ARM64 als ARM64-Prozess) - der native TPM-COM-Server ist damit immer
+    # erreichbar, unabhaengig davon, aus welchem Prozess kompiliert wurde.
     #
-    # Der Helfer wird nach C:\Users\Public kopiert und von dort gestartet: bei einer
-    # Ueber-die-Schulter-Elevation (der angemeldete Benutzer ist kein Admin, es wird
-    # ein separates Admin-Konto verwendet) kann dieses Admin-Konto das Benutzerprofil
-    # des angemeldeten Benutzers (z.B. OneDrive-Ordner) nicht zwangslaeufig lesen -
-    # C:\Users\Public ist fuer beide Konten zugaenglich. Aus demselben Grund liegt auch
-    # die Ergebnisdatei dort.
+    # Exe und Ergebnisdatei liegen in C:\Users\Public: bei einer Ueber-die-Schulter-
+    # Elevation (der angemeldete Benutzer ist kein Admin, es wird ein separates
+    # Admin-Konto verwendet) kann dieses Admin-Konto das Benutzerprofil des
+    # angemeldeten Benutzers (z.B. OneDrive-Ordner) nicht zwangslaeufig lesen -
+    # C:\Users\Public ist fuer beide Konten zugaenglich.
     param(
         [Parameter(Mandatory)][string]$CardName,
         # Wird ueber ITpmVirtualSmartCardManager2::CreateVirtualSmartCardWithPinPolicy
@@ -416,41 +430,53 @@ function New-VirtualSmartCard {
         [int]$PinPolicyMinLength = 6
     )
 
-    $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.ps1'
+    $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
     if (-not (Test-Path $helperSource)) {
-        $msg = "Helfer-Skript nicht gefunden: $helperSource"
+        $msg = "Helfer-Quelldatei nicht gefunden: $helperSource"
+        Write-WizardLog -Message $msg -Level Error
+        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+    }
+
+    $csc = Get-FrameworkCscPath
+    if (-not $csc) {
+        $msg = 'csc.exe des .NET Framework nicht gefunden (Microsoft.NET\Framework*\v4.0.30319).'
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
     }
 
     $publicDir = Join-Path $env:SystemDrive 'Users\Public'
     $token = [guid]::NewGuid().ToString('N')
-    $helperCopy = Join-Path $publicDir "vscwizard-createhelper-$token.ps1"
+    $helperExe = Join-Path $publicDir "vscwizard-createhelper-$token.exe"
     $resultPath = Join-Path $publicDir "vscwizard-createresult-$token.txt"
 
-    try {
-        Copy-Item -Path $helperSource -Destination $helperCopy -Force -ErrorAction Stop
-    } catch {
-        $msg = "Helfer konnte nicht nach $publicDir kopiert werden: $($_.Exception.Message)"
+    $compile = Invoke-ExternalCommand -FilePath $csc -ArgumentList @(
+        '/nologo', '/target:winexe', "/out:$helperExe",
+        '/r:System.dll', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
+        $helperSource) -TimeoutSeconds 120 -Silent
+    if (-not $compile.Success -or -not (Test-Path $helperExe)) {
+        $detail = "$($compile.StdOut) $($compile.StdErr)".Trim()
+        $msg = "Helfer konnte nicht kompiliert werden: $detail"
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
     }
 
-    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helperCopy,
-        '-CardName', $CardName, '-MinPinLength', $PinPolicyMinLength, '-ResultPath', $resultPath)
+    # Argumente als fertig quotierter String (Start-Process quotiert Array-Elemente
+    # in Windows PowerShell 5.1 NICHT selbst - Kartennamen mit Leerzeichen wuerden
+    # sonst zerfallen).
+    $exeArgs = "`"$CardName`" $PinPolicyMinLength `"$resultPath`""
 
-    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' ueber die COM-API (elevierter Helfer, PIN-Dialog dort)." -Level Command
+    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' ueber die COM-API (elevierter Helfer ohne Konsolenfenster, PIN-Dialog dort)." -Level Command
 
     try {
         if (Test-IsElevated) {
-            Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Wait -WindowStyle Hidden -ErrorAction Stop
+            Start-Process -FilePath $helperExe -ArgumentList $exeArgs -Wait -ErrorAction Stop
         } else {
             # -Verb RunAs fordert die Elevation an (UAC); der Helfer laeuft dann als
             # Admin und zeigt seinen eigenen PIN-Dialog.
-            Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Verb RunAs -Wait -ErrorAction Stop
+            Start-Process -FilePath $helperExe -ArgumentList $exeArgs -Verb RunAs -Wait -ErrorAction Stop
         }
     } catch {
-        Remove-Item $helperCopy -ErrorAction SilentlyContinue
+        Remove-Item $helperExe -ErrorAction SilentlyContinue
         $msg = "Erhoehter Prozess konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
@@ -466,12 +492,25 @@ function New-VirtualSmartCard {
     } else {
         $res.Message = 'Kein Ergebnis vom elevierten Helfer erhalten (Prozess evtl. abgebrochen).'
     }
-    Remove-Item $helperCopy, $resultPath -ErrorAction SilentlyContinue
+    Remove-Item $helperExe, $resultPath -ErrorAction SilentlyContinue
 
     $success = ($res.Success -eq 'True')
+    $pcscName = $null
     if ($success) {
+        # PC/SC-Namen der frisch erstellten Karte aufloesen ("Microsoft Virtual Smart
+        # Card N"): unter DIESEM Namen erscheint die Karte in Windows-Kartenauswahl-
+        # Dialogen (z.B. bei certreq -new) - der vergebene FriendlyName taucht dort
+        # NICHT auf, und die PC/SC-Nummer stimmt nicht mit der Nummer in der
+        # PnP-InstanceId ueberein. Kurz wiederholen, da die PnP-Registrierung nach
+        # der Erstellung einen Moment brauchen kann.
+        for ($attempt = 0; $attempt -lt 5 -and -not $pcscName; $attempt++) {
+            if ($attempt -gt 0) { Start-Sleep -Milliseconds 800 }
+            $reader = @(Get-VirtualSmartCardReaders) | Where-Object { $_.InstanceId -eq $res.InstanceId } | Select-Object -First 1
+            if ($reader -and $reader.PcscName) { $pcscName = $reader.PcscName }
+        }
         $policyNote = if ($res['PinPolicyUsed'] -eq 'True') { "PIN-Policy via Manager2, Mindestlaenge $PinPolicyMinLength" } else { 'Basis-API, PIN-Mindestlaenge 8' }
-        Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId); $policyNote)." -Level Success
+        $pcscNote = if ($pcscName) { "; erscheint in Windows-Kartendialogen als '$pcscName'" } else { '' }
+        Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId); $policyNote$pcscNote)." -Level Success
     } else {
         Write-WizardLog -Message "Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" })" -Level Error
     }
@@ -480,6 +519,7 @@ function New-VirtualSmartCard {
         InstanceId = $res.InstanceId
         HResult    = $res.HResult
         Message    = $res.Message
+        PcscName   = $pcscName
     }
 }
 
@@ -537,8 +577,10 @@ function Remove-VirtualSmartCard {
         return [pscustomobject]@{ ExitCode = $result.ExitCode; Success = $result.Success }
     }
 
-    Write-WizardLog -Message "Starte erhoehten Prozess (eigenes Konsolenfenster): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
-    $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait
+    # -WindowStyle Hidden: tpmvscmgr destroy braucht keine Interaktion - ShellExecute
+    # startet die Konsole mit SW_HIDE, es blitzt also nicht einmal ein Fenster auf.
+    Write-WizardLog -Message "Starte erhoehten Prozess (verstecktes Fenster): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
+    $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait -WindowStyle Hidden
 
     [pscustomobject]@{
         ExitCode = $proc.ExitCode

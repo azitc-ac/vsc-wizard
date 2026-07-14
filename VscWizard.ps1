@@ -442,8 +442,13 @@ $btnCreateVscA.Add_Click({
     if ($result.Success) {
         $script:PlanA_VscCreated = $true
         $script:PlanA_CardName = $txtCardNameA.Text
+        $script:PlanA_PcscName = $result.PcscName
         $lblVscResultA.ForeColor = [System.Drawing.Color]::ForestGreen
-        $lblVscResultA.Text = 'Virtuelle Smartcard wurde erfolgreich erstellt.'
+        $lblVscResultA.Text = if ($result.PcscName) {
+            "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der Zertifikatsanforderung) heisst sie: '$($result.PcscName)'."
+        } else {
+            'Virtuelle Smartcard wurde erfolgreich erstellt.'
+        }
     } else {
         $lblVscResultA.ForeColor = [System.Drawing.Color]::Firebrick
         $detail = if ($result.Message) { $result.Message } else { "Exit-Code $($result.ExitCode)" }
@@ -457,27 +462,30 @@ $pnlA3 = New-Object System.Windows.Forms.Panel
 $pnlA3.Dock = 'Fill'
 $pnlStepsA.Controls.Add($pnlA3)
 
-$lblTemplateA = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 20 -Width 300
+$lblCardHintA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 34
+$lblCardHintA.ForeColor = [System.Drawing.Color]::SteelBlue
+
+$lblTemplateA = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 58 -Width 300
 $cboTemplateA = New-Object System.Windows.Forms.ComboBox
-$cboTemplateA.Location = New-Object System.Drawing.Point(20, 46)
+$cboTemplateA.Location = New-Object System.Drawing.Point(20, 84)
 $cboTemplateA.Size = New-Object System.Drawing.Size(300, 24)
 $cboTemplateA.DropDownStyle = 'DropDownList'
 Set-TemplateComboItem -ComboBox $cboTemplateA -Template $config.Template
 
 $btnRequestCertA = New-Object System.Windows.Forms.Button
 $btnRequestCertA.Text = 'Zertifikat anfordern'
-$btnRequestCertA.Location = New-Object System.Drawing.Point(20, 84)
+$btnRequestCertA.Location = New-Object System.Drawing.Point(20, 122)
 $btnRequestCertA.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblCertResultA = New-WizardLabel -Text '' -X 20 -Y 128 -Width 780 -Height 50
+$lblCertResultA = New-WizardLabel -Text '' -X 20 -Y 166 -Width 780 -Height 50
 
 $btnRetrieveA = New-Object System.Windows.Forms.Button
 $btnRetrieveA.Text = 'Zertifikat abrufen (bei Genehmigung)'
-$btnRetrieveA.Location = New-Object System.Drawing.Point(20, 190)
+$btnRetrieveA.Location = New-Object System.Drawing.Point(20, 228)
 $btnRetrieveA.Size = New-Object System.Drawing.Size(260, 32)
 $btnRetrieveA.Visible = $false
 
-$pnlA3.Controls.AddRange(@($lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
+$pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
     if ($script:TargetAccount) {
@@ -622,6 +630,13 @@ function Show-PlanAStep {
 
     switch ($Index) {
         0 { Update-PlanAStatus }
+        2 {
+            # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
+            # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
+            $lblCardHintA.Text = if ($script:PlanA_PcscName) {
+                "Hinweis: im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanA_PcscName)' waehlen (das ist '$($script:PlanA_CardName)')."
+            } else { '' }
+        }
         3 { Update-PlanASummary }
     }
 }
@@ -718,8 +733,13 @@ $btnCreateVscB.Add_Click({
     if ($result.Success) {
         $script:PlanB_VscCreated = $true
         $script:PlanB_CardName = $txtCardNameB.Text
+        $script:PlanB_PcscName = $result.PcscName
         $lblVscResultB.ForeColor = [System.Drawing.Color]::ForestGreen
-        $lblVscResultB.Text = 'Virtuelle Smartcard wurde erfolgreich erstellt.'
+        $lblVscResultB.Text = if ($result.PcscName) {
+            "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der CSR-Erstellung) heisst sie: '$($result.PcscName)'."
+        } else {
+            'Virtuelle Smartcard wurde erfolgreich erstellt.'
+        }
     } else {
         $lblVscResultB.ForeColor = [System.Drawing.Color]::Firebrick
         $detail = if ($result.Message) { $result.Message } else { "Exit-Code $($result.ExitCode)" }
@@ -1105,6 +1125,15 @@ function Show-PlanBStep {
 
     switch ($Index) {
         0 { Update-PlanBStatus }
+        2 {
+            # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
+            # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
+            $lblCsrInfoB.Text = if ($script:PlanB_PcscName) {
+                "Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanB_PcscName)' waehlen (das ist '$($script:PlanB_CardName)'); es erscheint ggf. ein PIN-Dialog."
+            } else {
+                'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.'
+            }
+        }
         3 { Update-PlanBHandoff }
     }
 }
