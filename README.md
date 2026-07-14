@@ -293,6 +293,4 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
   moeglicherweise verzoegerte Entfernung) - `tpmvscmgr` verhaelt sich korrekt.
 - Die PIN-Mindestlaenge von 6 setzt `ITpmVirtualSmartCardManager2` voraus;
   ohne diese Schnittstelle greift automatisch die Basis-API mit Minimum 8
-  (der PIN-Dialog zeigt die jeweils geltende Grenze an). Die
-  Policy-Blob-Erstellung (CreateVirtualSmartCardWithPinPolicy) ist auf echter
-  Hardware noch nicht verifiziert.
+  (der PIN-Dialog zeigt die jeweils geltende Grenze an).
