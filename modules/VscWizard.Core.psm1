@@ -301,7 +301,12 @@ function Find-EnterpriseCAs {
         [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'dNSHostName', 'certificateTemplates'))
 
         $results = $searcher.FindAll()
+        # Attribute defensiv lesen: Ergebnisse ohne die erwarteten Attribute (z.B. bei
+        # Bind gegen eine unerwartete Domaene) wuerfen bei ['cn'][0] sonst
+        # "Cannot index into a null array".
         $cas = foreach ($r in $results) {
+            if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
+            if (-not $r.Properties['dNSHostName'] -or $r.Properties['dNSHostName'].Count -eq 0) { continue }
             $name = $r.Properties['cn'][0]
             $server = $r.Properties['dNSHostName'][0]
             [pscustomobject]@{
