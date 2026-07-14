@@ -125,11 +125,20 @@ laufen wuerde.
 
 1. **Status**: Domaenen-Status, TPM-Status und angemeldeter Benutzer werden
    automatisch geprueft.
-2. **Virtuelle Smartcard erstellen**: `tpmvscmgr create` (mit gezielter
-   UAC-Elevation) laeuft in einem eigenen, direkt elevierten Konsolenfenster
-   (kein Wrapper-Prozess, keine Ausgabeumleitung) und fragt dort per
-   Texteingabe nach der Karten-PIN - **kein** GUI-Dialog. Das Fenster kommt
-   moeglicherweise nicht automatisch in den Vordergrund.
+2. **Virtuelle Smartcard erstellen**: laeuft ueber die COM-API
+   (`ITpmVirtualSmartCardManager`) in einem gezielt elevierten Helfer
+   (`modules/VscWizard.CreateHelper.ps1`), der einen echten maskierten
+   PIN-Dialog zeigt (PIN + Bestaetigung; die PIN verlaesst den elevierten
+   Prozess nie). Die PIN-Mindestlaenge betraegt 6 Zeichen und wird ueber
+   `ITpmVirtualSmartCardManager2::CreateVirtualSmartCardWithPinPolicy` mit
+   einer serialisierten PIN-Policy (dokumentiertes MS-TPMVSC-Format
+   "PinPolicySerialization": 8 Little-Endian-DWORDs - Reserved=1, minLength,
+   maxLength, dann fuenf Zeichenklassen-Optionen mit 0=Allow/
+   1=RequireAtLeastOne/2=Disallow) durchgesetzt. Steht diese Schnittstelle
+   nicht zur Verfuegung, faellt der Helfer automatisch auf die Basis-API
+   zurueck (dann Minimum 8) - der PIN-Dialog zeigt in beiden Faellen die
+   tatsaechlich geltende Mindestlaenge an, da die Verfuegbarkeit vor dem
+   Dialog geprueft wird.
 3. **Zertifikat anfordern**: `certreq -new` (Schluesselerzeugung auf der
    Smartcard) gefolgt von `certreq -submit` gegen die konfigurierte CA und
    `certreq -accept` zur Uebernahme - alles im Benutzerkontext. Erfordert das
@@ -278,7 +287,12 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
   gewertet werden.
 - Fuer ein separates Zielkonto unterstuetzt nur Plan B die Einreichung (siehe
   oben); Plan A blockiert Schritt 3 mit einem Hinweis darauf.
-- Die Ausgabe von `tpmvscmgr create` landet nicht im Log (bewusst keine
-  Umleitung, siehe oben) - Erfolg/Misserfolg ist nur am Exit-Code sowie am
-  Ergebnis im separaten Konsolenfenster erkennbar. Kommt dieses Fenster nicht
-  automatisch in den Vordergrund, in der Taskleiste danach suchen.
+- Das Loeschen virtueller Smartcards laeuft weiterhin ueber `tpmvscmgr destroy`
+  statt ueber die COM-API: `DestroyVirtualSmartCard` lieferte auf der
+  Testhardware S_OK, entfernte die Karte aber nicht (Verhalten ungeklaert,
+  moeglicherweise verzoegerte Entfernung) - `tpmvscmgr` verhaelt sich korrekt.
+- Die PIN-Mindestlaenge von 6 setzt `ITpmVirtualSmartCardManager2` voraus;
+  ohne diese Schnittstelle greift automatisch die Basis-API mit Minimum 8
+  (der PIN-Dialog zeigt die jeweils geltende Grenze an). Die
+  Policy-Blob-Erstellung (CreateVirtualSmartCardWithPinPolicy) ist auf echter
+  Hardware noch nicht verifiziert.

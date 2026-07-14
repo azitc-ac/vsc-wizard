@@ -405,7 +405,10 @@ function New-VirtualSmartCard {
     # die Ergebnisdatei dort.
     param(
         [Parameter(Mandatory)][string]$CardName,
-        [int]$PinPolicyMinLength = 8
+        # Wird ueber ITpmVirtualSmartCardManager2::CreateVirtualSmartCardWithPinPolicy
+        # durchgesetzt (siehe CreateHelper); ohne diese Schnittstelle faellt der Helfer
+        # auf die Basis-API mit Minimum 8 zurueck und passt den PIN-Dialog entsprechend an.
+        [int]$PinPolicyMinLength = 6
     )
 
     $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.ps1'
@@ -462,7 +465,8 @@ function New-VirtualSmartCard {
 
     $success = ($res.Success -eq 'True')
     if ($success) {
-        Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId))." -Level Success
+        $policyNote = if ($res['PinPolicyUsed'] -eq 'True') { "PIN-Policy via Manager2, Mindestlaenge $PinPolicyMinLength" } else { 'Basis-API, PIN-Mindestlaenge 8' }
+        Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId); $policyNote)." -Level Success
     } else {
         Write-WizardLog -Message "Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" })" -Level Error
     }

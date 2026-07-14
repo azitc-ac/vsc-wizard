@@ -412,7 +412,7 @@ $txtCardNameA.Location = New-Object System.Drawing.Point(20, 46)
 $txtCardNameA.Size = New-Object System.Drawing.Size(300, 24)
 $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
 
-$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 8 Zeichen, mit Bestaetigung). Die Karte wird anschliessend ueber die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
+$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 6 Zeichen, mit Bestaetigung; der Dialog zeigt die geltende Mindestlaenge an). Die Karte wird anschliessend ueber die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
 
 $btnCreateVscA = New-Object System.Windows.Forms.Button
 $btnCreateVscA.Text = 'Virtuelle Smartcard erstellen'
@@ -688,7 +688,7 @@ $txtCardNameB.Location = New-Object System.Drawing.Point(20, 46)
 $txtCardNameB.Size = New-Object System.Drawing.Size(300, 24)
 $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
 
-$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 8 Zeichen, mit Bestaetigung). Die Karte wird anschliessend ueber die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
+$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 6 Zeichen, mit Bestaetigung; der Dialog zeigt die geltende Mindestlaenge an). Die Karte wird anschliessend ueber die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
 
 $btnCreateVscB = New-Object System.Windows.Forms.Button
 $btnCreateVscB.Text = 'Virtuelle Smartcard erstellen'
