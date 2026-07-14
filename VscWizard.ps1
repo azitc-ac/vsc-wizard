@@ -867,55 +867,63 @@ $pnlB5 = New-Object System.Windows.Forms.Panel
 $pnlB5.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB5)
 
-$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszufuehren (angemeldet als Zielbenutzer): entweder hier im Wizard mit CSR-Datei, oder per Zwischenablage im schlankeren Einreichungshelfer VscWizard.Submit.ps1 (nimmt CSR-Text entgegen, kein Dateizugriff noetig).' -X 20 -Y 20 -Width 780 -Height 40
+$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszufuehren (angemeldet als Zielbenutzer). Standardweg: den per Zwischenablage mitgebrachten CSR-Text unten einfuegen. Wurde der Antrag bereits anderweitig eingereicht (z.B. mit dem Einreichungshelfer VscWizard.Submit.ps1), diesen Schritt einfach mit "Weiter" ueberspringen.' -X 20 -Y 20 -Width 780 -Height 50
+
+$lblCsrPasteLabelB = New-WizardLabel -Text 'CSR-Text (PEM) einfuegen:' -X 20 -Y 74 -Width 300
+$txtCsrPasteB = New-Object System.Windows.Forms.TextBox
+$txtCsrPasteB.Location = New-Object System.Drawing.Point(20, 100)
+$txtCsrPasteB.Size = New-Object System.Drawing.Size(780, 90)
+$txtCsrPasteB.Multiline = $true
+$txtCsrPasteB.ScrollBars = 'Vertical'
+$txtCsrPasteB.Font = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnSelectCsrB = New-Object System.Windows.Forms.Button
-$btnSelectCsrB.Text = 'CSR-Datei auswaehlen...'
-$btnSelectCsrB.Location = New-Object System.Drawing.Point(20, 70)
-$btnSelectCsrB.Size = New-Object System.Drawing.Size(200, 30)
+$btnSelectCsrB.Text = '...oder CSR-Datei auswaehlen'
+$btnSelectCsrB.Location = New-Object System.Drawing.Point(20, 198)
+$btnSelectCsrB.Size = New-Object System.Drawing.Size(200, 28)
 
 $txtSelectedCsrB = New-Object System.Windows.Forms.TextBox
-$txtSelectedCsrB.Location = New-Object System.Drawing.Point(230, 74)
+$txtSelectedCsrB.Location = New-Object System.Drawing.Point(230, 200)
 $txtSelectedCsrB.Size = New-Object System.Drawing.Size(500, 24)
 $txtSelectedCsrB.ReadOnly = $true
 
-$lblTemplateSubmitB = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 112 -Width 200
+$lblTemplateSubmitB = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 236 -Width 200
 $cboTemplateSubmitB = New-Object System.Windows.Forms.ComboBox
-$cboTemplateSubmitB.Location = New-Object System.Drawing.Point(230, 108)
+$cboTemplateSubmitB.Location = New-Object System.Drawing.Point(230, 232)
 $cboTemplateSubmitB.Size = New-Object System.Drawing.Size(300, 24)
 $cboTemplateSubmitB.DropDownStyle = 'DropDownList'
 Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $config.Template
 
 $btnSubmitB = New-Object System.Windows.Forms.Button
 $btnSubmitB.Text = 'Einreichen'
-$btnSubmitB.Location = New-Object System.Drawing.Point(20, 146)
+$btnSubmitB.Location = New-Object System.Drawing.Point(20, 270)
 $btnSubmitB.Size = New-Object System.Drawing.Size(200, 32)
 
 $btnRetrieveB = New-Object System.Windows.Forms.Button
 $btnRetrieveB.Text = 'Zertifikat abrufen (bei Genehmigung)'
-$btnRetrieveB.Location = New-Object System.Drawing.Point(230, 146)
+$btnRetrieveB.Location = New-Object System.Drawing.Point(230, 270)
 $btnRetrieveB.Size = New-Object System.Drawing.Size(260, 32)
 $btnRetrieveB.Visible = $false
 
-$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 190 -Width 780 -Height 40
+$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 310 -Width 780 -Height 40
 
-$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 234 -Width 400
+$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 354 -Width 400
 $txtCerPathB = New-Object System.Windows.Forms.TextBox
-$txtCerPathB.Location = New-Object System.Drawing.Point(20, 260)
+$txtCerPathB.Location = New-Object System.Drawing.Point(20, 380)
 $txtCerPathB.Size = New-Object System.Drawing.Size(560, 24)
 $txtCerPathB.ReadOnly = $true
 
 $btnCopyCerPathB = New-Object System.Windows.Forms.Button
 $btnCopyCerPathB.Text = 'Pfad kopieren'
-$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 258)
+$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 378)
 $btnCopyCerPathB.Size = New-Object System.Drawing.Size(120, 28)
 
 $btnOpenCerFolderB = New-Object System.Windows.Forms.Button
 $btnOpenCerFolderB.Text = 'Ordner oeffnen'
-$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 296)
+$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 416)
 $btnOpenCerFolderB.Size = New-Object System.Drawing.Size(160, 28)
 
-$pnlB5.Controls.AddRange(@($lblSubmitInfoB, $btnSelectCsrB, $txtSelectedCsrB, $lblTemplateSubmitB, $cboTemplateSubmitB, $btnSubmitB, $btnRetrieveB, $lblSubmitResultB, $lblCerPathLabelB, $txtCerPathB, $btnCopyCerPathB, $btnOpenCerFolderB))
+$pnlB5.Controls.AddRange(@($lblSubmitInfoB, $lblCsrPasteLabelB, $txtCsrPasteB, $btnSelectCsrB, $txtSelectedCsrB, $lblTemplateSubmitB, $cboTemplateSubmitB, $btnSubmitB, $btnRetrieveB, $lblSubmitResultB, $lblCerPathLabelB, $txtCerPathB, $btnCopyCerPathB, $btnOpenCerFolderB))
 
 $btnSelectCsrB.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -926,8 +934,34 @@ $btnSelectCsrB.Add_Click({
 })
 
 $btnSubmitB.Add_Click({
-    if (-not $txtSelectedCsrB.Text) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CSR-Datei auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+    # Standardweg: eingefuegter CSR-Text (der Text-Workflow erzeugt auf dieser
+    # Maschine keine CSR-Datei); die Dateiauswahl bleibt als Alternative.
+    $csrPath = $null
+    if (-not [string]::IsNullOrWhiteSpace($txtCsrPasteB.Text)) {
+        $csrPath = Join-Path (Get-WizardWorkingDir) "PlanB-pasted-$([guid]::NewGuid()).req"
+        Set-Content -Path $csrPath -Value $txtCsrPasteB.Text -Encoding ASCII
+    } elseif ($txtSelectedCsrB.Text) {
+        $csrPath = $txtSelectedCsrB.Text
+        # Manuell gespeicherte CSR-Dateien kommen je nach Editor als UTF-16 oder
+        # UTF-8-mit-BOM daher - certreq erwartet ASCII/ANSI-PEM ohne BOM und
+        # scheitert sonst mit CRYPT_E_ASN1_BADTAG (0x8009310b). Solche Dateien
+        # werden vor dem Submit automatisch in eine ASCII-Arbeitskopie transkodiert.
+        try {
+            $csrBytes = [System.IO.File]::ReadAllBytes($csrPath)
+            $hasBom = ($csrBytes.Length -ge 2 -and (
+                ($csrBytes[0] -eq 0xFF -and $csrBytes[1] -eq 0xFE) -or
+                ($csrBytes[0] -eq 0xFE -and $csrBytes[1] -eq 0xFF) -or
+                ($csrBytes.Length -ge 3 -and $csrBytes[0] -eq 0xEF -and $csrBytes[1] -eq 0xBB -and $csrBytes[2] -eq 0xBF)))
+            if ($hasBom) {
+                $csrText = [System.IO.File]::ReadAllText($csrPath)  # erkennt BOM selbst
+                $csrPath = Join-Path (Get-WizardWorkingDir) "PlanB-transcoded-$([guid]::NewGuid()).req"
+                Set-Content -Path $csrPath -Value $csrText -Encoding ASCII
+                Write-WizardLog -Message 'CSR-Datei enthielt ein BOM/UTF-16-Encoding - fuer certreq automatisch nach ASCII transkodiert.' -Level Info
+            }
+        } catch { }
+    }
+    if (-not $csrPath) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfuegen (oder alternativ eine CSR-Datei auswaehlen).', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     if (-not $cboTemplateSubmitB.SelectedItem) {
@@ -935,9 +969,9 @@ $btnSubmitB.Add_Click({
         return
     }
     $btnSubmitB.Enabled = $false
-    $script:PlanB_SubmitDir = Split-Path $txtSelectedCsrB.Text -Parent
+    $script:PlanB_SubmitDir = Split-Path $csrPath -Parent
 
-    $submit = Submit-CertificateSigningRequest -CsrPath $txtSelectedCsrB.Text -CAConfig $config.CAConfig -TemplateName $cboTemplateSubmitB.SelectedItem -OutputDirectory $script:PlanB_SubmitDir
+    $submit = Submit-CertificateSigningRequest -CsrPath $csrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateSubmitB.SelectedItem -OutputDirectory $script:PlanB_SubmitDir
     if ($submit.Pending) {
         $script:PlanB_PendingRequestId = $submit.RequestId
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
@@ -1084,6 +1118,7 @@ $btnResetB.Add_Click({
     $lblVscResultB.Text = ''
     $txtCsrPathB.Text = ''
     $txtCsrTextB.Text = ''
+    $txtCsrPasteB.Text = ''
     $txtSelectedCsrB.Text = ''
     $txtCerPathB.Text = ''
     $txtSelectedCerB.Text = ''
@@ -1157,9 +1192,15 @@ function Invoke-PlanBNextClick {
         }
         3 { Show-PlanBStep -Index 4 }
         4 {
+            # Kein hartes Gate: wurde der Antrag anderweitig eingereicht (z.B. per
+            # Einreichungshelfer in der RDP-Sitzung), gibt es auf DIESER Maschine
+            # kein ausgestelltes Zertifikat - der Abschluss in Schritt 7 nimmt den
+            # CER-Text per Einfuegen entgegen.
             if (-not $txtCerPathB.Text) {
-                [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den Antrag einreichen und das Zertifikat erhalten.', 'Hinweis', 'OK', 'Warning') | Out-Null
-                return
+                $confirm = [System.Windows.Forms.MessageBox]::Show(
+                    'In diesem Schritt wurde kein Zertifikat ausgestellt. Wurde der Antrag anderweitig eingereicht (z.B. mit dem Einreichungshelfer in der RDP-Sitzung) und liegt das Zertifikat als Datei oder Text vor?',
+                    'Schritt ueberspringen', 'YesNo', 'Question')
+                if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
             }
             Show-PlanBStep -Index 5
         }

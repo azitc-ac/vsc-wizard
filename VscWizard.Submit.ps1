@@ -92,9 +92,10 @@ function Invoke-Tool {
 function Find-ReachableCA {
     # Vereinfachte, eigenstaendige Variante der Discovery aus VscWizard.Core.psm1
     # (LDAP-Discovery der Enterprise-CAs + RPC-Erreichbarkeitstest). Auf einem
-    # CA-nahen Server (der Zweck dieses Tools) sollte serverloses LDAP-Binding i.d.R.
-    # ohne expliziten Domain-Hint funktionieren; das Feld ist trotzdem editierbar,
-    # falls nicht.
+    # CA-nahen, domaenen-gebundenen Server (der Zweck dieses Tools) funktioniert
+    # serverloses LDAP-Binding von selbst - der -Server-Parameter bleibt nur fuer
+    # Sonderfaelle erhalten, die GUI bietet ihn nicht mehr an (schlaegt die
+    # Erkennung fehl, wird der CA-Konfigurationsstring manuell eingetragen).
     param([string]$Server, [int]$TimeoutSeconds = 8)
 
     try {
@@ -184,6 +185,10 @@ $layout.Controls.Add($txtCsr, 0, 1)
 
 $caPanel = New-Object System.Windows.Forms.TableLayoutPanel
 $caPanel.AutoSize = $true
+# Links+Rechts verankern, damit das Panel die volle Zellenbreite einnimmt - ein
+# reines AutoSize-Panel schrumpft sonst auf die Mindestbreite der Textboxen
+# (~100px) und schneidet lange CA-/Template-Namen ab.
+$caPanel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $caPanel.ColumnCount = 2
 [void]$caPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 200)))
 [void]$caPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
@@ -204,13 +209,10 @@ function Add-CaRow {
     $caPanel.Controls.Add($Control, 1, $rowIndex)
 }
 
-$txtDomain = New-Object System.Windows.Forms.TextBox
-try {
-    $upn = (& whoami /upn) 2>$null
-    if ($upn -and $upn -notmatch 'ERROR' -and $upn.Contains('@')) { $txtDomain.Text = $upn.Split('@')[1] }
-} catch { }
-Add-CaRow -LabelText 'AD-Domaene/DC (optional):' -Control $txtDomain
-
+# Bewusst KEIN Domaenen-Feld: dieses Tool laeuft auf einem domaenen-gebundenen,
+# CA-nahen Server, wo serverloses LDAP-Binding von selbst funktioniert. Die
+# fruehere UPN-Vorbefuellung war zudem irrefuehrend, da der UPN-Suffix (z.B. der
+# Entra-Mandant) nichts mit dem AD-DNS-Namen zu tun haben muss.
 $txtCA = New-Object System.Windows.Forms.TextBox
 Add-CaRow -LabelText 'CA-Konfigurationsstring:' -Control $txtCA
 
@@ -268,7 +270,7 @@ $btnDiscover.Add_Click({
 
     # @() am Aufrufer als zweite Absicherung gegen das Array-Unwrapping (s. Kommentar
     # in Find-ReachableCA).
-    $cas = @(Find-ReachableCA -Server $txtDomain.Text.Trim())
+    $cas = @(Find-ReachableCA)
     if ($cas.Count -gt 0) {
         $txtCA.Text = $cas[0].ConfigString
         $allTemplates = @($cas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
