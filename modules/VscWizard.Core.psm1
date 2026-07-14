@@ -87,6 +87,44 @@ function Get-WizardWorkingDir {
 
 #endregion
 
+#region Fortsetzbarer Antrag (Resume-Zustand)
+
+# Ein begonnener Antrag ueberlebt einen Wizard-Neustart als key=value-Datei im
+# Arbeitsverzeichnis: nach jedem Meilenstein (CSR erstellt, Antrag eingereicht/
+# wartet auf Genehmigung) gespeichert, nach erfolgreicher Zertifikatsuebernahme
+# geloescht. Windows haelt den offenen certreq-Antrag ohnehin im REQUEST-Store
+# des Benutzers - hier geht es nur um den Wizard-Kontext (RequestId, Kartenname,
+# Pfade), der sonst beim Schliessen verloren ginge.
+
+function Get-WizardResumeStatePath {
+    Join-Path (Get-WizardWorkingDir) 'resume-state.txt'
+}
+
+function Save-WizardResumeState {
+    param([Parameter(Mandatory)][hashtable]$State)
+    $State['SavedAt'] = Get-Date -Format 'yyyy-MM-dd HH:mm'
+    $lines = foreach ($key in $State.Keys) { "$key=$($State[$key])" }
+    Set-Content -Path (Get-WizardResumeStatePath) -Value $lines -Encoding UTF8
+}
+
+function Get-WizardResumeState {
+    $path = Get-WizardResumeStatePath
+    if (-not (Test-Path $path)) { return $null }
+    $state = @{}
+    foreach ($line in (Get-Content -Path $path -ErrorAction SilentlyContinue)) {
+        $idx = $line.IndexOf('=')
+        if ($idx -gt 0) { $state[$line.Substring(0, $idx)] = $line.Substring($idx + 1) }
+    }
+    if ($state.Count -eq 0) { return $null }
+    return $state
+}
+
+function Clear-WizardResumeState {
+    Remove-Item -Path (Get-WizardResumeStatePath) -ErrorAction SilentlyContinue
+}
+
+#endregion
+
 #region Logging
 
 function Initialize-WizardLog {

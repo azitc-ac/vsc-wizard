@@ -298,6 +298,22 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
    abgelehnter UAC-Prompt, TPM nicht bereit.
 4. Log-Export im Bereich "Log / Diagnose" (unten im Hauptfenster) pruefen.
 
+## Begonnene Antraege fortsetzen
+
+Der Wizard speichert den Stand eines laufenden Antrags nach jedem Meilenstein
+(Plan B: CSR erstellt; Plan A/B: Antrag eingereicht und wartet auf
+Genehmigung) als `resume-state.txt` im Arbeitsverzeichnis. Wird der Wizard
+geschlossen und spaeter neu gestartet, bietet er das Fortsetzen an und
+springt mit wiederhergestelltem Kontext (Kartenname, RequestId, Pfade)
+direkt zum passenden Schritt - z.B. um ein inzwischen genehmigtes Zertifikat
+ueber "Zertifikat abrufen" abzuholen. Bei "Nein" wird nur der gespeicherte
+Wizard-Stand verworfen; der offene Antrag selbst bleibt im
+Zertifikatsspeicher des Benutzers (Windows verwaltet ihn im REQUEST-Store)
+und kann notfalls ueber Schritt "Zertifikat abschliessen" mit der
+CER-Datei/dem CER-Text weiterhin abgeschlossen werden. Nach erfolgreicher
+Uebernahme des Zertifikats wird der gespeicherte Stand automatisch
+geloescht.
+
 ## Bekannte Einschraenkungen (v1)
 
 - Keine granulare Uebersetzung von `certreq`-Fehlercodes; Rohausgabe steht im

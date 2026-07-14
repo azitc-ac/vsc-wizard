@@ -515,8 +515,15 @@ $btnRequestCertA.Add_Click({
     $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
     if ($submit.Pending) {
         $script:PlanA_PendingRequestId = $submit.RequestId
+        # Zustand persistieren: der wartende Antrag kann nach einem Wizard-Neustart
+        # ueber den Fortsetzen-Dialog beim Start wieder aufgenommen werden.
+        Save-WizardResumeState -State @{
+            Plan = 'A'; Stage = 'Pending'; RequestId = $submit.RequestId
+            CardName = $script:PlanA_CardName; PcscName = "$($script:PlanA_PcscName)"
+            EnrollDir = $script:PlanA_EnrollDir
+        }
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). Bitte spaeter erneut abrufen."
+        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). Bitte spaeter erneut abrufen - auch nach einem Neustart des Wizards moeglich."
         $btnRetrieveA.Visible = $true
         $btnRequestCertA.Enabled = $true
         return
@@ -531,6 +538,7 @@ $btnRequestCertA.Add_Click({
     $complete = Complete-CertificateEnrollment -CerPath $submit.CerPath
     if ($complete.Success) {
         $script:PlanA_CertIssued = $true
+        Clear-WizardResumeState
         $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblCertResultA.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
     } else {
@@ -547,6 +555,7 @@ $btnRetrieveA.Add_Click({
         $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
         if ($complete.Success) {
             $script:PlanA_CertIssued = $true
+            Clear-WizardResumeState
             $btnRetrieveA.Visible = $false
             $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
             $lblCertResultA.Text = 'Zertifikat wurde erfolgreich abgerufen und auf der virtuellen Smartcard hinterlegt.'
@@ -810,6 +819,13 @@ $btnCreateCsrB.Add_Click({
         } catch {
             $txtCsrTextB.Text = ''
         }
+        # Zustand persistieren: CSR existiert, Einreichung steht noch aus - kann
+        # nach einem Wizard-Neustart fortgesetzt werden.
+        Save-WizardResumeState -State @{
+            Plan = 'B'; Stage = 'Csr'; CsrPath = $csr.CsrPath
+            CardName = $script:PlanB_CardName; PcscName = "$($script:PlanB_PcscName)"
+            TargetAccount = "$($script:TargetAccount)"
+        }
     } else {
         [System.Windows.Forms.MessageBox]::Show('CSR-Erstellung fehlgeschlagen. Details siehe Log.', 'Fehler', 'OK', 'Error') | Out-Null
     }
@@ -974,8 +990,14 @@ $btnSubmitB.Add_Click({
     $submit = Submit-CertificateSigningRequest -CsrPath $csrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateSubmitB.SelectedItem -OutputDirectory $script:PlanB_SubmitDir
     if ($submit.Pending) {
         $script:PlanB_PendingRequestId = $submit.RequestId
+        Save-WizardResumeState -State @{
+            Plan = 'B'; Stage = 'Pending'; RequestId = $submit.RequestId
+            SubmitDir = $script:PlanB_SubmitDir
+            CardName = "$($script:PlanB_CardName)"; PcscName = "$($script:PlanB_PcscName)"
+            TargetAccount = "$($script:TargetAccount)"
+        }
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId))."
+        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId)) - Abruf auch nach einem Neustart des Wizards moeglich."
         $btnRetrieveB.Visible = $true
     } elseif ($submit.Success) {
         $txtCerPathB.Text = $submit.CerPath
@@ -1078,6 +1100,7 @@ function Complete-PlanBEnrollment {
     $complete = Complete-CertificateEnrollment -CerPath $CerPath
     if ($complete.Success) {
         $script:PlanB_CertIssued = $true
+        Clear-WizardResumeState
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblCompleteResultB.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
         Update-PlanBSummary
@@ -1721,12 +1744,71 @@ function Show-SettingsDialog {
 
 Show-ModeSelectStep
 
+function Invoke-WizardResume {
+    # Begonnenen Antrag aus einer frueheren Sitzung wieder aufnehmen (siehe
+    # Save-WizardResumeState in Core.psm1): stellt die Wizard-Variablen wieder her
+    # und springt direkt zum passenden Schritt.
+    $state = Get-WizardResumeState
+    if (-not $state) { return }
+
+    $stageText = if ($state['Stage'] -eq 'Pending') { "Antrag eingereicht, wartet auf Genehmigung (RequestId $($state['RequestId']))" } else { 'CSR erstellt, noch nicht eingereicht' }
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "Ein begonnener Antrag vom $($state['SavedAt']) wurde gefunden:`r`n`r`nKarte: $($state['CardName'])`r`nStand: $stageText`r`n`r`nFortsetzen? (Bei 'Nein' wird der gespeicherte Stand verworfen - der offene Antrag im Zertifikatsspeicher bleibt davon unberuehrt.)",
+        'Begonnenen Antrag fortsetzen', 'YesNo', 'Question')
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Clear-WizardResumeState
+        Write-WizardLog -Message 'Gespeicherter Antrags-Stand verworfen.' -Level Info
+        return
+    }
+
+    if ($state['TargetAccount']) { $script:TargetAccount = $state['TargetAccount'] } else { $script:TargetAccount = $null }
+    $pnlModeSelect.Visible = $false
+
+    if ($state['Plan'] -eq 'A') {
+        $script:ActivePlan = 'A'
+        $script:PlanA_VscCreated = $true
+        $script:PlanA_CardName = $state['CardName']
+        $script:PlanA_PcscName = $state['PcscName']
+        $script:PlanA_EnrollDir = $state['EnrollDir']
+        $script:PlanA_PendingRequestId = $state['RequestId']
+        $tabPlanA.Visible = $true
+        Show-PlanAStep -Index 2
+        $btnRetrieveA.Visible = $true
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblCertResultA.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - ueber 'Zertifikat abrufen' pruefen, ob er inzwischen genehmigt wurde."
+    } else {
+        $script:ActivePlan = 'B'
+        $script:PlanB_VscCreated = $true
+        $script:PlanB_CardName = $state['CardName']
+        $script:PlanB_PcscName = $state['PcscName']
+        $tabPlanB.Visible = $true
+        if ($state['Stage'] -eq 'Pending') {
+            $script:PlanB_PendingRequestId = $state['RequestId']
+            $script:PlanB_SubmitDir = $state['SubmitDir']
+            Show-PlanBStep -Index 4
+            $btnRetrieveB.Visible = $true
+            $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
+            $lblSubmitResultB.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - ueber 'Zertifikat abrufen' pruefen, ob er inzwischen genehmigt wurde."
+        } else {
+            $script:PlanB_CsrPath = $state['CsrPath']
+            $txtCsrPathB.Text = $state['CsrPath']
+            try { $txtCsrTextB.Text = Get-Content -Path $state['CsrPath'] -Raw -ErrorAction Stop } catch { $txtCsrTextB.Text = '' }
+            Show-PlanBStep -Index 3
+        }
+    }
+    Write-WizardLog -Message "Begonnener Antrag fortgesetzt (Plan $($state['Plan']), Stand: $stageText)." -Level Info
+}
+
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($configIncomplete) {
     # Erst oeffnen, sobald das Hauptfenster tatsaechlich angezeigt wird (Shown-Event) -
     # ein modaler Dialog mit -Owner vor dem ersten Show() des Owners fuehrt sonst zu
     # unzuverlaessigem Fensterverhalten.
     $form.Add_Shown({ Show-SettingsDialog -Owner $form })
+} else {
+    # Fortsetzen-Angebot nur, wenn nicht ohnehin zuerst die Einstellungen zu
+    # pflegen sind; ebenfalls erst nach dem Shown-Event (modaler Dialog).
+    $form.Add_Shown({ Invoke-WizardResume })
 }
 
 [void]$form.ShowDialog()
