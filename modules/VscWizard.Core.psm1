@@ -804,7 +804,15 @@ function New-EnrollmentInfFile {
         [Parameter(Mandatory)][string]$Subject,
         [string]$Upn,
         [string]$CspName = 'Microsoft Base Smart Card Crypto Provider',
-        [Parameter(Mandatory)][string]$Path
+        [Parameter(Mandatory)][string]$Path,
+        # Enroll on Behalf Of: setzt das Konto, FUER das ausgestellt wird
+        # (z.B. "CONTOSO\adm.mustermann"). Ist es gesetzt, wird ein PKCS7-Antrag
+        # erzeugt, der spaeter mit dem Enrollment-Agent-Zertifikat co-signiert wird.
+        [string]$RequesterName,
+        # Fuer den EA-Zertifikatsantrag selbst: das Template steuert die EKU; hier
+        # nur die Key-Parameter. Fuer ein Software-EA-Zertifikat wird der
+        # Software-KSP verwendet (kein Smartcard-Provider).
+        [string]$TemplateName
     )
 
     $sanBlock = ''
@@ -819,12 +827,18 @@ _continue_ = "upn=$Upn&"
 
     # ProviderType/KeySpec sind reine CAPI-Konstrukte (Legacy-CSPs wie der
     # "Microsoft Base Smart Card Crypto Provider"). Fuer einen CNG-KSP (z.B.
-    # "Microsoft Smart Card Key Storage Provider") duerfen sie NICHT gesetzt
-    # werden, sonst lehnt certreq die Kombination ab - dort waehlt certreq den
-    # CNG-Pfad allein anhand des Provider-Namens. Heuristik: "Key Storage
-    # Provider" im Namen = KSP.
+    # "Microsoft Smart Card Key Storage Provider" oder "Microsoft Software Key
+    # Storage Provider") duerfen sie NICHT gesetzt werden, sonst lehnt certreq die
+    # Kombination ab - dort waehlt certreq den CNG-Pfad allein anhand des
+    # Provider-Namens. Heuristik: "Key Storage Provider" im Namen = KSP.
     $isKsp = $CspName -match 'Key Storage Provider'
     $capiBlock = if ($isKsp) { '' } else { "KeySpec = 1`r`nProviderType = 1`r`n" }
+
+    $requestType = if ($RequesterName) { 'PKCS7' } else { 'PKCS10' }
+    $requesterBlock = if ($RequesterName) { "RequesterName = `"$RequesterName`"`r`n" } else { '' }
+    # Bei EOBO (PKCS7) gehoert der Template-Verweis IN den Antrag; bei PKCS10
+    # uebergibt Submit-CertificateSigningRequest ihn spaeter per -attrib.
+    $templateBlock = if ($RequesterName -and $TemplateName) { "`r`n[RequestAttributes]`r`nCertificateTemplate = $TemplateName`r`n" } else { '' }
 
     # Hinweis: KeyLength/KeyUsage/HashAlgorithm sind gaengige Defaults fuer
     # Smartcard-Logon-Zertifikate und koennen bei Bedarf an das eigene
@@ -840,9 +854,10 @@ KeyLength = 2048
 KeyUsage = 0xA0
 MachineKeySet = FALSE
 ProviderName = "$CspName"
-$($capiBlock)RequestType = PKCS10
+$($capiBlock)$($requesterBlock)RequestType = $requestType
 HashAlgorithm = SHA256
 $sanBlock
+$templateBlock
 "@
 
     Set-Content -Path $Path -Value $inf -Encoding Default
@@ -854,30 +869,70 @@ function New-CertificateSigningRequest {
         [Parameter(Mandatory)][string]$Subject,
         [string]$Upn,
         [string]$CspName,
-        [Parameter(Mandatory)][string]$OutputDirectory
+        [Parameter(Mandatory)][string]$OutputDirectory,
+        # Enroll on Behalf Of (siehe New-EnrollmentInfFile): Zielkonto + Template
+        # gehoeren in den PKCS7-Antrag, und der Antrag wird mit dem
+        # Enrollment-Agent-Zertifikat (Thumbprint) co-signiert.
+        [string]$RequesterName,
+        [string]$TemplateName,
+        [string]$SigningCertThumbprint
     )
 
     if (-not (Test-Path $OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
     $infPath = Join-Path $OutputDirectory 'request.inf'
-    $csrPath = Join-Path $OutputDirectory 'request.csr'
+    # PKCS7-Antraege (EOBO) tragen zur Klarheit eine andere Endung.
+    $isEobo = [bool]$RequesterName
+    $csrPath = Join-Path $OutputDirectory $(if ($isEobo) { 'request.p7' } else { 'request.csr' })
     if (Test-Path $csrPath) { Remove-Item $csrPath -Force }
 
-    New-EnrollmentInfFile -Subject $Subject -Upn $Upn -CspName $CspName -Path $infPath | Out-Null
+    New-EnrollmentInfFile -Subject $Subject -Upn $Upn -CspName $CspName -Path $infPath -RequesterName $RequesterName -TemplateName $TemplateName | Out-Null
 
-    $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList @('-new', $infPath, $csrPath)
+    # -cert <Thumbprint>: certreq signiert den PKCS7-Antrag mit diesem
+    # Enrollment-Agent-Zertifikat (der EA-Schluessel bleibt in seinem Store/auf
+    # seiner Karte; ggf. erscheint dabei dessen PIN-Dialog).
+    $newArgs = @('-new')
+    if ($SigningCertThumbprint) { $newArgs += @('-cert', $SigningCertThumbprint) }
+    $newArgs += @($infPath, $csrPath)
+
+    $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList $newArgs
     if ($result.Success -and (Test-Path $csrPath)) {
-        Write-WizardLog -Message "CSR erstellt: $csrPath" -Level Success
+        Write-WizardLog -Message "$(if ($isEobo) { 'EOBO-Antrag (PKCS7)' } else { 'CSR' }) erstellt: $csrPath" -Level Success
         return [pscustomobject]@{ Success = $true; CsrPath = $csrPath }
     }
-    Write-WizardLog -Message 'CSR-Erstellung fehlgeschlagen.' -Level Error
+    Write-WizardLog -Message 'Antragserstellung fehlgeschlagen.' -Level Error
     return [pscustomobject]@{ Success = $false; CsrPath = $null }
+}
+
+function Get-EnrollmentAgentCertificates {
+    # Findet im Benutzer-Zertifikatsspeicher Zertifikate mit der EKU
+    # "Certificate Request Agent" (OID 1.3.6.1.4.1.311.20.2.1) und privatem
+    # Schluessel - genau die, mit denen sich Enroll-on-Behalf-Of-Antraege
+    # signieren lassen. Abgelaufene werden weggelassen.
+    $eaOid = '1.3.6.1.4.1.311.20.2.1'
+    $now = Get-Date
+    $certs = Get-ChildItem -Path 'Cert:\CurrentUser\My' -ErrorAction SilentlyContinue
+    $results = foreach ($cert in $certs) {
+        if (-not $cert.HasPrivateKey) { continue }
+        if ($cert.NotAfter -lt $now -or $cert.NotBefore -gt $now) { continue }
+        $ekus = @($cert.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId })
+        if ($ekus -contains $eaOid) {
+            [pscustomobject]@{
+                Subject    = $cert.Subject
+                Thumbprint = $cert.Thumbprint
+                NotAfter   = $cert.NotAfter
+            }
+        }
+    }
+    return @($results)
 }
 
 function Submit-CertificateSigningRequest {
     param(
         [Parameter(Mandatory)][string]$CsrPath,
         [Parameter(Mandatory)][string]$CAConfig,
-        [Parameter(Mandatory)][string]$TemplateName,
+        # Bei EOBO/PKCS7-Antraegen leer lassen: das Template steht dann bereits im
+        # Antrag (RequestAttributes) - ein zusaetzliches -attrib waere redundant.
+        [string]$TemplateName,
         [Parameter(Mandatory)][string]$OutputDirectory
     )
 
@@ -885,9 +940,10 @@ function Submit-CertificateSigningRequest {
     $cerPath = Join-Path $OutputDirectory 'certnew.cer'
     if (Test-Path $cerPath) { Remove-Item $cerPath -Force }
 
-    $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList @(
-        '-submit', '-config', $CAConfig, '-attrib', "CertificateTemplate:$TemplateName", $CsrPath, $cerPath
-    )
+    $submitArgs = @('-submit', '-config', $CAConfig)
+    if ($TemplateName) { $submitArgs += @('-attrib', "CertificateTemplate:$TemplateName") }
+    $submitArgs += @($CsrPath, $cerPath)
+    $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList $submitArgs
 
     $requestId = $null
     if ($result.StdOut -match 'RequestId:\s*(\d+)') { $requestId = $Matches[1] }

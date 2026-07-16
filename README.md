@@ -34,13 +34,19 @@ Domaenen-Status vorausgewaehlt, aber frei aenderbar):
   also **keine** gesonderte Anmeldung als Zielkonto fuer VSC/CSR noetig.
   Nur die Einreichung bei der CA muss aus Berechtigungsgruenden als
   Zielkonto erfolgen (die CA prueft die Enroll-Berechtigung anhand des
-  einreichenden Kontos) - dafuer fuehrt Plan B automatisch an der
-  passenden Stelle einen RDP-Zwischenschritt ein, unabhaengig vom
-  Domaenen-Status dieses Rechners (Plan A unterstuetzt kein separates
-  Konto, siehe unten). Die Uebernahme des fertigen Zertifikats passiert
-  danach wieder hier im eigenen Konto. Fuer mehrere Admin-Konten wird der
-  gesamte Ablauf entsprechend mehrfach durchlaufen (je eine eigene
-  virtuelle Smartcard pro Konto).
+  einreichenden Kontos). Dafuer gibt es zwei Wege:
+    - **Mit Enrollment-Agent-Zertifikat (empfohlen, ohne RDP)**: Liegt im
+      eigenen Zertifikatsspeicher ein EA-Zertifikat, laeuft die gesamte
+      Ausstellung fuer das Zielkonto bruchfrei in **Plan A** ueber *Enroll
+      on Behalf Of* - der Antrag wird mit dem EA-Zertifikat co-signiert, die
+      CA stellt trotzdem auf das Zielkonto aus. Siehe Abschnitt "Enrollment
+      Agent" weiter unten.
+    - **Ohne EA-Zertifikat (Fallback)**: **Plan B** fuehrt an der passenden
+      Stelle einen RDP-Zwischenschritt ein (Einreichung als Zielkonto),
+      unabhaengig vom Domaenen-Status. Die Uebernahme des fertigen
+      Zertifikats passiert danach wieder hier im eigenen Konto.
+  Fuer mehrere Admin-Konten wird der Ablauf entsprechend mehrfach durchlaufen
+  (je eine eigene virtuelle Smartcard pro Konto).
 
 ## Voraussetzungen
 
@@ -121,10 +127,11 @@ ohne das restliche Projekt mit rueberzukopieren.
 
 ### Plan A (automatisiert)
 
-Funktioniert nur fuer "Fuer mich" (angemeldeter Benutzer) - bei einem
-separaten Zielkonto blockiert Schritt 3 mit einem Hinweis auf Plan B, da
-die Einreichung sonst unter der eigenen statt der Zielkonto-Identitaet
-laufen wuerde.
+Fuer "Fuer mich" (angemeldeter Benutzer) der Standardweg. Fuer ein separates
+Zielkonto funktioniert Plan A ebenfalls, **sofern ein
+Enrollment-Agent-Zertifikat vorliegt** - dann stellt Schritt 3 per Enroll on
+Behalf Of direkt fuer das Zielkonto aus (siehe "Enrollment Agent"). Fehlt das
+EA-Zertifikat, weist Schritt 3 auf Plan B (RDP) hin.
 
 1. **Status**: Domaenen-Status, TPM-Status und angemeldeter Benutzer werden
    automatisch geprueft.
@@ -298,6 +305,39 @@ Tests. Vor dem produktiven Einsatz empfiehlt sich folgender manueller Ablauf:
    abgelehnter UAC-Prompt, TPM nicht bereit.
 4. Log-Export im Bereich "Log / Diagnose" (unten im Hauptfenster) pruefen.
 
+## Enrollment Agent (Ausstellung fuer separate Konten ohne RDP)
+
+Ein Enrollment-Agent-Zertifikat (EKU *Certificate Request Agent*,
+`1.3.6.1.4.1.311.20.2.1`) erlaubt es, Zertifikate **im Auftrag anderer
+Konten** auszustellen (Enroll on Behalf Of, EOBO). Damit entfaellt der
+RDP-Bruch fuer separate Zielkonten komplett: der Antrag wird mit dem
+EA-Zertifikat co-signiert, die CA stellt trotzdem auf das Zielkonto aus -
+alles in der eigenen Sitzung.
+
+**EA-Zertifikat beantragen** (Einstellungen): Da das EA-Zertifikat auf das
+**eigene** Konto ausgestellt wird, ist das eine ganz normale
+Direkt-Beantragung (kein RDP). Der Wizard bietet zwei Schutzvarianten fuer
+den maechtigen EA-Schluessel:
+- **Auf eigener VSC (TPM/PIN, Standard/empfohlen)**: der EA-Schluessel liegt
+  auf einer eigenen virtuellen Smartcard - nicht exportierbar,
+  PIN-geschuetzt. Jede EOBO-Ausstellung verlangt dann die PIN (bewusster
+  Autorisierungs-Gate).
+- **Software-Schluessel**: CNG-Software-Schluessel im Benutzerspeicher -
+  bequemer, aber portabler/weniger geschuetzt.
+
+Ist ein EA-Zertifikat vorhanden, erkennt der Wizard es automatisch und
+schaltet fuer separate Konten den bruchfreien Plan-A-Weg frei (Schritt 3
+erzeugt dann einen PKCS7-EOBO-Antrag: `certreq -new -cert <EA-Thumbprint>`
+mit `RequestType=PKCS7` und `RequesterName=<Zielkonto>`; der Template-Verweis
+steht im Antrag, `certreq -submit` reicht ihn ohne `-attrib` ein).
+
+**Voraussetzungen auf der CA-Seite**: Das Ziel-Template muss EOBO erlauben und
+die CA muss den Antragsteller als Enrollment Agent akzeptieren; oft ist
+"Restricted Enrollment Agents" konfiguriert (schraenkt ein, welcher EA fuer
+welche Konten/Templates ausstellen darf). Ein EA-Zertifikat ist
+sicherheitskritisch - damit lassen sich Anmelde-Zertifikate fuer beliebige
+Konten ausstellen; die Vergabe sollte der PKI-Policy entsprechen.
+
 ## Begonnene Antraege fortsetzen
 
 Der Wizard speichert den Stand eines laufenden Antrags nach jedem Meilenstein
@@ -325,8 +365,10 @@ geloescht.
   (LDAP-Discovery + RPC-Ping je CA); bei einer sehr langsamen, aber
   grundsaetzlich erreichbaren PKI kann das faelschlich als "nicht erreichbar"
   gewertet werden.
-- Fuer ein separates Zielkonto unterstuetzt nur Plan B die Einreichung (siehe
-  oben); Plan A blockiert Schritt 3 mit einem Hinweis darauf.
+- Enroll on Behalf Of / EA-Zertifikate: der Ablauf ist implementiert, aber auf
+  echter Hardware noch nicht verifiziert; er setzt zudem passende CA-seitige
+  EOBO-Konfiguration voraus (siehe "Enrollment Agent"). Ohne EA-Zertifikat
+  bleibt fuer separate Konten der Plan-B/RDP-Weg.
 - Das Loeschen virtueller Smartcards laeuft weiterhin ueber `tpmvscmgr destroy`
   statt ueber die COM-API: `DestroyVirtualSmartCard` lieferte auf der
   Testhardware S_OK, entfernte die Karte aber nicht (Verhalten ungeklaert,

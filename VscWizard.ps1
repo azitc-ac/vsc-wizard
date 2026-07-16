@@ -61,6 +61,52 @@ function Get-EnrollmentIdentity {
     return [pscustomobject]@{ Subject = "CN=$env:USERNAME"; Upn = (Get-CurrentUpn); DisplayName = "$env:USERDOMAIN\$env:USERNAME"; SearchTerm = $env:USERNAME }
 }
 
+function Invoke-EnrollmentAgentRequest {
+    # Beantragt ein Enrollment-Agent-Zertifikat fuer das EIGENE Konto - eine ganz
+    # normale Direkt-Beantragung (kein separates Konto, kein RDP). Wahlweise mit dem
+    # Schluessel auf einer eigenen VSC (TPM/PIN, empfohlen) oder als CNG-Software-
+    # Schluessel. Das Template bestimmt die EKU (Certificate Request Agent).
+    param(
+        [Parameter(Mandatory)][string]$Template,
+        [switch]$OnVsc
+    )
+
+    $identity = [pscustomobject]@{ Subject = "CN=$env:USERNAME"; Upn = (Get-CurrentUpn) }
+    $enrollDir = Join-Path (Get-WizardWorkingDir) "EA-$([guid]::NewGuid().ToString('N'))"
+
+    if ($OnVsc) {
+        $cardName = "$($config.VscNamePrefix)EA-$env:USERNAME"
+        Write-WizardLog -Message "Erstelle VSC fuer EA-Zertifikat ('$cardName')." -Level Command
+        $vsc = New-VirtualSmartCard -CardName $cardName
+        if (-not $vsc.Success) {
+            return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'VSC-Erstellung fuer EA-Zertifikat fehlgeschlagen.' }
+        }
+        $csp = $config.CspName
+    } else {
+        # CNG-Software-KSP: kein Smartcard-Provider, kein PIN.
+        $csp = 'Microsoft Software Key Storage Provider'
+    }
+
+    $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $csp -OutputDirectory $enrollDir
+    if (-not $csr.Success) {
+        return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'Antragserstellung fehlgeschlagen.' }
+    }
+
+    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $Template -OutputDirectory $enrollDir
+    if ($submit.Pending) {
+        return [pscustomobject]@{ Success = $false; Pending = $true; RequestId = $submit.RequestId; Message = 'Wartet auf Genehmigung.' }
+    }
+    if (-not $submit.Success) {
+        return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = 'Antrag bei der CA fehlgeschlagen.' }
+    }
+
+    $complete = Complete-CertificateEnrollment -CerPath $submit.CerPath
+    if ($complete.Success) {
+        return [pscustomobject]@{ Success = $true; Pending = $false; RequestId = $submit.RequestId; Message = '' }
+    }
+    return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = 'Uebernahme des EA-Zertifikats fehlgeschlagen.' }
+}
+
 # Einfache Hint/Placeholder-Eingabe: zeigt grauen Beispieltext, solange kein echter
 # Wert eingetragen ist; verschwindet beim Fokussieren, kehrt beim Verlassen eines
 # leeren Feldes zurueck. Erkennung "ist gerade Placeholder" ueber ForeColor=Gray.
@@ -276,11 +322,19 @@ function Update-ModeSelectPlanChoice {
     # CA-Sicht kann trotzdem Plan A nutzen, siehe README).
     $joinState = Get-DomainJoinState
     if ($radOther.Checked) {
-        # Plan A unterstuetzt kein separates Konto (die Einreichung liefe sonst unter
-        # der eigenen statt der Zielkonto-Identitaet) - deshalb hier fest auf Plan B.
-        $radPlanA.Enabled = $false
-        $radPlanB.Checked = $true
-        $lblPlanChoiceHint.Text = 'Fuer ein separates Konto ist immer Plan B noetig (die Einreichung muss als Zielkonto erfolgen, z.B. per RDP).'
+        # Separates Konto: Plan A ist moeglich, WENN ein Enrollment-Agent-Zertifikat
+        # vorliegt (Enroll on Behalf Of - bruchfrei, ohne RDP). Sonst bleibt nur
+        # Plan B, da die Einreichung als Zielkonto erfolgen muss.
+        $eaCount = @(Get-EnrollmentAgentCertificates).Count
+        if ($eaCount -gt 0) {
+            $radPlanA.Enabled = $true
+            $radPlanA.Checked = $true
+            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A moeglich (Enroll on Behalf Of, ohne RDP). Plan B bleibt als Alternative."
+        } else {
+            $radPlanA.Enabled = $false
+            $radPlanB.Checked = $true
+            $lblPlanChoiceHint.Text = 'Kein EA-Zertifikat gefunden - fuer ein separates Konto daher Plan B (RDP). Mit einem EA-Zertifikat (in den Einstellungen beantragbar) ginge auch Plan A ohne RDP.'
+        }
     } else {
         $radPlanA.Enabled = $true
         if ($joinState.Mode -eq 'ADDomain') {
@@ -488,9 +542,18 @@ $btnRetrieveA.Visible = $false
 $pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
+    # Fuer ein separates Zielkonto ist die Direkt-Ausstellung nur ueber Enroll on
+    # Behalf Of moeglich (die CA prueft die Enroll-Berechtigung sonst gegen die
+    # EIGENE Identitaet). Dafuer braucht es ein Enrollment-Agent-Zertifikat im
+    # eigenen Speicher; fehlt es, bleibt der Plan-B/RDP-Weg.
+    $eoboThumbprint = $null
     if ($script:TargetAccount) {
-        [System.Windows.Forms.MessageBox]::Show('Fuer ein separates Konto funktioniert dieser automatisierte Ablauf nicht - die Einreichung bei der CA wuerde unter deiner eigenen Identitaet laufen, nicht der des Zielkontos. Bitte stattdessen Plan B verwenden: dort ist die Einreichung ein eigener Schritt, der als Zielkonto (z.B. per RDP) durchgefuehrt werden kann.', 'Separates Konto: Plan B verwenden', 'OK', 'Information') | Out-Null
-        return
+        $eaCerts = @(Get-EnrollmentAgentCertificates)
+        if ($eaCerts.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show('Fuer ein separates Konto ist hier ein Enrollment-Agent-Zertifikat noetig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder stattdessen Plan B (RDP) verwenden.', 'Separates Konto: EA-Zertifikat noetig', 'OK', 'Information') | Out-Null
+            return
+        }
+        $eoboThumbprint = $eaCerts[0].Thumbprint
     }
     if (-not $cboTemplateA.SelectedItem) {
         [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
@@ -498,21 +561,33 @@ $btnRequestCertA.Add_Click({
     }
     $btnRequestCertA.Enabled = $false
     $lblCertResultA.ForeColor = [System.Drawing.Color]::Black
-    $lblCertResultA.Text = 'Erstelle Zertifikatsanforderung - ggf. erscheint ein PIN-Dialog der Smartcard...'
+    $lblCertResultA.Text = if ($eoboThumbprint) {
+        'Erstelle Enroll-on-Behalf-Of-Antrag - ggf. erscheinen PIN-Dialoge (neue Karte und EA-Zertifikat)...'
+    } else {
+        'Erstelle Zertifikatsanforderung - ggf. erscheint ein PIN-Dialog der Smartcard...'
+    }
     $form.Refresh()
 
     $script:PlanA_EnrollDir = Join-Path (Get-WizardWorkingDir) "PlanA-$($script:PlanA_CardName)"
     $identity = Get-EnrollmentIdentity
 
-    $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir
+    if ($eoboThumbprint) {
+        # EOBO: Zielkonto + Template gehoeren in den PKCS7-Antrag, der mit dem
+        # EA-Zertifikat co-signiert wird. Das Template wird beim Submit dann NICHT
+        # nochmal per -attrib gesetzt.
+        $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir -RequesterName $identity.DisplayName -TemplateName $cboTemplateA.SelectedItem -SigningCertThumbprint $eoboThumbprint
+    } else {
+        $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir
+    }
     if (-not $csr.Success) {
         $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblCertResultA.Text = 'CSR-Erstellung fehlgeschlagen. Details siehe Log.'
+        $lblCertResultA.Text = 'Antragserstellung fehlgeschlagen. Details siehe Log.'
         $btnRequestCertA.Enabled = $true
         return
     }
 
-    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateA.SelectedItem -OutputDirectory $script:PlanA_EnrollDir
+    $submitTemplate = if ($eoboThumbprint) { $null } else { $cboTemplateA.SelectedItem }
+    $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $submitTemplate -OutputDirectory $script:PlanA_EnrollDir
     if ($submit.Pending) {
         $script:PlanA_PendingRequestId = $submit.RequestId
         # Zustand persistieren: der wartende Antrag kann nach einem Wizard-Neustart
@@ -611,8 +686,8 @@ function Update-PlanAStatus {
     $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
 
     if ($script:TargetAccount) {
-        $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblWarnA.Text = "Smartcard wird fuer ein separates Konto beantragt ($($script:TargetAccount)) - die Zertifikatsanforderung in Schritt 3 funktioniert hier nicht, bitte Plan B verwenden."
+        $lblWarnA.ForeColor = [System.Drawing.Color]::SteelBlue
+        $lblWarnA.Text = "Smartcard wird fuer ein separates Konto beantragt ($($script:TargetAccount)) - die Ausstellung in Schritt 3 erfolgt bruchfrei per Enroll on Behalf Of (Enrollment-Agent-Zertifikat), ohne RDP."
     } elseif ($joinState.Mode -ne 'ADDomain') {
         $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
         $lblWarnA.Text = 'Dieser Rechner scheint nicht domaenen-gebunden zu sein. Fuer diesen Fall ist "Plan B" vorgesehen.'
@@ -1633,6 +1708,86 @@ function Show-SettingsDialog {
     $txtDiscoverResultCfg.Font = New-Object System.Drawing.Font('Consolas', 9)
     Add-SettingsFullRow -Control $txtDiscoverResultCfg -Fill
 
+    # --- Enrollment Agent (bruchfreie Ausstellung fuer separate Konten, ohne RDP) ---
+    $lblEaHeader = New-Object System.Windows.Forms.Label
+    $lblEaHeader.Text = 'Enrollment Agent (Ausstellung fuer separate Konten ohne RDP)'
+    $lblEaHeader.AutoSize = $true
+    $lblEaHeader.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+    $lblEaHeader.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 2)
+    Add-SettingsFullRow -Control $lblEaHeader
+
+    $eaCertsNow = @(Get-EnrollmentAgentCertificates)
+    $lblEaStatus = New-Object System.Windows.Forms.Label
+    $lblEaStatus.AutoSize = $true
+    $lblEaStatus.MaximumSize = New-Object System.Drawing.Size(760, 0)
+    if ($eaCertsNow.Count -gt 0) {
+        $lblEaStatus.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaCertsNow[0].Subject) (gueltig bis $($eaCertsNow[0].NotAfter.ToString('yyyy-MM-dd'))). Damit kann fuer separate Konten bruchfrei per Plan A ausgestellt werden."
+    } else {
+        $lblEaStatus.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblEaStatus.Text = 'Kein EA-Zertifikat gefunden. Ohne EA-Zertifikat muss fuer separate Konten der Plan-B/RDP-Weg genutzt werden.'
+    }
+    Add-SettingsFullRow -Control $lblEaStatus
+
+    $txtCfgEaTemplate = New-Object System.Windows.Forms.TextBox
+    Set-TextBoxPlaceholder -TextBox $txtCfgEaTemplate -Placeholder 'z.B. EnrollmentAgent' -Value $config.EATemplate
+    Add-SettingsRow -LabelText 'EA-Zertifikatstemplate:' -InputControl $txtCfgEaTemplate
+
+    $chkEaOnVsc = New-Object System.Windows.Forms.CheckBox
+    $chkEaOnVsc.Text = 'EA-Schluessel auf eigener VSC (TPM/PIN) statt Software-Schluessel'
+    $chkEaOnVsc.Checked = $true
+    $chkEaOnVsc.AutoSize = $true
+    Add-SettingsFullRow -Control $chkEaOnVsc
+
+    $eaPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $eaPanel.AutoSize = $true
+    $eaPanel.FlowDirection = 'LeftToRight'
+    $eaPanel.WrapContents = $false
+    $btnRequestEa = New-Object System.Windows.Forms.Button
+    $btnRequestEa.Text = 'EA-Zertifikat beantragen'
+    $btnRequestEa.Size = New-Object System.Drawing.Size(220, 30)
+    $eaPanel.Controls.Add($btnRequestEa)
+    Add-SettingsFullRow -Control $eaPanel
+
+    $lblEaResult = New-Object System.Windows.Forms.Label
+    $lblEaResult.AutoSize = $true
+    $lblEaResult.MaximumSize = New-Object System.Drawing.Size(760, 0)
+    Add-SettingsFullRow -Control $lblEaResult
+
+    $btnRequestEa.Add_Click({
+        $eaTemplate = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
+        if ([string]::IsNullOrWhiteSpace($eaTemplate)) {
+            [System.Windows.Forms.MessageBox]::Show('Bitte zuerst das EA-Zertifikatstemplate eintragen (und ggf. speichern).', 'Hinweis', 'OK', 'Warning') | Out-Null
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($config.CAConfig)) {
+            [System.Windows.Forms.MessageBox]::Show('Bitte zuerst CA-Konfigurationsstring eintragen und speichern.', 'Hinweis', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $btnRequestEa.Enabled = $false
+        $lblEaResult.ForeColor = [System.Drawing.SystemColors]::WindowText
+        $lblEaResult.Text = 'Beantrage EA-Zertifikat fuer das eigene Konto...'
+        $dlg.Refresh()
+
+        $result = Invoke-EnrollmentAgentRequest -Template $eaTemplate -OnVsc:$chkEaOnVsc.Checked
+        if ($result.Success) {
+            $lblEaResult.ForeColor = [System.Drawing.Color]::ForestGreen
+            $lblEaResult.Text = 'EA-Zertifikat wurde ausgestellt. Es steht ab sofort fuer die Ausstellung an separate Konten (Plan A) zur Verfuegung.'
+            $eaNow = @(Get-EnrollmentAgentCertificates)
+            if ($eaNow.Count -gt 0) {
+                $lblEaStatus.ForeColor = [System.Drawing.Color]::ForestGreen
+                $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaNow[0].Subject) (gueltig bis $($eaNow[0].NotAfter.ToString('yyyy-MM-dd')))."
+            }
+        } elseif ($result.Pending) {
+            $lblEaResult.ForeColor = [System.Drawing.Color]::DarkOrange
+            $lblEaResult.Text = "EA-Antrag eingereicht, wartet auf Genehmigung (RequestId $($result.RequestId)). Nach Genehmigung erneut beantragen/abrufen."
+        } else {
+            $lblEaResult.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblEaResult.Text = "EA-Beantragung fehlgeschlagen: $($result.Message) Details siehe Log."
+        }
+        $btnRequestEa.Enabled = $true
+    })
+
     $footerPanel = New-Object System.Windows.Forms.FlowLayoutPanel
     $footerPanel.Dock = 'Fill'
     $footerPanel.FlowDirection = 'RightToLeft'
@@ -1721,6 +1876,7 @@ function Show-SettingsDialog {
             RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
             CspName       = $txtCfgCsp.Text
             DiscoveryDomain = Get-TextBoxRealValue -TextBox $txtCfgDomain
+            EATemplate    = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
             WorkingDir    = $config.WorkingDir
         }
         Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
