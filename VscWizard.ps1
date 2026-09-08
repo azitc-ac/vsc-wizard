@@ -311,15 +311,34 @@ $radPlanB.Size = New-Object System.Drawing.Size(760, 24)
 $lblPlanChoiceHint = New-WizardLabel -Text '' -X 40 -Y 340 -Width 740
 $lblPlanChoiceHint.ForeColor = [System.Drawing.Color]::DimGray
 
-$lblLandingValidation = New-WizardLabel -Text '' -X 20 -Y 380 -Width 760
+# Fähigkeitsbasierte Prüfung: misst, ob von HIER direkt eingereicht werden kann
+# (Kerberos-TGT + DNS + certutil-ping), statt aus dem Join-Status zu raten. Ergebnis
+# überschreibt die Heuristik-Vorauswahl mit der gemessenen Wahrheit.
+$btnCheckDirect = New-Object System.Windows.Forms.Button
+$btnCheckDirect.Text = 'Direkt-Einreichung pruefen'
+$btnCheckDirect.Location = New-Object System.Drawing.Point(40, 372)
+$btnCheckDirect.Size = New-Object System.Drawing.Size(230, 30)
+
+$txtDirectResult = New-Object System.Windows.Forms.TextBox
+$txtDirectResult.Location = New-Object System.Drawing.Point(40, 410)
+$txtDirectResult.Size = New-Object System.Drawing.Size(760, 120)
+$txtDirectResult.Multiline = $true
+$txtDirectResult.ReadOnly = $true
+$txtDirectResult.ScrollBars = 'Vertical'
+$txtDirectResult.Font = New-Object System.Drawing.Font('Consolas', 9)
+$txtDirectResult.Visible = $false
+
+$lblLandingValidation = New-WizardLabel -Text '' -X 20 -Y 540 -Width 760
 $lblLandingValidation.ForeColor = [System.Drawing.Color]::Firebrick
 
-$pnlModeSelect.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $lblPlanChoiceTitle, $radPlanA, $radPlanB, $lblPlanChoiceHint, $lblLandingValidation))
+$pnlModeSelect.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $lblPlanChoiceTitle, $radPlanA, $radPlanB, $lblPlanChoiceHint, $btnCheckDirect, $txtDirectResult, $lblLandingValidation))
 
 function Update-ModeSelectPlanChoice {
-    # Automatische Vorauswahl anhand des erkannten Domaenen-Status - vom Nutzer
-    # jederzeit ueberschreibbar (z.B. Entra-joined mit Cloud Kerberos Trust + direkter
-    # CA-Sicht kann trotzdem Plan A nutzen, siehe README).
+    # Der Domain-Join-Status ist nur eine HEURISTIK-Vorauswahl (sofort, ohne Netz),
+    # kein belastbares Kriterium: ein DJ-Client kann off-net scheitern, ein EJ-Client
+    # mit Cloud Kerberos Trust + korrektem DNS direkt einreichen. Die gemessene Wahrheit
+    # liefert "Direkt-Einreichung pruefen" (Test-DirectEnrollmentCapability), das diese
+    # Vorauswahl anschliessend ueberschreibt. Vom Nutzer jederzeit ueberschreibbar.
     $joinState = Get-DomainJoinState
     if ($radOther.Checked) {
         # Separates Konto: Plan A ist moeglich, WENN ein Enrollment-Agent-Zertifikat
@@ -329,7 +348,7 @@ function Update-ModeSelectPlanChoice {
         if ($eaCount -gt 0) {
             $radPlanA.Enabled = $true
             $radPlanA.Checked = $true
-            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A moeglich (Enroll on Behalf Of, ohne RDP). Plan B bleibt als Alternative."
+            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A moeglich (Enroll on Behalf Of, ohne RDP). Plan B bleibt als Alternative. Tipp: 'Direkt-Einreichung pruefen' bestaetigt, ob die CA von hier erreichbar ist."
         } else {
             $radPlanA.Enabled = $false
             $radPlanB.Checked = $true
@@ -339,10 +358,10 @@ function Update-ModeSelectPlanChoice {
         $radPlanA.Enabled = $true
         if ($joinState.Mode -eq 'ADDomain') {
             $radPlanA.Checked = $true
-            $lblPlanChoiceHint.Text = "Automatisch erkannt: Domaenen-Status $($joinState.Mode) - Plan A vorausgewaehlt."
+            $lblPlanChoiceHint.Text = "Vorschlag (Heuristik: Domaenen-Status $($joinState.Mode)): Plan A. Fuer Gewissheit 'Direkt-Einreichung pruefen'."
         } else {
             $radPlanB.Checked = $true
-            $lblPlanChoiceHint.Text = "Automatisch erkannt: Domaenen-Status $($joinState.Mode) - Plan B vorausgewaehlt (bei direkter CA-Sicht trotzdem Plan A moeglich)."
+            $lblPlanChoiceHint.Text = "Vorschlag (Heuristik: Domaenen-Status $($joinState.Mode)): Plan B. Bei funktionierendem Cloud Kerberos Trust ist evtl. doch Plan A moeglich - 'Direkt-Einreichung pruefen' misst es."
         }
     }
 }
@@ -353,6 +372,57 @@ $radSelf.Add_CheckedChanged({
 
 $radOther.Add_CheckedChanged({
     if ($radOther.Checked) { $txtOtherAccount.Enabled = $true; Update-ModeSelectPlanChoice }
+})
+
+$btnCheckDirect.Add_Click({
+    $btnCheckDirect.Enabled = $false
+    $txtDirectResult.Visible = $true
+    $txtDirectResult.ForeColor = [System.Drawing.SystemColors]::WindowText
+    $txtDirectResult.Text = 'Pruefe Direkt-Einreichung (Kerberos-Ticket, DNS, certutil -ping - bis zu ca. 45 Sekunden)...'
+    $form.Refresh()
+
+    # In einem Start-Job, da DNS/RPC/certutil bei nicht erreichbaren Zielen haengen koennen.
+    $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+    $job = Start-Job -ScriptBlock {
+        param($ModulePath, $CAConfig, $Server, $Timeout)
+        Import-Module $ModulePath -Force
+        Test-DirectEnrollmentCapability -CAConfig $CAConfig -Server $Server -TimeoutSeconds $Timeout
+    } -ArgumentList $modulePath, $config.CAConfig, $config.DiscoveryDomain, 8
+
+    $completed = Wait-Job -Job $job -Timeout 45
+    $cap = if ($completed) { Receive-Job -Job $job } else { Stop-Job -Job $job; $null }
+    Remove-Job -Job $job -Force
+
+    if (-not $completed -or -not $cap) {
+        $txtDirectResult.ForeColor = [System.Drawing.Color]::Firebrick
+        $txtDirectResult.Text = 'Zeitueberschreitung (>45s) - CA/DC vermutlich nicht erreichbar (Netz/DNS/VPN pruefen). Vorerst Plan B verwenden.'
+        Write-WizardLog -Message 'Direkt-Einreichungspruefung: Zeitueberschreitung.' -Level Error
+        $btnCheckDirect.Enabled = $true
+        return
+    }
+
+    $txtDirectResult.ForeColor = if ($cap.DirectPossible) { [System.Drawing.Color]::ForestGreen } else { [System.Drawing.Color]::DarkOrange }
+    $txtDirectResult.Text = "$($cap.Reason)`r`n`r`n$($cap.Detail)"
+    Write-WizardLog -Message "Direkt-Einreichung: DirectPossible=$($cap.DirectPossible), Join=$($cap.JoinMode), TGT=$($cap.HasKerberosTgt), Ping=$($cap.CaPingOk)." -Level Info
+
+    # Gemessenes Ergebnis ueberschreibt die Heuristik-Vorauswahl.
+    if ($radSelf.Checked) {
+        if ($cap.DirectPossible) {
+            $radPlanA.Enabled = $true; $radPlanA.Checked = $true
+            $lblPlanChoiceHint.Text = 'Gemessen: Direkt-Einreichung moeglich - Plan A.'
+        } else {
+            $radPlanB.Checked = $true
+            $lblPlanChoiceHint.Text = 'Gemessen: Direkt-Einreichung derzeit nicht moeglich - Plan B (CA-Schritt delegieren). Grund siehe oben.'
+        }
+    } else {
+        # Separates Konto: Plan-A-Verfuegbarkeit haengt zusaetzlich am EA-Zertifikat
+        # (Update-ModeSelectPlanChoice); der Check zeigt hier die CA-Erreichbarkeit, die
+        # auch fuer EOBO noetig ist.
+        if (-not $cap.DirectPossible) {
+            $txtDirectResult.Text += "`r`n`r`nHinweis: Auch der EOBO-Weg (Plan A mit EA-Zertifikat) braucht diese CA-Erreichbarkeit. Ist sie nicht gegeben, bleibt Plan B."
+        }
+    }
+    $btnCheckDirect.Enabled = $true
 })
 
 function Show-ModeSelectStep {

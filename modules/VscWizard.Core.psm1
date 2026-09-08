@@ -404,6 +404,109 @@ function Get-PkiReachability {
     }
 }
 
+function Test-DirectEnrollmentCapability {
+    # Prueft die tatsaechliche FAEHIGKEIT, von hier aus direkt bei der CA einzureichen -
+    # unabhaengig vom Domain-Join-Status. Genau das ist das belastbare Kriterium fuer
+    # "Plan A (direkt)" vs. "Plan B (CA-Schritt delegieren)": ein DJ-Client kann off-net
+    # scheitern, ein EJ-Client mit Cloud Kerberos Trust + korrektem DNS direkt einreichen.
+    #
+    # Die Kette (jeweils mit Klartext-Begruendung):
+    #   1. Join-Kontext (nur Info)              - dsregcmd /status
+    #   2. On-Prem-Kerberos-TGT vorhanden?      - klist  (Ground Truth der On-Prem-Identitaet)
+    #   3. CA-Ziel bestimmbar?                  - $CAConfig oder AD-Discovery
+    #   4. CA-Server per DNS aufloesbar?        - DNS
+    #   5. certutil -ping (Transport + Auth)    - der entscheidende Test
+    # Enroll-BERECHTIGUNG auf dem Template prueft ping NICHT - die zeigt sich erst beim
+    # echten Submit; ein erfolgreicher Ping beweist aber die schwierige Haelfte (Auth zur CA).
+    #
+    # Ohne Write-WizardLog: zum Aufruf in einem Start-Job (Wait-Job -Timeout) gedacht,
+    # da DNS-, RPC- und certutil-Aufrufe bei nicht erreichbaren Zielen lange haengen koennen.
+    param(
+        [string]$CAConfig,
+        [string]$Server,
+        [int]$TimeoutSeconds = 8
+    )
+
+    # 1) Join-Kontext + OnPremTgt-Feld (rein informativ)
+    $joinMode = 'unbekannt'; $onPremTgtField = $null
+    try {
+        $dsreg = & dsregcmd /status 2>$null
+        if     ($dsreg -match 'DomainJoined\s*:\s*YES')  { $joinMode = 'ADDomain' }
+        elseif ($dsreg -match 'AzureAdJoined\s*:\s*YES') { $joinMode = 'EntraJoined' }
+        else                                             { $joinMode = 'Workgroup' }
+        if ($dsreg -match 'OnPremTgt\s*:\s*(YES|NO)')    { $onPremTgtField = $Matches[1] }
+    } catch { }
+
+    # 2) Kerberos-TGT vorhanden? (Server-Name 'krbtgt/REALM' ist nicht lokalisiert)
+    $hasTgt = $false; $realm = $null
+    try {
+        $kl = (& klist 2>$null) -join "`n"
+        $m = [regex]::Match($kl, 'krbtgt/([A-Za-z0-9._-]+)')
+        if ($m.Success) { $hasTgt = $true; $realm = $m.Groups[1].Value }
+    } catch { }
+
+    # 3) CA-Ziel bestimmen (explizit konfiguriert oder per AD-Discovery)
+    $caConfigEffective = $CAConfig
+    $discoveryError = $null
+    if (-not $caConfigEffective) {
+        $disc = Find-EnterpriseCAs -Server $Server -TimeoutSeconds $TimeoutSeconds
+        if ($disc.Cas.Count -gt 0) { $caConfigEffective = $disc.Cas[0].ConfigString }
+        else { $discoveryError = $disc.Error }
+    }
+    $caServer = if ($caConfigEffective -and $caConfigEffective.Contains('\')) { $caConfigEffective.Split('\')[0] } else { $null }
+
+    # 4) DNS: CA-Server aufloesbar?
+    $dnsOk = $false
+    if ($caServer) {
+        try { $null = [System.Net.Dns]::GetHostEntry($caServer); $dnsOk = $true } catch { $dnsOk = $false }
+    }
+
+    # 5) certutil -ping: Transport + Authentifizierung zur CA (entscheidend)
+    $pingOk = $false
+    if ($caConfigEffective) {
+        $pingOk = Test-CAConnectivity -ConfigString $caConfigEffective -TimeoutSeconds $TimeoutSeconds
+    }
+
+    $direct = [bool]$pingOk
+
+    # Klartext-Begruendung: die ERSTE zutreffende Fehlerursache zaehlt (Kette).
+    if ($direct) {
+        $reason = 'Direkte Einreichung moeglich: die CA ist erreichbar und akzeptiert deine Anmeldung. Plan A empfohlen. (Ob dein Konto fuer das gewaehlte Template Enroll-Rechte hat, zeigt sich erst beim Submit.)'
+    } elseif (-not $hasTgt) {
+        $reason = 'Kein On-Prem-Kerberos-Ticket (TGT) gefunden - es fehlt eine authentifizierbare AD-Identitaet. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus (Anmeldung per Windows Hello/passwordless, erreichbarer DC). Ohne Ticket kann die CA dich nicht autorisieren -> Plan B (CA-Schritt delegieren).'
+    } elseif (-not $caConfigEffective) {
+        $reason = "CA-Ziel liess sich nicht bestimmen (AD-Discovery fehlgeschlagen: $discoveryError). Meist DNS/DC-Locator: der Client nutzt nicht den On-Prem-DNS -> SRV-Records/DC nicht auffindbar. CA-Konfigurationsstring in den Einstellungen setzen oder DNS korrigieren -> sonst Plan B."
+    } elseif (-not $dnsOk) {
+        $reason = "CA-Server '$caServer' ist per DNS nicht aufloesbar - der Client nutzt vermutlich nicht den On-Prem-DNS-Server. DNS korrigieren (On-Prem-DNS / Conditional Forwarder) -> sonst Plan B."
+    } else {
+        $reason = "Kerberos-Ticket und DNS sind vorhanden, aber 'certutil -ping' an $caConfigEffective schlaegt fehl - vermutlich RPC/DCOM (Port 135 + dynamische Ports) durch Firewall blockiert, oder die CA weist die Anmeldung ab. Details im Log -> vorerst Plan B."
+    }
+
+    $tgtText = if ($hasTgt) { "ja ($realm)" } else { 'nein' }
+    $onPremText = if ($onPremTgtField) { $onPremTgtField } else { 'n/a' }
+    $detail = @"
+Join-Kontext        : $joinMode (dsregcmd OnPremTgt: $onPremText)
+On-Prem-TGT (klist) : $tgtText
+CA-Ziel             : $(if ($caConfigEffective) { $caConfigEffective } else { 'nicht bestimmbar' })
+CA-DNS aufloesbar   : $(if ($caServer) { if ($dnsOk) { 'ja' } else { 'nein' } } else { 'n/a' })
+certutil -ping      : $(if ($caConfigEffective) { if ($pingOk) { 'ok' } else { 'fehlgeschlagen' } } else { 'nicht ausgefuehrt' })
+"@
+
+    return [pscustomobject]@{
+        DirectPossible = $direct
+        JoinMode       = $joinMode
+        HasKerberosTgt = $hasTgt
+        Realm          = $realm
+        OnPremTgtField = $onPremTgtField
+        CaConfig       = $caConfigEffective
+        DnsResolves    = $dnsOk
+        CaPingOk       = $pingOk
+        DiscoveryError = $discoveryError
+        Reason         = $reason
+        Detail         = $detail
+    }
+}
+
 #endregion
 
 #region Virtuelle Smartcard

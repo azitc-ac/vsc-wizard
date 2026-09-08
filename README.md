@@ -8,13 +8,25 @@ Beantragungsschritte mit "Weiter"/"Zurueck") mit einer schrittunabhaengigen
 Kopfleiste, ueber die jederzeit die Einstellungen erreichbar sind. Es gibt zwei
 Szenarien, die in Schritt 1 gewaehlt werden:
 
-- **Plan A - AD-Domaene**: Rechner ist domaenen-gebunden und hat direkte Sicht
-  auf die Enterprise-CA. Kartenerstellung und Zertifikatsbeantragung laufen in
-  einem durchgehenden, automatisierten Ablauf.
-- **Plan B - Entra-joined / Workgroup**: Rechner hat keine direkte Sicht auf
-  die Zertifizierungsstelle. Der CSR wird lokal erzeugt, per RDP-Login als
-  Zielbenutzer auf einen CA-nahen Server eingereicht, und das ausgestellte
-  Zertifikat anschliessend wieder lokal auf der virtuellen Smartcard hinterlegt.
+- **Plan A - Direkte Einreichung**: Von diesem Rechner aus kann mit der eigenen
+  Identitaet direkt bei der Enterprise-CA eingereicht werden. Kartenerstellung
+  und Zertifikatsbeantragung laufen in einem durchgehenden, automatisierten
+  Ablauf.
+- **Plan B - CA-Schritt delegieren**: Direkte Einreichung von hier ist nicht
+  moeglich. Der CSR wird lokal erzeugt, per RDP-Login als Zielbenutzer auf einen
+  CA-nahen Server eingereicht, und das ausgestellte Zertifikat anschliessend
+  wieder lokal auf der virtuellen Smartcard hinterlegt.
+
+> **Wichtig - das eigentliche Kriterium ist nicht der Domain-Join.** Ob Plan A
+> geht, haengt an der *Faehigkeit*, von hier direkt bei der CA einzureichen
+> (On-Prem-Kerberos-Ticket + DNS/DC-Locator + CA per RPC erreichbar), nicht am
+> Maschinen-Status. Ein domaenen-gebundener (DJ) Client kann off-net scheitern;
+> ein Entra-joined (EJ) Client mit funktionierendem Cloud Kerberos Trust und
+> korrektem On-Prem-DNS kann direkt einreichen. Der Domain-Join dient nur als
+> schnelle Vorauswahl; die belastbare Antwort liefert der Button
+> **"Direkt-Einreichung pruefen"** in Schritt 1 (siehe unten). Plan B ist im Kern
+> nicht "der Entra-Weg", sondern "den CA-Schritt an einen faehigen Kontext
+> delegieren" - unabhaengig vom Client-Typ.
 
 Die Beantragung laeuft im Benutzerkontext, in dem der Wizard gestartet wurde
 (nur die Kartenerstellung mit `tpmvscmgr` fordert gezielt eine
@@ -23,7 +35,8 @@ gedacht ist, siehe naechster Abschnitt.
 
 In Schritt 1 fragt der Wizard zunaechst, **fuer wen** die Smartcard beantragt
 wird (und welcher der beiden Ablaeufe genutzt wird - anhand des erkannten
-Domaenen-Status vorausgewaehlt, aber frei aenderbar):
+Domaenen-Status *vorgeschlagen*, per "Direkt-Einreichung pruefen" gemessen
+bestaetigt, jederzeit frei aenderbar):
 
 - **Fuer mich**: normaler Ablauf, alles im aktuell angemeldeten
   Benutzerkontext.
@@ -124,6 +137,33 @@ dort in eine neue `.ps1`-Datei eingefuegt und direkt gestartet werden - ganz
 ohne das restliche Projekt mit rueberzukopieren.
 
 ## Ablauf im Detail
+
+### Direkt-Einreichung pruefen (faehigkeitsbasierte Planwahl)
+
+Der Button **"Direkt-Einreichung pruefen"** in Schritt 1 misst die tatsaechliche
+Faehigkeit, von diesem Rechner aus direkt bei der CA einzureichen, und
+ueberschreibt die Heuristik-Vorauswahl mit dem Ergebnis. Die Pruefkette (jeweils
+mit Klartext-Begruendung, laeuft in einem Hintergrund-Job mit ~45 s Timeout):
+
+1. **Join-Kontext** (`dsregcmd /status`, inkl. `OnPremTgt`-Feld) - nur zur Info.
+2. **On-Prem-Kerberos-TGT vorhanden?** (`klist`) - die Ground Truth der
+   authentifizierbaren AD-Identitaet. Fehlt es (z.B. EJ-Client ohne
+   funktionierendes Cloud Kerberos Trust), kann die CA niemanden autorisieren.
+3. **CA-Ziel bestimmbar?** - aus dem konfigurierten CA-String oder per
+   AD-Discovery. Scheitert das, ist es meist ein DNS-/DC-Locator-Problem.
+4. **CA-Server per DNS aufloesbar?** - haeufigste EJ-Ursache: der Client nutzt
+   nicht den On-Prem-DNS.
+5. **`certutil -ping`** (Transport + Authentifizierung zur CA) - der
+   entscheidende Test. Erfolg => Plan A moeglich.
+
+Ergebnis:
+- **Erfolg** => Plan A wird empfohlen/gesetzt. (Ob das Konto fuer das gewaehlte
+  Template *Enroll-Rechte* hat, zeigt sich erst beim Submit - das prueft `ping`
+  bewusst nicht.)
+- **Fehlschlag** => Plan B, mit dem *konkreten* Grund (kein Ticket / DNS / RPC),
+  statt pauschalem "CA nicht erreichbar". Bessert sich die Lage (z.B. CKT/DNS
+  eingerichtet), schaltet die Pruefung automatisch wieder auf "direkt" - ganz
+  ohne Domain-Join.
 
 ### Plan A (automatisiert)
 
@@ -369,6 +409,10 @@ geloescht.
   echter Hardware noch nicht verifiziert; er setzt zudem passende CA-seitige
   EOBO-Konfiguration voraus (siehe "Enrollment Agent"). Ohne EA-Zertifikat
   bleibt fuer separate Konten der Plan-B/RDP-Weg.
+- "Direkt-Einreichung pruefen" beweist ueber `certutil -ping` Transport +
+  Authentifizierung zur CA, aber NICHT die Enroll-Berechtigung auf dem konkreten
+  Template - die zeigt sich erst beim eigentlichen Submit. Der Check ist auf
+  echter Hardware ebenfalls noch nicht verifiziert.
 - Das Loeschen virtueller Smartcards laeuft weiterhin ueber `tpmvscmgr destroy`
   statt ueber die COM-API: `DestroyVirtualSmartCard` lieferte auf der
   Testhardware S_OK, entfernte die Karte aber nicht (Verhalten ungeklaert,
