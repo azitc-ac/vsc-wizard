@@ -348,7 +348,7 @@ function Update-ModeSelectPlanChoice {
         if ($eaCount -gt 0) {
             $radPlanA.Enabled = $true
             $radPlanA.Checked = $true
-            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A moeglich (Enroll on Behalf Of, ohne RDP). Plan B bleibt als Alternative. Tipp: 'Direkt-Einreichung pruefen' bestaetigt, ob die CA von hier erreichbar ist."
+            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A moeglich (EOBO, ohne RDP). Beachte: EA-Cert ist admin-aequivalent (ESC3) - fuer Admin-Konten ist Plan B (Self-Enrollment) oft sicherer. Plan B bleibt als Alternative."
         } else {
             $radPlanA.Enabled = $false
             $radPlanB.Checked = $true
@@ -1785,6 +1785,21 @@ function Show-SettingsDialog {
     $lblEaHeader.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
     $lblEaHeader.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 2)
     Add-SettingsFullRow -Control $lblEaHeader
+
+    # Sicherheitshinweis: ein EA-Zertifikat, das Logon-Certs fuer Admin-Konten
+    # ausstellen kann, ist gleichbedeutend mit "sich als diese Admins anmelden
+    # koennen" (AD-CS-Eskalationspfad ESC3). Wer es haelt, ist so privilegiert wie
+    # die Zielkonten. Fuer Admin-Zielkonten ist Self-Enrollment als das Konto selbst
+    # (Plan B) meist die sicherere Wahl; EA/EOBO nur als bewusste, moeglichst
+    # eingeschraenkte (Restricted Enrollment Agent) und auditierte Ausnahme.
+    $lblEaWarn = New-Object System.Windows.Forms.Label
+    $lblEaWarn.Text = 'Achtung: Ein EA-Zertifikat, mit dem sich Logon-Certs fuer Admins ausstellen lassen, ist admin-aequivalent (Eskalationspfad ESC3) - wer es besitzt, kann sich als diese Konten anmelden. Fuer Admin-Zielkonten ist Self-Enrollment als das Konto selbst (Plan B) meist sicherer. EA/EOBO nur bewusst, eingeschraenkt (Restricted Enrollment Agent) und auditiert einsetzen; EA-Schluessel auf Hardware/VSC halten.'
+    $lblEaWarn.AutoSize = $true
+    $lblEaWarn.MaximumSize = New-Object System.Drawing.Size(760, 0)
+    $lblEaWarn.ForeColor = [System.Drawing.Color]::Firebrick
+    $lblEaWarn.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+    $lblEaWarn.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+    Add-SettingsFullRow -Control $lblEaWarn
 
     $eaCertsNow = @(Get-EnrollmentAgentCertificates)
     $lblEaStatus = New-Object System.Windows.Forms.Label
