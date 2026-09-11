@@ -2086,8 +2086,8 @@ function Show-VscInventoryDialog {
         if ($result.Success) {
             Write-WizardLog -Message "Virtuelle Smartcard gelöscht: $($selectedReader.FriendlyName)" -Level Success
             [System.Windows.Forms.MessageBox]::Show('Smartcard gelöscht.', 'Erledigt', 'OK', 'Information') | Out-Null
+            $script:InventoryReopen = $true
             $dlg.Close()
-            Show-VscInventoryDialog -Owner $Owner
         } else {
             Write-WizardLog -Message "Löschen fehlgeschlagen (Exit-Code $($result.ExitCode)): $($selectedReader.FriendlyName)" -Level Error
             [System.Windows.Forms.MessageBox]::Show("Löschen fehlgeschlagen (Exit-Code $($result.ExitCode)). Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
@@ -2113,8 +2113,8 @@ function Show-VscInventoryDialog {
     $btnRefreshInventory.Margin = New-Object System.Windows.Forms.Padding(10)
     $dlgBtnPanel.Controls.Add($btnRefreshInventory)
     $btnRefreshInventory.Add_Click({
+        $script:InventoryReopen = $true
         $dlg.Close()
-        Show-VscInventoryDialog -Owner $Owner
     })
 
     # Einzelnes Zertifikat (Schlüssel-Container) gezielt von einer Karte entfernen.
@@ -2150,15 +2150,22 @@ function Show-VscInventoryDialog {
         $dlg.Cursor = 'Default'
         if ($res.Success) {
             [System.Windows.Forms.MessageBox]::Show('Zertifikat wurde von der Karte entfernt.', 'Erledigt', 'OK', 'Information') | Out-Null
+            $script:InventoryReopen = $true
             $dlg.Close()
-            Show-VscInventoryDialog -Owner $Owner
         } else {
             [System.Windows.Forms.MessageBox]::Show("Entfernen fehlgeschlagen: $($res.Message) Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
             $btnDeleteCert.Enabled = $true
         }
     })
 
+    # Aktualisieren/Löschen schließen den Dialog und öffnen ihn NACH Rückkehr aus
+    # ShowDialog neu - sonst stapelt sich ein zweites Fenster ueber dem alten.
+    $script:InventoryReopen = $false
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
+    if ($script:InventoryReopen) {
+        $script:InventoryReopen = $false
+        Show-VscInventoryDialog -Owner $Owner
+    }
 }
 
 function Show-SettingsDialog {
