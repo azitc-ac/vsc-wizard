@@ -1,20 +1,20 @@
-<#
+﻿<#
 .SYNOPSIS
-    VSC-Wizard - Wizard zur Beantragung virtueller Smartcards (TPM Virtual Smart Card) fuer AD-Administratoren.
+    VSC-Wizard - Wizard zur Beantragung virtueller Smartcards (TPM Virtual Smart Card) für AD-Administratoren.
 .DESCRIPTION
-    Fuehrt Schritt fuer Schritt durch die Erstellung einer virtuellen Smartcard und die
+    Fuehrt Schritt für Schritt durch die Erstellung einer virtuellen Smartcard und die
     Zertifikatsbeantragung. Unterstuetzt zwei Szenarien als Tabs:
 
-      - Plan A: Domaenen-gebundener Rechner mit direkter Sicht auf die Enterprise-CA
+      - Plan A: Domänen-gebundener Rechner mit direkter Sicht auf die Enterprise-CA
                 (voll automatisiert, CSR-Erstellung und Einreichung in einem Schritt).
       - Plan B: Entra-joined- oder Workgroup-Rechner ohne direkte CA-Sicht
                 (CSR wird lokal erzeugt, per RDP-Login als Zielbenutzer auf einen
-                CA-nahen Server eingereicht, Zertifikat wird zurueckkopiert und
+                CA-nahen Server eingereicht, Zertifikat wird zurückkopiert und
                 lokal auf der virtuellen Smartcard hinterlegt).
 .NOTES
-    Erfordert Windows mit TPM (fuer tpmvscmgr.exe) sowie certreq.exe.
+    Erfordert Windows mit TPM (für tpmvscmgr.exe) sowie certreq.exe.
     Die Erstellung der virtuellen Smartcard erfordert lokale Administratorrechte
-    (gezielte UAC-Elevation fuer diesen einen Schritt); alle uebrigen Schritte laufen
+    (gezielte UAC-Elevation für diesen einen Schritt); alle uebrigen Schritte laufen
     im normalen Benutzerkontext, da Zertifikate im Benutzer-Zertifikatsspeicher liegen.
 #>
 
@@ -48,10 +48,10 @@ function New-WizardLabel {
 }
 
 # $script:TargetAccount ist $null (= aktuell angemeldeter Benutzer) oder ein auf dem
-# Landing-Screen eingegebenes Zielkonto. VSC- und CSR-Erstellung laufen unabhaengig
-# davon immer im aktuellen Benutzerkontext (die Smartcard-PIN ist kontounabhaengig
-# und certreq verwaltet offene Antraege im Profil des aufrufenden Benutzers) - nur
-# die Einreichung bei der CA muss aus Berechtigungsgruenden als Zielkonto erfolgen.
+# Landing-Screen eingegebenes Zielkonto. VSC- und CSR-Erstellung laufen unabhängig
+# davon immer im aktuellen Benutzerkontext (die Smartcard-PIN ist kontounabhängig
+# und certreq verwaltet offene Anträge im Profil des aufrufenden Benutzers) - nur
+# die Einreichung bei der CA muss aus Berechtigungsgründen als Zielkonto erfolgen.
 function Get-EnrollmentIdentity {
     if ($script:TargetAccount) {
         $upn = if ($script:TargetAccount -match '@') { $script:TargetAccount } else { $null }
@@ -62,10 +62,10 @@ function Get-EnrollmentIdentity {
 }
 
 function Invoke-EnrollmentAgentRequest {
-    # Beantragt ein Enrollment-Agent-Zertifikat fuer das EIGENE Konto - eine ganz
+    # Beantragt ein Enrollment-Agent-Zertifikat für das EIGENE Konto - eine ganz
     # normale Direkt-Beantragung (kein separates Konto, kein RDP). Wahlweise mit dem
-    # Schluessel auf einer eigenen VSC (TPM/PIN, empfohlen) oder als CNG-Software-
-    # Schluessel. Das Template bestimmt die EKU (Certificate Request Agent).
+    # Schlüssel auf einer eigenen VSC (TPM/PIN, empfohlen) oder als CNG-Software-
+    # Schlüssel. Das Template bestimmt die EKU (Certificate Request Agent).
     param(
         [Parameter(Mandatory)][string]$Template,
         [switch]$OnVsc
@@ -76,10 +76,10 @@ function Invoke-EnrollmentAgentRequest {
 
     if ($OnVsc) {
         $cardName = "$($config.VscNamePrefix)EA-$env:USERNAME"
-        Write-WizardLog -Message "Erstelle VSC fuer EA-Zertifikat ('$cardName')." -Level Command
+        Write-WizardLog -Message "Erstelle VSC für EA-Zertifikat ('$cardName')." -Level Command
         $vsc = New-VirtualSmartCard -CardName $cardName
         if (-not $vsc.Success) {
-            return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'VSC-Erstellung fuer EA-Zertifikat fehlgeschlagen.' }
+            return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'VSC-Erstellung für EA-Zertifikat fehlgeschlagen.' }
         }
         $csp = $config.CspName
     } else {
@@ -104,13 +104,13 @@ function Invoke-EnrollmentAgentRequest {
     if ($complete.Success) {
         return [pscustomobject]@{ Success = $true; Pending = $false; RequestId = $submit.RequestId; Message = '' }
     }
-    return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = 'Uebernahme des EA-Zertifikats fehlgeschlagen.' }
+    return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = 'Übernahme des EA-Zertifikats fehlgeschlagen.' }
 }
 
 # Einfache Hint/Placeholder-Eingabe: zeigt grauen Beispieltext, solange kein echter
 # Wert eingetragen ist; verschwindet beim Fokussieren, kehrt beim Verlassen eines
-# leeren Feldes zurueck. Erkennung "ist gerade Placeholder" ueber ForeColor=Gray.
-# Funktioniert fuer TextBox und ComboBox gleichermassen (beide haben Text/ForeColor
+# leeren Feldes zurück. Erkennung "ist gerade Placeholder" über ForeColor=Gray.
+# Funktioniert für TextBox und ComboBox gleichermassen (beide haben Text/ForeColor
 # sowie Enter/Leave von System.Windows.Forms.Control).
 $script:PlaceholderMap = @{}
 
@@ -160,7 +160,7 @@ function Get-TextBoxRealValue {
 
 function Set-TemplateComboItem {
     # Nur EIN Zertifikatstemplate wird konfiguriert (Einstellungen) - diese Comboboxen
-    # in Plan A/Plan B zeigen es lediglich vorausgewaehlt an.
+    # in Plan A/Plan B zeigen es lediglich vorausgewählt an.
     param(
         [Parameter(Mandatory)][System.Windows.Forms.ComboBox]$ComboBox,
         [string]$Template
@@ -174,22 +174,22 @@ function Set-TemplateComboItem {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen'
-$form.Size = New-Object System.Drawing.Size(940, 780)
+$form.Size = New-Object System.Drawing.Size(1000, 900)
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize = New-Object System.Drawing.Size(840, 660)
+$form.MinimumSize = New-Object System.Drawing.Size(900, 780)
 
 $mainLayout = New-Object System.Windows.Forms.TableLayoutPanel
 $mainLayout.Dock = 'Fill'
 $mainLayout.RowCount = 3
 $mainLayout.ColumnCount = 1
 [void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 44)))
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 68)))
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 32)))
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 72)))
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 28)))
 $form.Controls.Add($mainLayout)
 
 #endregion
 
-#region TOP BAR (schrittunabhaengig - auf jedem Schritt sichtbar, u.a. fuer Einstellungen)
+#region TOP BAR (schrittunabhängig - auf jedem Schritt sichtbar, u.a. für Einstellungen)
 
 $topBar = New-Object System.Windows.Forms.TableLayoutPanel
 $topBar.Dock = 'Fill'
@@ -215,7 +215,7 @@ $btnOpenSettings.Add_Click({ Show-SettingsDialog -Owner $form })
 
 #endregion
 
-#region STEP HOST (Inhaltsbereich + gemeinsame Weiter/Zurueck-Navigation)
+#region STEP HOST (Inhaltsbereich + gemeinsame Weiter/Zurück-Navigation)
 
 $pnlStepHost = New-Object System.Windows.Forms.TableLayoutPanel
 $pnlStepHost.Dock = 'Fill'
@@ -243,7 +243,7 @@ $lblStepShared.TextAlign = 'MiddleLeft'
 $navShared.Controls.Add($lblStepShared, 0, 0)
 
 $btnBackShared = New-Object System.Windows.Forms.Button
-$btnBackShared.Text = '< Zurueck'
+$btnBackShared.Text = '< Zurück'
 $btnBackShared.Dock = 'Fill'
 $navShared.Controls.Add($btnBackShared, 1, 0)
 
@@ -253,7 +253,7 @@ $btnNextShared.Dock = 'Fill'
 $navShared.Controls.Add($btnNextShared, 2, 0)
 
 # $script:ActivePlan: $null = Schritt 1 (Moduswahl) ist aktiv, 'A'/'B' = der jeweilige
-# Schritt-Satz ist aktiv. Weiter/Zurueck werten dies aus, um an die richtige Stelle zu
+# Schritt-Satz ist aktiv. Weiter/Zurück werten dies aus, um an die richtige Stelle zu
 # delegieren (siehe Invoke-SharedNext/Back weiter unten, definiert nach Plan A/B).
 $script:ActivePlan = $null
 
@@ -275,18 +275,26 @@ $pnlModeSelect = New-Object System.Windows.Forms.Panel
 $pnlModeSelect.Dock = 'Fill'
 $pnlContentArea.Controls.Add($pnlModeSelect)
 
-$lblLandingTitle = New-WizardLabel -Text 'Fuer wen soll die virtuelle Smartcard beantragt werden?' -X 20 -Y 20 -Width 780 -Style Bold
+$lblLandingTitle = New-WizardLabel -Text 'Für wen soll die virtuelle Smartcard beantragt werden?' -X 20 -Y 20 -Width 780 -Style Bold
+
+# "Für wen" und "Welcher Ablauf" muessen in GETRENNTEN Containern liegen - sonst
+# bilden alle vier RadioButtons (als Kinder desselben Panels) EINE gemeinsame,
+# faelschlich geteilte Auswahlgruppe. Je ein Panel => zwei unabhängige Gruppen.
+$pnlAccountRadios = New-Object System.Windows.Forms.Panel
+$pnlAccountRadios.Location = New-Object System.Drawing.Point(16, 52)
+$pnlAccountRadios.Size = New-Object System.Drawing.Size(772, 60)
 
 $radSelf = New-Object System.Windows.Forms.RadioButton
-$radSelf.Text = "Fuer mich (aktuell angemeldet als $env:USERDOMAIN\$env:USERNAME)"
-$radSelf.Location = New-Object System.Drawing.Point(20, 60)
-$radSelf.Size = New-Object System.Drawing.Size(700, 24)
+$radSelf.Text = "Für mich (aktuell angemeldet als $env:USERDOMAIN\$env:USERNAME)"
+$radSelf.Location = New-Object System.Drawing.Point(4, 2)
+$radSelf.Size = New-Object System.Drawing.Size(744, 24)
 $radSelf.Checked = $true
 
 $radOther = New-Object System.Windows.Forms.RadioButton
-$radOther.Text = 'Fuer ein separates Konto (z.B. Admin-Konto)'
-$radOther.Location = New-Object System.Drawing.Point(20, 90)
-$radOther.Size = New-Object System.Drawing.Size(700, 24)
+$radOther.Text = 'Für ein separates Konto (z.B. Admin-Konto)'
+$radOther.Location = New-Object System.Drawing.Point(4, 30)
+$radOther.Size = New-Object System.Drawing.Size(744, 24)
+$pnlAccountRadios.Controls.AddRange(@($radSelf, $radOther))
 
 $lblOtherAccount = New-WizardLabel -Text 'Zielkonto (z.B. CONTOSO\adm.mustermann oder UPN):' -X 40 -Y 122 -Width 500
 $txtOtherAccount = New-Object System.Windows.Forms.TextBox
@@ -294,19 +302,24 @@ $txtOtherAccount.Location = New-Object System.Drawing.Point(40, 148)
 $txtOtherAccount.Size = New-Object System.Drawing.Size(400, 24)
 $txtOtherAccount.Enabled = $false
 
-$lblOtherExplain = New-WizardLabel -Text 'Karten- und CSR-Erstellung laufen ganz normal in deinem eigenen Benutzerkontext - dafuer ist keine gesonderte Anmeldung als Zielkonto noetig (die Smartcard-PIN ist unabhaengig vom Windows-Konto). Nur die spaetere Einreichung bei der CA muss aus Berechtigungsgruenden als Zielkonto erfolgen; Plan B fuehrt dich an der passenden Stelle dorthin (z.B. per RDP), die Uebernahme des fertigen Zertifikats erfolgt danach wieder hier.' -X 40 -Y 178 -Width 760 -Height 60
+$lblOtherExplain = New-WizardLabel -Text 'Karten- und CSR-Erstellung laufen ganz normal in deinem eigenen Benutzerkontext - dafür ist keine gesonderte Anmeldung als Zielkonto nötig (die Smartcard-PIN ist unabhängig vom Windows-Konto). Nur die spätere Einreichung bei der CA muss aus Berechtigungsgründen als Zielkonto erfolgen; Plan B führt dich an der passenden Stelle dorthin (z.B. per RDP), die Übernahme des fertigen Zertifikats erfolgt danach wieder hier.' -X 40 -Y 178 -Width 760 -Height 60
 
 $lblPlanChoiceTitle = New-WizardLabel -Text 'Welcher Ablauf?' -X 20 -Y 250 -Width 780 -Style Bold
 
+$pnlPlanRadios = New-Object System.Windows.Forms.Panel
+$pnlPlanRadios.Location = New-Object System.Drawing.Point(16, 280)
+$pnlPlanRadios.Size = New-Object System.Drawing.Size(772, 54)
+
 $radPlanA = New-Object System.Windows.Forms.RadioButton
-$radPlanA.Text = 'Plan A: AD-Domaene (direkte CA-Sicht, automatisiert)'
-$radPlanA.Location = New-Object System.Drawing.Point(20, 284)
+$radPlanA.Text = 'Plan A: AD-Domäne (direkte CA-Sicht, automatisiert)'
+$radPlanA.Location = New-Object System.Drawing.Point(4, 0)
 $radPlanA.Size = New-Object System.Drawing.Size(760, 24)
 
 $radPlanB = New-Object System.Windows.Forms.RadioButton
 $radPlanB.Text = 'Plan B: Entra / Workgroup (CSR lokal, Einreichung per RDP-Zwischenschritt)'
-$radPlanB.Location = New-Object System.Drawing.Point(20, 310)
+$radPlanB.Location = New-Object System.Drawing.Point(4, 26)
 $radPlanB.Size = New-Object System.Drawing.Size(760, 24)
+$pnlPlanRadios.Controls.AddRange(@($radPlanA, $radPlanB))
 
 $lblPlanChoiceHint = New-WizardLabel -Text '' -X 40 -Y 340 -Width 740
 $lblPlanChoiceHint.ForeColor = [System.Drawing.Color]::DimGray
@@ -315,7 +328,7 @@ $lblPlanChoiceHint.ForeColor = [System.Drawing.Color]::DimGray
 # (Kerberos-TGT + DNS + certutil-ping), statt aus dem Join-Status zu raten. Ergebnis
 # überschreibt die Heuristik-Vorauswahl mit der gemessenen Wahrheit.
 $btnCheckDirect = New-Object System.Windows.Forms.Button
-$btnCheckDirect.Text = 'Direkt-Einreichung pruefen'
+$btnCheckDirect.Text = 'Direkt-Einreichung prüfen'
 $btnCheckDirect.Location = New-Object System.Drawing.Point(40, 372)
 $btnCheckDirect.Size = New-Object System.Drawing.Size(230, 30)
 
@@ -331,37 +344,37 @@ $txtDirectResult.Visible = $false
 $lblLandingValidation = New-WizardLabel -Text '' -X 20 -Y 540 -Width 760
 $lblLandingValidation.ForeColor = [System.Drawing.Color]::Firebrick
 
-$pnlModeSelect.Controls.AddRange(@($lblLandingTitle, $radSelf, $radOther, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $lblPlanChoiceTitle, $radPlanA, $radPlanB, $lblPlanChoiceHint, $btnCheckDirect, $txtDirectResult, $lblLandingValidation))
+$pnlModeSelect.Controls.AddRange(@($lblLandingTitle, $pnlAccountRadios, $lblOtherAccount, $txtOtherAccount, $lblOtherExplain, $lblPlanChoiceTitle, $pnlPlanRadios, $lblPlanChoiceHint, $btnCheckDirect, $txtDirectResult, $lblLandingValidation))
 
 function Update-ModeSelectPlanChoice {
     # Der Domain-Join-Status ist nur eine HEURISTIK-Vorauswahl (sofort, ohne Netz),
     # kein belastbares Kriterium: ein DJ-Client kann off-net scheitern, ein EJ-Client
     # mit Cloud Kerberos Trust + korrektem DNS direkt einreichen. Die gemessene Wahrheit
-    # liefert "Direkt-Einreichung pruefen" (Test-DirectEnrollmentCapability), das diese
-    # Vorauswahl anschliessend ueberschreibt. Vom Nutzer jederzeit ueberschreibbar.
+    # liefert "Direkt-Einreichung prüfen" (Test-DirectEnrollmentCapability), das diese
+    # Vorauswahl anschließend überschreibt. Vom Nutzer jederzeit überschreibbar.
     $joinState = Get-DomainJoinState
     if ($radOther.Checked) {
-        # Separates Konto: Plan A ist moeglich, WENN ein Enrollment-Agent-Zertifikat
+        # Separates Konto: Plan A ist möglich, WENN ein Enrollment-Agent-Zertifikat
         # vorliegt (Enroll on Behalf Of - bruchfrei, ohne RDP). Sonst bleibt nur
         # Plan B, da die Einreichung als Zielkonto erfolgen muss.
         $eaCount = @(Get-EnrollmentAgentCertificates).Count
         if ($eaCount -gt 0) {
             $radPlanA.Enabled = $true
             $radPlanA.Checked = $true
-            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A moeglich (EOBO, ohne RDP). Beachte: EA-Cert ist admin-aequivalent (ESC3) - fuer Admin-Konten ist Plan B (Self-Enrollment) oft sicherer. Plan B bleibt als Alternative."
+            $lblPlanChoiceHint.Text = "EA-Zertifikat gefunden: Plan A möglich (EOBO, ohne RDP). Beachte: EA-Cert ist admin-äquivalent (ESC3) - für Admin-Konten ist Plan B (Self-Enrollment) oft sicherer. Plan B bleibt als Alternative."
         } else {
             $radPlanA.Enabled = $false
             $radPlanB.Checked = $true
-            $lblPlanChoiceHint.Text = 'Kein EA-Zertifikat gefunden - fuer ein separates Konto daher Plan B (RDP). Mit einem EA-Zertifikat (in den Einstellungen beantragbar) ginge auch Plan A ohne RDP.'
+            $lblPlanChoiceHint.Text = 'Kein EA-Zertifikat gefunden - für ein separates Konto daher Plan B (RDP). Mit einem EA-Zertifikat (in den Einstellungen beantragbar) ginge auch Plan A ohne RDP.'
         }
     } else {
         $radPlanA.Enabled = $true
         if ($joinState.Mode -eq 'ADDomain') {
             $radPlanA.Checked = $true
-            $lblPlanChoiceHint.Text = "Vorschlag (Heuristik: Domaenen-Status $($joinState.Mode)): Plan A. Fuer Gewissheit 'Direkt-Einreichung pruefen'."
+            $lblPlanChoiceHint.Text = "Vorschlag (Heuristik: Domänen-Status $($joinState.Mode)): Plan A. Für Gewissheit 'Direkt-Einreichung prüfen'."
         } else {
             $radPlanB.Checked = $true
-            $lblPlanChoiceHint.Text = "Vorschlag (Heuristik: Domaenen-Status $($joinState.Mode)): Plan B. Bei funktionierendem Cloud Kerberos Trust ist evtl. doch Plan A moeglich - 'Direkt-Einreichung pruefen' misst es."
+            $lblPlanChoiceHint.Text = "Vorschlag (Heuristik: Domänen-Status $($joinState.Mode)): Plan B. Bei funktionierendem Cloud Kerberos Trust ist evtl. doch Plan A möglich - 'Direkt-Einreichung prüfen' misst es."
         }
     }
 }
@@ -378,10 +391,10 @@ $btnCheckDirect.Add_Click({
     $btnCheckDirect.Enabled = $false
     $txtDirectResult.Visible = $true
     $txtDirectResult.ForeColor = [System.Drawing.SystemColors]::WindowText
-    $txtDirectResult.Text = 'Pruefe Direkt-Einreichung (Kerberos-Ticket, DNS, certutil -ping - bis zu ca. 45 Sekunden)...'
+    $txtDirectResult.Text = 'Prüfe Direkt-Einreichung (Kerberos-Ticket, DNS, certutil -ping - bis zu ca. 45 Sekunden)...'
     $form.Refresh()
 
-    # In einem Start-Job, da DNS/RPC/certutil bei nicht erreichbaren Zielen haengen koennen.
+    # In einem Start-Job, da DNS/RPC/certutil bei nicht erreichbaren Zielen hängen können.
     $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
     $job = Start-Job -ScriptBlock {
         param($ModulePath, $CAConfig, $Server, $Timeout)
@@ -395,8 +408,8 @@ $btnCheckDirect.Add_Click({
 
     if (-not $completed -or -not $cap) {
         $txtDirectResult.ForeColor = [System.Drawing.Color]::Firebrick
-        $txtDirectResult.Text = 'Zeitueberschreitung (>45s) - CA/DC vermutlich nicht erreichbar (Netz/DNS/VPN pruefen). Vorerst Plan B verwenden.'
-        Write-WizardLog -Message 'Direkt-Einreichungspruefung: Zeitueberschreitung.' -Level Error
+        $txtDirectResult.Text = 'Zeitüberschreitung (>45s) - CA/DC vermutlich nicht erreichbar (Netz/DNS/VPN prüfen). Vorerst Plan B verwenden.'
+        Write-WizardLog -Message 'Direkt-Einreichungsprüfung: Zeitüberschreitung.' -Level Error
         $btnCheckDirect.Enabled = $true
         return
     }
@@ -405,19 +418,19 @@ $btnCheckDirect.Add_Click({
     $txtDirectResult.Text = "$($cap.Reason)`r`n`r`n$($cap.Detail)"
     Write-WizardLog -Message "Direkt-Einreichung: DirectPossible=$($cap.DirectPossible), Join=$($cap.JoinMode), TGT=$($cap.HasKerberosTgt), Ping=$($cap.CaPingOk)." -Level Info
 
-    # Gemessenes Ergebnis ueberschreibt die Heuristik-Vorauswahl.
+    # Gemessenes Ergebnis überschreibt die Heuristik-Vorauswahl.
     if ($radSelf.Checked) {
         if ($cap.DirectPossible) {
             $radPlanA.Enabled = $true; $radPlanA.Checked = $true
-            $lblPlanChoiceHint.Text = 'Gemessen: Direkt-Einreichung moeglich - Plan A.'
+            $lblPlanChoiceHint.Text = 'Gemessen: Direkt-Einreichung möglich - Plan A.'
         } else {
             $radPlanB.Checked = $true
-            $lblPlanChoiceHint.Text = 'Gemessen: Direkt-Einreichung derzeit nicht moeglich - Plan B (CA-Schritt delegieren). Grund siehe oben.'
+            $lblPlanChoiceHint.Text = 'Gemessen: Direkt-Einreichung derzeit nicht möglich - Plan B (CA-Schritt delegieren). Grund siehe oben.'
         }
     } else {
-        # Separates Konto: Plan-A-Verfuegbarkeit haengt zusaetzlich am EA-Zertifikat
+        # Separates Konto: Plan-A-Verfügbarkeit hängt zusätzlich am EA-Zertifikat
         # (Update-ModeSelectPlanChoice); der Check zeigt hier die CA-Erreichbarkeit, die
-        # auch fuer EOBO noetig ist.
+        # auch für EOBO nötig ist.
         if (-not $cap.DirectPossible) {
             $txtDirectResult.Text += "`r`n`r`nHinweis: Auch der EOBO-Weg (Plan A mit EA-Zertifikat) braucht diese CA-Erreichbarkeit. Ist sie nicht gegeben, bleibt Plan B."
         }
@@ -433,7 +446,7 @@ function Show-ModeSelectStep {
     $pnlModeSelect.Visible = $true
     Update-ModeSelectPlanChoice
     $lblGlobalStep.Text = 'Schritt 2: Konto & Weg'
-    # Zurueck fuehrt jetzt auf die Szenario-Auswahl (Schritt 1).
+    # Zurück führt jetzt auf die Szenario-Auswahl (Schritt 1).
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = $true
 }
@@ -464,7 +477,7 @@ function Invoke-ModeSelectNextClick {
 #endregion
 
 # ============================================================================
-#region SCHRITT 1: SZENARIO-AUSWAHL (neue Startseite, routet in die bestehenden Ablaeufe)
+#region SCHRITT 1: SZENARIO-AUSWAHL (neue Startseite, routet in die bestehenden Abläufe)
 # ============================================================================
 
 # Farbpalette (klassisch, passend zum WinForms-Look aus dem Design-Mockup).
@@ -483,61 +496,61 @@ $scnTagDanger = [System.Drawing.Color]::FromArgb(181, 52, 42)
 # Szenario-Definitionen (Reihenfolge wie im Runbook). Steps: T = Tag, X = Text.
 $script:Scenarios = @(
     [pscustomobject]@{
-        Id = 1; Title = 'Neues SC-only-Admin-Konto einrichten'; Sub = 'GEFUEHRT - BOOTSTRAP   Erste VSC fuer ein Konto ohne Karte (loest das Henne-Ei-Problem).'; Stripe = 'blue'
+        Id = 1; Title = 'Neues SC-only-Admin-Konto einrichten'; Sub = 'GEFÜHRT - BOOTSTRAP   Erste VSC für ein Konto ohne Karte (löst das Henne-Ei-Problem).'; Stripe = 'blue'
         Steps = @(
-            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto temporaer auf Passwort-Anmeldung zulassen (SC-only kurz aus).' }
+            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto temporär auf Passwort-Anmeldung zulassen (SC-only kurz aus).' }
             [pscustomobject]@{ T = 'Tool';     X = 'VSC auf dieser Maschine erstellen, PIN vergeben.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'CSR erzeugen (Schluessel auf der VSC).' }
-            [pscustomobject]@{ T = 'Pruefung'; X = 'Direkt-Einreichung moeglich? ja: direkt einreichen. nein: per RDP als Zielkonto auf Einreich-Host.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'Zertifikat auf die VSC uebernehmen.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR erzeugen (Schlüssel auf der VSC).' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt-Einreichung möglich? ja: direkt einreichen. nein: per RDP als Zielkonto auf Einreich-Host.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'Zertifikat auf die VSC übernehmen.' }
             [pscustomobject]@{ T = 'Du';       X = 'Zielkonto wieder auf "Smartcard erforderlich" setzen.' }
         )
         Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Passwort ist einmaliger Bootstrap. VSC dort erstellen, wo sie genutzt wird.' }
     }
     [pscustomobject]@{
-        Id = 2; Title = 'Zertifikat verlaengern'; Sub = 'GEFUEHRT - VOR ABLAUF   Erneuerung ueber eine noch gueltige VSC, ohne Passwort.'; Stripe = 'blue'
+        Id = 2; Title = 'Zertifikat verlängern'; Sub = 'GEFÜHRT - VOR ABLAUF   Erneuerung über eine noch gültige VSC, ohne Passwort.'; Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Tool'; X = 'Vorhandene VSC + Zertifikat erkennen, Restlaufzeit anzeigen.' }
-            [pscustomobject]@{ T = 'Du';   X = 'Mit gueltiger Karte anmelden (Smartcard-Redirect, kein Passwort).' }
+            [pscustomobject]@{ T = 'Du';   X = 'Mit gültiger Karte anmelden (Smartcard-Redirect, kein Passwort).' }
             [pscustomobject]@{ T = 'Tool'; X = 'Neuen CSR erzeugen und einreichen.' }
-            [pscustomobject]@{ T = 'Tool'; X = 'Neues Zertifikat auf die bestehende VSC uebernehmen.' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Neues Zertifikat auf die bestehende VSC übernehmen.' }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'Bereits abgelaufen -> kein Chain moeglich -> Szenario 01 (Bootstrap).' }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'Bereits abgelaufen -> kein Chain möglich -> Szenario 01 (Bootstrap).' }
     }
     [pscustomobject]@{
-        Id = 3; Title = 'VSC fuer dieses Konto direkt ausstellen'; Sub = 'AUTOMATISIERT   Geradliniger Weg, wenn die CA von hier erreichbar ist.'; Stripe = 'green'
+        Id = 3; Title = 'VSC für dieses Konto direkt ausstellen'; Sub = 'AUTOMATISIERT   Geradliniger Weg, wenn die CA von hier erreichbar ist.'; Stripe = 'green'
         Steps = @(
-            [pscustomobject]@{ T = 'Pruefung'; X = 'Direkt-Einreichung pruefen (Kerberos, DNS, certutil -ping).' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt-Einreichung prüfen (Kerberos, DNS, certutil -ping).' }
             [pscustomobject]@{ T = 'Tool';     X = 'VSC erstellen, PIN vergeben.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'CSR -> direkt einreichen -> Zertifikat uebernehmen.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR -> direkt einreichen -> Zertifikat übernehmen.' }
         )
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 4; Title = 'Cloud-Global-Admin: Smartcard + VSC'; Sub = 'GEFUEHRT - ENTRA   Phishing-resistente Anmeldung: YubiKey (portabel) und VSC.'; Stripe = 'blue'
+        Id = 4; Title = 'Cloud-Global-Admin: Smartcard + VSC'; Sub = 'GEFÜHRT - ENTRA   Phishing-resistente Anmeldung: YubiKey (portabel) und VSC.'; Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Tool'; X = 'Teil A (lokal): Zertifikat auf YubiKey (PIV) und/oder VSC provisionieren.' }
             [pscustomobject]@{ T = 'Du';   X = 'Teil B (CBA): ausstellende CA in den Entra-Vertrauensspeicher importieren.' }
-            [pscustomobject]@{ T = 'Du';   X = 'CBA aktivieren; Username-Binding; CRL oeffentlich erreichbar.' }
+            [pscustomobject]@{ T = 'Du';   X = 'CBA aktivieren; Username-Binding; CRL öffentlich erreichbar.' }
             [pscustomobject]@{ T = 'Du';   X = 'Alternative: FIDO2/Passkey auf demselben YubiKey (ohne PKI-in-Entra).' }
         )
-        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Gefuehrter Ablauf folgt (in Arbeit) - Details im RUNBOOK.md.' }
+        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Geführter Ablauf folgt (in Arbeit) - Details im RUNBOOK.md.' }
     }
     [pscustomobject]@{
-        Id = 5; Title = 'VSCs verwalten'; Sub = 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und loeschen.'; Stripe = 'teal'
+        Id = 5; Title = 'VSCs verwalten'; Sub = 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und löschen.'; Stripe = 'teal'
         Steps = @(
             [pscustomobject]@{ T = 'Tool'; X = 'Inventar: Reader, Karten, Zertifikate mit Ablaufdatum.' }
-            [pscustomobject]@{ T = 'Du';   X = 'Auswaehlen und loeschen (tpmvscmgr destroy).' }
+            [pscustomobject]@{ T = 'Du';   X = 'Auswählen und löschen (tpmvscmgr destroy).' }
         )
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 6; Title = 'Fuer ein anderes Konto ausstellen (EOBO)'; Sub = 'FORTGESCHRITTEN   Enroll on Behalf Of mit Enrollment-Agent-Zertifikat.'; Stripe = 'red'
+        Id = 6; Title = 'Für ein anderes Konto ausstellen (EOBO)'; Sub = 'FORTGESCHRITTEN   Enroll on Behalf Of mit Enrollment-Agent-Zertifikat.'; Stripe = 'red'
         Steps = @(
             [pscustomobject]@{ T = 'Tool'; X = 'EA-Zertifikat erkennen; EOBO-Antrag (RequesterName=Ziel, Build-from-AD).' }
-            [pscustomobject]@{ T = 'Tool'; X = 'Antrag co-signieren, einreichen, auf VSC uebernehmen.' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Antrag co-signieren, einreichen, auf VSC übernehmen.' }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-aequivalent. Fuer Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-äquivalent. Für Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
     }
 )
 $script:SelectedScenario = $null
@@ -556,10 +569,10 @@ $pnlScenario.Controls.Add($scnRoot)
 $scnHeader = New-Object System.Windows.Forms.Panel
 $scnHeader.Dock = 'Fill'
 $scnRoot.Controls.Add($scnHeader, 0, 0)
-$lblScnTitle = New-WizardLabel -Text 'Was moechtest du tun?' -X 16 -Y 12 -Width 760 -Style Bold
+$lblScnTitle = New-WizardLabel -Text 'Was möchtest du tun?' -X 16 -Y 12 -Width 760 -Style Bold
 $lblScnTitle.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
 $lblScnTitle.Height = 26
-$lblScnSub = New-WizardLabel -Text 'Szenario waehlen - der Wizard richtet Karte, Antrag und Einreichungsweg passend ein.' -X 16 -Y 42 -Width 760
+$lblScnSub = New-WizardLabel -Text 'Szenario wählen - der Wizard richtet Karte, Antrag und Einreichungsweg passend ein.' -X 16 -Y 42 -Width 760
 $lblScnSub.ForeColor = [System.Drawing.Color]::DimGray
 $lblScnValidation = New-WizardLabel -Text '' -X 16 -Y 42 -Width 760
 $lblScnValidation.ForeColor = [System.Drawing.Color]::Firebrick
@@ -605,7 +618,7 @@ function Set-ScenarioDetails {
     $ink = [System.Drawing.SystemColors]::WindowText
     Add-ScnColoredText -Rtb $scnDetails -Text ("{0:D2}  {1}`r`n`r`n" -f $Scenario.Id, $Scenario.Title) -Color $ink -Bold
     foreach ($s in $Scenario.Steps) {
-        $tagColor = switch ($s.T) { 'Tool' { $scnTagTool } 'Du' { $scnTagYou } 'Pruefung' { $scnTagGate } default { $ink } }
+        $tagColor = switch ($s.T) { 'Tool' { $scnTagTool } 'Du' { $scnTagYou } 'Prüfung' { $scnTagGate } default { $ink } }
         Add-ScnColoredText -Rtb $scnDetails -Text ("[{0}] " -f $s.T) -Color $tagColor -Bold
         Add-ScnColoredText -Rtb $scnDetails -Text ("{0}`r`n" -f $s.X) -Color $ink
     }
@@ -690,7 +703,7 @@ function Show-ScenarioStep {
 function Invoke-ScenarioNextClick {
     if (-not $script:SelectedScenario) {
         $lblScnSub.Visible = $false
-        $lblScnValidation.Text = 'Bitte ein Szenario auswaehlen.'
+        $lblScnValidation.Text = 'Bitte ein Szenario auswählen.'
         $lblScnValidation.Visible = $true
         return
     }
@@ -699,7 +712,7 @@ function Invoke-ScenarioNextClick {
         2 { $radSelf.Checked = $true;  $pnlScenario.Visible = $false; Show-ModeSelectStep }
         3 { $radSelf.Checked = $true;  $pnlScenario.Visible = $false; Show-ModeSelectStep }
         4 {
-            [System.Windows.Forms.MessageBox]::Show('Der gefuehrte Cloud-GA-Ablauf (Entra CBA / FIDO2) ist noch in Arbeit. Die Schritte stehen als Checkliste im RUNBOOK.md. Fuer die lokale Zertifikats-/VSC-Ausstellung koennen vorerst die Szenarien 01-03 genutzt werden.', 'Cloud-Global-Admin (in Arbeit)', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Der geführte Cloud-GA-Ablauf (Entra CBA / FIDO2) ist noch in Arbeit. Die Schritte stehen als Checkliste im RUNBOOK.md. Für die lokale Zertifikats-/VSC-Ausstellung können vorerst die Szenarien 01-03 genutzt werden.', 'Cloud-Global-Admin (in Arbeit)', 'OK', 'Information') | Out-Null
         }
         5 { Show-VscInventoryDialog -Owner $form }
         6 { $radOther.Checked = $true; $pnlScenario.Visible = $false; Show-ModeSelectStep; $txtOtherAccount.Focus() }
@@ -766,7 +779,7 @@ $pnlA1 = New-Object System.Windows.Forms.Panel
 $pnlA1.Dock = 'Fill'
 $pnlStepsA.Controls.Add($pnlA1)
 
-$lblJoinStateA = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
+$lblJoinStateA = New-WizardLabel -Text 'Domänen-Status: ...' -X 20 -Y 20
 $lblUserA = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
 $lblTpmA = New-WizardLabel -Text 'TPM: ...' -X 20 -Y 80
 $lblWarnA = New-WizardLabel -Text '' -X 20 -Y 120 -Style Bold
@@ -783,7 +796,7 @@ $txtCardNameA.Location = New-Object System.Drawing.Point(20, 46)
 $txtCardNameA.Size = New-Object System.Drawing.Size(300, 24)
 $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
 
-$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 6 Zeichen, mit Bestaetigung; der Dialog zeigt die geltende Mindestlaenge an). Die Karte wird anschliessend ueber die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
+$lblVscInfoA = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur für diesen Schritt benötigt). Danach öffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 6 Zeichen, mit Bestätigung; der Dialog zeigt die geltende Mindestlänge an). Die Karte wird anschließend über die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
 
 $btnCreateVscA = New-Object System.Windows.Forms.Button
 $btnCreateVscA.Text = 'Virtuelle Smartcard erstellen'
@@ -801,7 +814,7 @@ $btnCreateVscA.Add_Click({
     }
     $btnCreateVscA.Enabled = $false
     $lblVscResultA.ForeColor = [System.Drawing.Color]::Black
-    $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestaetigen, dann im Dialog die PIN festlegen...'
+    $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestätigen, dann im Dialog die PIN festlegen...'
     $form.Refresh()
 
     try {
@@ -816,7 +829,7 @@ $btnCreateVscA.Add_Click({
         $script:PlanA_PcscName = $result.PcscName
         $lblVscResultA.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblVscResultA.Text = if ($result.PcscName) {
-            "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der Zertifikatsanforderung) heisst sie: '$($result.PcscName)'."
+            "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der Zertifikatsanforderung) heißt sie: '$($result.PcscName)'."
         } else {
             'Virtuelle Smartcard wurde erfolgreich erstellt.'
         }
@@ -859,21 +872,21 @@ $btnRetrieveA.Visible = $false
 $pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
-    # Fuer ein separates Zielkonto ist die Direkt-Ausstellung nur ueber Enroll on
-    # Behalf Of moeglich (die CA prueft die Enroll-Berechtigung sonst gegen die
-    # EIGENE Identitaet). Dafuer braucht es ein Enrollment-Agent-Zertifikat im
+    # Für ein separates Zielkonto ist die Direkt-Ausstellung nur über Enroll on
+    # Behalf Of möglich (die CA prüft die Enroll-Berechtigung sonst gegen die
+    # EIGENE Identität). Dafür braucht es ein Enrollment-Agent-Zertifikat im
     # eigenen Speicher; fehlt es, bleibt der Plan-B/RDP-Weg.
     $eoboThumbprint = $null
     if ($script:TargetAccount) {
         $eaCerts = @(Get-EnrollmentAgentCertificates)
         if ($eaCerts.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show('Fuer ein separates Konto ist hier ein Enrollment-Agent-Zertifikat noetig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder stattdessen Plan B (RDP) verwenden.', 'Separates Konto: EA-Zertifikat noetig', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Für ein separates Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder stattdessen Plan B (RDP) verwenden.', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
             return
         }
         $eoboThumbprint = $eaCerts[0].Thumbprint
     }
     if (-not $cboTemplateA.SelectedItem) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswählen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     $btnRequestCertA.Enabled = $false
@@ -889,7 +902,7 @@ $btnRequestCertA.Add_Click({
     $identity = Get-EnrollmentIdentity
 
     if ($eoboThumbprint) {
-        # EOBO: Zielkonto + Template gehoeren in den PKCS7-Antrag, der mit dem
+        # EOBO: Zielkonto + Template gehören in den PKCS7-Antrag, der mit dem
         # EA-Zertifikat co-signiert wird. Das Template wird beim Submit dann NICHT
         # nochmal per -attrib gesetzt.
         $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir -RequesterName $identity.DisplayName -TemplateName $cboTemplateA.SelectedItem -SigningCertThumbprint $eoboThumbprint
@@ -908,14 +921,14 @@ $btnRequestCertA.Add_Click({
     if ($submit.Pending) {
         $script:PlanA_PendingRequestId = $submit.RequestId
         # Zustand persistieren: der wartende Antrag kann nach einem Wizard-Neustart
-        # ueber den Fortsetzen-Dialog beim Start wieder aufgenommen werden.
+        # über den Fortsetzen-Dialog beim Start wieder aufgenommen werden.
         Save-WizardResumeState -State @{
             Plan = 'A'; Stage = 'Pending'; RequestId = $submit.RequestId
             CardName = $script:PlanA_CardName; PcscName = "$($script:PlanA_PcscName)"
             EnrollDir = $script:PlanA_EnrollDir
         }
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). Bitte spaeter erneut abrufen - auch nach einem Neustart des Wizards moeglich."
+        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). Bitte später erneut abrufen - auch nach einem Neustart des Wizards möglich."
         $btnRetrieveA.Visible = $true
         $btnRequestCertA.Enabled = $true
         return
@@ -935,7 +948,7 @@ $btnRequestCertA.Add_Click({
         $lblCertResultA.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
     } else {
         $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblCertResultA.Text = 'Uebernahme des Zertifikats fehlgeschlagen. Details siehe Log.'
+        $lblCertResultA.Text = 'Übernahme des Zertifikats fehlgeschlagen. Details siehe Log.'
     }
     $btnRequestCertA.Enabled = $true
 })
@@ -973,7 +986,7 @@ $pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA))
 function Update-PlanASummary {
     $summary = Get-IssuedCertificateSummary -SubjectContains (Get-EnrollmentIdentity).SearchTerm
     if ($summary) {
-        $lblSummaryA.Text = "Kartenname: $($script:PlanA_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGueltig ab: $($summary.NotBefore)`r`nGueltig bis: $($summary.NotAfter)"
+        $lblSummaryA.Text = "Kartenname: $($script:PlanA_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
     } else {
         $lblSummaryA.Text = 'Kein passendes Zertifikat gefunden.'
     }
@@ -998,22 +1011,22 @@ function Update-PlanAStatus {
     $tpm = Test-TpmReadiness
     $upn = Get-CurrentUpn
 
-    $lblJoinStateA.Text = "Domaenen-Status: $($joinState.Mode)" + $(if ($joinState.Domain) { " ($($joinState.Domain))" } else { '' })
+    $lblJoinStateA.Text = "Domänen-Status: $($joinState.Mode)" + $(if ($joinState.Domain) { " ($($joinState.Domain))" } else { '' })
     $lblUserA.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
     $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
 
     if ($script:TargetAccount) {
         $lblWarnA.ForeColor = [System.Drawing.Color]::SteelBlue
-        $lblWarnA.Text = "Smartcard wird fuer ein separates Konto beantragt ($($script:TargetAccount)) - die Ausstellung in Schritt 3 erfolgt bruchfrei per Enroll on Behalf Of (Enrollment-Agent-Zertifikat), ohne RDP."
+        $lblWarnA.Text = "Smartcard wird für ein separates Konto beantragt ($($script:TargetAccount)) - die Ausstellung in Schritt 3 erfolgt bruchfrei per Enroll on Behalf Of (Enrollment-Agent-Zertifikat), ohne RDP."
     } elseif ($joinState.Mode -ne 'ADDomain') {
         $lblWarnA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblWarnA.Text = 'Dieser Rechner scheint nicht domaenen-gebunden zu sein. Fuer diesen Fall ist "Plan B" vorgesehen.'
+        $lblWarnA.Text = 'Dieser Rechner scheint nicht domänen-gebunden zu sein. Für diesen Fall ist "Plan B" vorgesehen.'
     } elseif (-not $tpm.Ready) {
         $lblWarnA.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblWarnA.Text = 'Kein bereites TPM erkannt - die Erstellung einer virtuellen Smartcard ist eventuell nicht moeglich.'
+        $lblWarnA.Text = 'Kein bereites TPM erkannt - die Erstellung einer virtuellen Smartcard ist eventuell nicht möglich.'
     } else {
         $lblWarnA.ForeColor = [System.Drawing.Color]::ForestGreen
-        $lblWarnA.Text = 'Voraussetzungen erfuellt.'
+        $lblWarnA.Text = 'Voraussetzungen erfüllt.'
     }
 }
 
@@ -1035,7 +1048,7 @@ function Show-PlanAStep {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
             $lblCardHintA.Text = if ($script:PlanA_PcscName) {
-                "Hinweis: im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanA_PcscName)' waehlen (das ist '$($script:PlanA_CardName)')."
+                "Hinweis: im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanA_PcscName)' wählen (das ist '$($script:PlanA_CardName)')."
             } else { '' }
         }
         3 { Update-PlanASummary }
@@ -1086,11 +1099,11 @@ $pnlB1 = New-Object System.Windows.Forms.Panel
 $pnlB1.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB1)
 
-$lblJoinStateB = New-WizardLabel -Text 'Domaenen-Status: ...' -X 20 -Y 20
+$lblJoinStateB = New-WizardLabel -Text 'Domänen-Status: ...' -X 20 -Y 20
 $lblUserB = New-WizardLabel -Text 'Angemeldeter Benutzer: ...' -X 20 -Y 50
 $lblTargetB = New-WizardLabel -Text '' -X 20 -Y 80
 $lblJumpServerB = New-WizardLabel -Text '' -X 20 -Y 110
-$lblExplainB = New-WizardLabel -Text 'Dieser Modus fuehrt eine virtuelle Smartcard und einen Zertifikatsantrag ueber einen Zwischenschritt per RDP durch, da entweder dieser Rechner keine direkte Sicht auf die Zertifizierungsstelle hat oder die Einreichung als separates Zielkonto erfolgen muss. CA-Konfiguration und automatische PKI-Erkennung finden sich im Tab "Einstellungen".' -X 20 -Y 146 -Width 780 -Height 60
+$lblExplainB = New-WizardLabel -Text 'Dieser Modus führt eine virtuelle Smartcard und einen Zertifikatsantrag über einen Zwischenschritt per RDP durch, da entweder dieser Rechner keine direkte Sicht auf die Zertifizierungsstelle hat oder die Einreichung als separates Zielkonto erfolgen muss. CA-Konfiguration und automatische PKI-Erkennung finden sich im Tab "Einstellungen".' -X 20 -Y 146 -Width 780 -Height 60
 $pnlB1.Controls.AddRange(@($lblJoinStateB, $lblUserB, $lblTargetB, $lblJumpServerB, $lblExplainB))
 
 # --- Schritt B2: VSC erstellen ---
@@ -1104,7 +1117,7 @@ $txtCardNameB.Location = New-Object System.Drawing.Point(20, 46)
 $txtCardNameB.Size = New-Object System.Drawing.Size(300, 24)
 $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
 
-$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur fuer diesen Schritt benoetigt). Danach oeffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 6 Zeichen, mit Bestaetigung; der Dialog zeigt die geltende Mindestlaenge an). Die Karte wird anschliessend ueber die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
+$lblVscInfoB = New-WizardLabel -Text 'Beim Klick auf "Erstellen" erscheint eine UAC-Abfrage (lokale Adminrechte werden nur für diesen Schritt benötigt). Danach öffnet sich ein Dialog zur Eingabe der Karten-PIN (mindestens 6 Zeichen, mit Bestätigung; der Dialog zeigt die geltende Mindestlänge an). Die Karte wird anschließend über die Windows-Smartcard-API erstellt.' -X 20 -Y 84 -Width 780 -Height 76
 
 $btnCreateVscB = New-Object System.Windows.Forms.Button
 $btnCreateVscB.Text = 'Virtuelle Smartcard erstellen'
@@ -1122,7 +1135,7 @@ $btnCreateVscB.Add_Click({
     }
     $btnCreateVscB.Enabled = $false
     $lblVscResultB.ForeColor = [System.Drawing.Color]::Black
-    $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestaetigen, dann im Dialog die PIN festlegen...'
+    $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestätigen, dann im Dialog die PIN festlegen...'
     $form.Refresh()
 
     try {
@@ -1137,7 +1150,7 @@ $btnCreateVscB.Add_Click({
         $script:PlanB_PcscName = $result.PcscName
         $lblVscResultB.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblVscResultB.Text = if ($result.PcscName) {
-            "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der CSR-Erstellung) heisst sie: '$($result.PcscName)'."
+            "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der CSR-Erstellung) heißt sie: '$($result.PcscName)'."
         } else {
             'Virtuelle Smartcard wurde erfolgreich erstellt.'
         }
@@ -1173,11 +1186,11 @@ $btnCopyCsrPathB.Location = New-Object System.Drawing.Point(590, 134)
 $btnCopyCsrPathB.Size = New-Object System.Drawing.Size(120, 28)
 
 $btnOpenCsrFolderB = New-Object System.Windows.Forms.Button
-$btnOpenCsrFolderB.Text = 'Ordner oeffnen'
+$btnOpenCsrFolderB.Text = 'Ordner öffnen'
 $btnOpenCsrFolderB.Location = New-Object System.Drawing.Point(20, 172)
 $btnOpenCsrFolderB.Size = New-Object System.Drawing.Size(160, 28)
 
-$lblCsrTextLabelB = New-WizardLabel -Text 'CSR-Text (PEM) - Alternative zur Dateifreigabe: per RDP-Zwischenablage in den Einreichungshelfer (VscWizard.Submit.ps1) auf dem Zielserver einfuegen:' -X 20 -Y 216 -Width 780 -Height 34
+$lblCsrTextLabelB = New-WizardLabel -Text 'CSR-Text (PEM) - Alternative zur Dateifreigabe: per RDP-Zwischenablage in den Einreichungshelfer (VscWizard.Submit.ps1) auf dem Zielserver einfügen:' -X 20 -Y 216 -Width 780 -Height 34
 $txtCsrTextB = New-Object System.Windows.Forms.TextBox
 $txtCsrTextB.Location = New-Object System.Drawing.Point(20, 254)
 $txtCsrTextB.Size = New-Object System.Drawing.Size(780, 120)
@@ -1236,7 +1249,7 @@ $btnCopyCsrTextB.Add_Click({
     if ($txtCsrTextB.Text) { Set-WizardClipboard -Text $txtCsrTextB.Text }
 })
 
-# --- Schritt B4: Uebergabe per RDP ---
+# --- Schritt B4: Übergabe per RDP ---
 $pnlB4 = New-Object System.Windows.Forms.Panel
 $pnlB4.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB4)
@@ -1247,24 +1260,24 @@ $pnlB4.Controls.Add($lblHandoffB)
 function Update-PlanBHandoff {
     $identity = Get-EnrollmentIdentity
     $reason = if ($script:TargetAccount) {
-        "Die Einreichung bei der CA muss als $($identity.DisplayName) erfolgen (Berechtigungspruefung der CA basiert auf dem einreichenden Konto) - dieser Rechner reicht dafuer nicht, unabhaengig vom Domaenen-Status."
+        "Die Einreichung bei der CA muss als $($identity.DisplayName) erfolgen (Berechtigungsprüfung der CA basiert auf dem einreichenden Konto) - dieser Rechner reicht dafür nicht, unabhängig vom Domänen-Status."
     } else {
         'Dieser Rechner hat vermutlich keine direkte Sicht auf die Zertifizierungsstelle.'
     }
 
     $lblHandoffB.Text = @"
-Naechste Schritte:
+Nächste Schritte:
 
 $reason
 
 1. Per RDP verbinden mit: $($config.RdpJumpServer)
 2. Dort anmelden als: $($identity.DisplayName)
-3. Die CSR-Datei auf den Server kopieren (z.B. ueber Zwischenablage/Laufwerksfreigabe):
+3. Die CSR-Datei auf den Server kopieren (z.B. über Zwischenablage/Laufwerksfreigabe):
    $($script:PlanB_CsrPath)
-4. Diesen Wizard auf dem Server erneut starten, ebenfalls den Tab "Plan B" waehlen
+4. Diesen Wizard auf dem Server erneut starten, ebenfalls den Tab "Plan B" wählen
    und bis zu Schritt "Antrag einreichen (auf dem Server)" weiterklicken.
 
-Auf "Weiter" klicken, sobald du auf dem Server angemeldet bist. Die Uebernahme des
+Auf "Weiter" klicken, sobald du auf dem Server angemeldet bist. Die Übernahme des
 fertigen Zertifikats (Schritt 6) erfolgt danach wieder auf DIESEM Rechner in DEINEM
 eigenen Konto - certreq verwaltet den offenen Antrag hier, nicht beim Zielkonto.
 "@
@@ -1275,9 +1288,9 @@ $pnlB5 = New-Object System.Windows.Forms.Panel
 $pnlB5.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB5)
 
-$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszufuehren (angemeldet als Zielbenutzer). Standardweg: den per Zwischenablage mitgebrachten CSR-Text unten einfuegen. Wurde der Antrag bereits anderweitig eingereicht (z.B. mit dem Einreichungshelfer VscWizard.Submit.ps1), diesen Schritt einfach mit "Weiter" ueberspringen.' -X 20 -Y 20 -Width 780 -Height 50
+$lblSubmitInfoB = New-WizardLabel -Text 'Auf dem CA-nahen Server auszuführen (angemeldet als Zielbenutzer). Standardweg: den per Zwischenablage mitgebrachten CSR-Text unten einfügen. Wurde der Antrag bereits anderweitig eingereicht (z.B. mit dem Einreichungshelfer VscWizard.Submit.ps1), diesen Schritt einfach mit "Weiter" überspringen.' -X 20 -Y 20 -Width 780 -Height 50
 
-$lblCsrPasteLabelB = New-WizardLabel -Text 'CSR-Text (PEM) einfuegen:' -X 20 -Y 74 -Width 300
+$lblCsrPasteLabelB = New-WizardLabel -Text 'CSR-Text (PEM) einfügen:' -X 20 -Y 74 -Width 300
 $txtCsrPasteB = New-Object System.Windows.Forms.TextBox
 $txtCsrPasteB.Location = New-Object System.Drawing.Point(20, 100)
 $txtCsrPasteB.Size = New-Object System.Drawing.Size(780, 90)
@@ -1286,7 +1299,7 @@ $txtCsrPasteB.ScrollBars = 'Vertical'
 $txtCsrPasteB.Font = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnSelectCsrB = New-Object System.Windows.Forms.Button
-$btnSelectCsrB.Text = '...oder CSR-Datei auswaehlen'
+$btnSelectCsrB.Text = '...oder CSR-Datei auswählen'
 $btnSelectCsrB.Location = New-Object System.Drawing.Point(20, 198)
 $btnSelectCsrB.Size = New-Object System.Drawing.Size(200, 28)
 
@@ -1327,7 +1340,7 @@ $btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 378)
 $btnCopyCerPathB.Size = New-Object System.Drawing.Size(120, 28)
 
 $btnOpenCerFolderB = New-Object System.Windows.Forms.Button
-$btnOpenCerFolderB.Text = 'Ordner oeffnen'
+$btnOpenCerFolderB.Text = 'Ordner öffnen'
 $btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 416)
 $btnOpenCerFolderB.Size = New-Object System.Drawing.Size(160, 28)
 
@@ -1342,7 +1355,7 @@ $btnSelectCsrB.Add_Click({
 })
 
 $btnSubmitB.Add_Click({
-    # Standardweg: eingefuegter CSR-Text (der Text-Workflow erzeugt auf dieser
+    # Standardweg: eingefügter CSR-Text (der Text-Workflow erzeugt auf dieser
     # Maschine keine CSR-Datei); die Dateiauswahl bleibt als Alternative.
     $csrPath = $null
     if (-not [string]::IsNullOrWhiteSpace($txtCsrPasteB.Text)) {
@@ -1364,16 +1377,16 @@ $btnSubmitB.Add_Click({
                 $csrText = [System.IO.File]::ReadAllText($csrPath)  # erkennt BOM selbst
                 $csrPath = Join-Path (Get-WizardWorkingDir) "PlanB-transcoded-$([guid]::NewGuid()).req"
                 Set-Content -Path $csrPath -Value $csrText -Encoding ASCII
-                Write-WizardLog -Message 'CSR-Datei enthielt ein BOM/UTF-16-Encoding - fuer certreq automatisch nach ASCII transkodiert.' -Level Info
+                Write-WizardLog -Message 'CSR-Datei enthielt ein BOM/UTF-16-Encoding - für certreq automatisch nach ASCII transkodiert.' -Level Info
             }
         } catch { }
     }
     if (-not $csrPath) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfuegen (oder alternativ eine CSR-Datei auswaehlen).', 'Hinweis', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfügen (oder alternativ eine CSR-Datei auswählen).', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     if (-not $cboTemplateSubmitB.SelectedItem) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswählen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     $btnSubmitB.Enabled = $false
@@ -1389,7 +1402,7 @@ $btnSubmitB.Add_Click({
             TargetAccount = "$($script:TargetAccount)"
         }
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId)) - Abruf auch nach einem Neustart des Wizards moeglich."
+        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId)) - Abruf auch nach einem Neustart des Wizards möglich."
         $btnRetrieveB.Visible = $true
     } elseif ($submit.Success) {
         $txtCerPathB.Text = $submit.CerPath
@@ -1423,15 +1436,15 @@ $btnOpenCerFolderB.Add_Click({
     if ($txtCerPathB.Text) { Open-WizardFolder -Path $txtCerPathB.Text }
 })
 
-# --- Schritt B6: Zertifikat abschliessen (lokal) ---
+# --- Schritt B6: Zertifikat abschließen (lokal) ---
 $pnlB6 = New-Object System.Windows.Forms.Panel
 $pnlB6.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB6)
 
-$lblCompleteInfoB = New-WizardLabel -Text 'Zurueck auf dem lokalen Rechner (im eigenen Konto): entweder die vom Server zurueckkopierte Zertifikatsdatei (.cer) auswaehlen, oder den Text direkt einfuegen (z.B. Ergebnis des Einreichungshelfers VscWizard.Submit.ps1).' -X 20 -Y 20 -Width 780 -Height 40
+$lblCompleteInfoB = New-WizardLabel -Text 'Zurück auf dem lokalen Rechner (im eigenen Konto): entweder die vom Server zurückkopierte Zertifikatsdatei (.cer) auswählen, oder den Text direkt einfügen (z.B. Ergebnis des Einreichungshelfers VscWizard.Submit.ps1).' -X 20 -Y 20 -Width 780 -Height 40
 
 $btnSelectCerB = New-Object System.Windows.Forms.Button
-$btnSelectCerB.Text = 'CER-Datei auswaehlen...'
+$btnSelectCerB.Text = 'CER-Datei auswählen...'
 $btnSelectCerB.Location = New-Object System.Drawing.Point(20, 66)
 $btnSelectCerB.Size = New-Object System.Drawing.Size(200, 30)
 
@@ -1441,11 +1454,11 @@ $txtSelectedCerB.Size = New-Object System.Drawing.Size(500, 24)
 $txtSelectedCerB.ReadOnly = $true
 
 $btnCompleteB = New-Object System.Windows.Forms.Button
-$btnCompleteB.Text = 'Aus Datei uebernehmen'
+$btnCompleteB.Text = 'Aus Datei übernehmen'
 $btnCompleteB.Location = New-Object System.Drawing.Point(20, 110)
 $btnCompleteB.Size = New-Object System.Drawing.Size(200, 32)
 
-$lblCerTextLabelB = New-WizardLabel -Text '...oder CER-Text hier einfuegen:' -X 20 -Y 156 -Width 780
+$lblCerTextLabelB = New-WizardLabel -Text '...oder CER-Text hier einfügen:' -X 20 -Y 156 -Width 780
 $txtCerTextB = New-Object System.Windows.Forms.TextBox
 $txtCerTextB.Location = New-Object System.Drawing.Point(20, 182)
 $txtCerTextB.Size = New-Object System.Drawing.Size(780, 110)
@@ -1454,7 +1467,7 @@ $txtCerTextB.ScrollBars = 'Vertical'
 $txtCerTextB.Font = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnCompleteFromTextB = New-Object System.Windows.Forms.Button
-$btnCompleteFromTextB.Text = 'Aus Text uebernehmen'
+$btnCompleteFromTextB.Text = 'Aus Text übernehmen'
 $btnCompleteFromTextB.Location = New-Object System.Drawing.Point(20, 300)
 $btnCompleteFromTextB.Size = New-Object System.Drawing.Size(200, 32)
 
@@ -1480,7 +1493,7 @@ $btnSelectCerB.Add_Click({
 function Update-PlanBSummary {
     $summary = Get-IssuedCertificateSummary -SubjectContains (Get-EnrollmentIdentity).SearchTerm
     if ($summary) {
-        $lblSummaryB.Text = "Kartenname: $($script:PlanB_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGueltig ab: $($summary.NotBefore)`r`nGueltig bis: $($summary.NotAfter)"
+        $lblSummaryB.Text = "Kartenname: $($script:PlanB_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
     } else {
         $lblSummaryB.Text = 'Kein passendes Zertifikat gefunden.'
     }
@@ -1498,13 +1511,13 @@ function Complete-PlanBEnrollment {
         Update-PlanBSummary
     } else {
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::Firebrick
-        $lblCompleteResultB.Text = 'Uebernahme fehlgeschlagen. Details siehe Log.'
+        $lblCompleteResultB.Text = 'Übernahme fehlgeschlagen. Details siehe Log.'
     }
 }
 
 $btnCompleteFromTextB.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtCerTextB.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CER-Text einfuegen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CER-Text einfügen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     $btnCompleteFromTextB.Enabled = $false
@@ -1517,7 +1530,7 @@ $btnCompleteFromTextB.Add_Click({
 
 $btnCompleteB.Add_Click({
     if (-not $txtSelectedCerB.Text) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CER-Datei auswaehlen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CER-Datei auswählen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     $btnCompleteB.Enabled = $false
@@ -1545,16 +1558,16 @@ $btnResetB.Add_Click({
 })
 
 # --- Navigation Plan B ---
-$planBStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'CSR erstellen', 'Uebergabe per RDP', 'Antrag einreichen (auf dem Server)', 'Zertifikat abschliessen (lokal)')
+$planBStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'CSR erstellen', 'Übergabe per RDP', 'Antrag einreichen (auf dem Server)', 'Zertifikat abschließen (lokal)')
 
 function Update-PlanBStatus {
     $joinState = Get-DomainJoinState
     $upn = Get-CurrentUpn
-    $lblJoinStateB.Text = "Domaenen-Status: $($joinState.Mode)"
+    $lblJoinStateB.Text = "Domänen-Status: $($joinState.Mode)"
     $lblUserB.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
     if ($script:TargetAccount) {
         $lblTargetB.ForeColor = [System.Drawing.Color]::SteelBlue
-        $lblTargetB.Text = "Smartcard wird beantragt fuer: $($script:TargetAccount) (VSC/CSR trotzdem in deinem eigenen Konto)"
+        $lblTargetB.Text = "Smartcard wird beantragt für: $($script:TargetAccount) (VSC/CSR trotzdem in deinem eigenen Konto)"
     } else {
         $lblTargetB.Text = ''
     }
@@ -1579,7 +1592,7 @@ function Show-PlanBStep {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
             $lblCsrInfoB.Text = if ($script:PlanB_PcscName) {
-                "Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanB_PcscName)' waehlen (das ist '$($script:PlanB_CardName)'); es erscheint ggf. ein PIN-Dialog."
+                "Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanB_PcscName)' wählen (das ist '$($script:PlanB_CardName)'); es erscheint ggf. ein PIN-Dialog."
             } else {
                 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.'
             }
@@ -1610,11 +1623,11 @@ function Invoke-PlanBNextClick {
             # Kein hartes Gate: wurde der Antrag anderweitig eingereicht (z.B. per
             # Einreichungshelfer in der RDP-Sitzung), gibt es auf DIESER Maschine
             # kein ausgestelltes Zertifikat - der Abschluss in Schritt 7 nimmt den
-            # CER-Text per Einfuegen entgegen.
+            # CER-Text per Einfügen entgegen.
             if (-not $txtCerPathB.Text) {
                 $confirm = [System.Windows.Forms.MessageBox]::Show(
                     'In diesem Schritt wurde kein Zertifikat ausgestellt. Wurde der Antrag anderweitig eingereicht (z.B. mit dem Einreichungshelfer in der RDP-Sitzung) und liegt das Zertifikat als Datei oder Text vor?',
-                    'Schritt ueberspringen', 'YesNo', 'Question')
+                    'Schritt überspringen', 'YesNo', 'Question')
                 if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
             }
             Show-PlanBStep -Index 5
@@ -1634,7 +1647,7 @@ function Invoke-PlanBBackClick {
 #endregion
 
 # ============================================================================
-#region GEMEINSAME NAVIGATION (Weiter/Zurueck delegieren je nach $script:ActivePlan)
+#region GEMEINSAME NAVIGATION (Weiter/Zurück delegieren je nach $script:ActivePlan)
 # ============================================================================
 
 $btnNextShared.Add_Click({
@@ -1651,21 +1664,21 @@ $btnBackShared.Add_Click({
         'A'    { Invoke-PlanABackClick }
         'B'    { Invoke-PlanBBackClick }
         'SCEN' { }
-        default { Show-ScenarioStep }  # Mode-Select (Schritt 2) -> zurueck zur Szenario-Auswahl
+        default { Show-ScenarioStep }  # Mode-Select (Schritt 2) -> zurück zur Szenario-Auswahl
     }
 })
 
 #endregion
 
 # ============================================================================
-#region EINSTELLUNGEN-DIALOG (schrittunabhaengig ueber den Button in der Kopfleiste erreichbar)
+#region EINSTELLUNGEN-DIALOG (schrittunabhängig über den Button in der Kopfleiste erreichbar)
 # ============================================================================
 
 function Show-VscInventoryDialog {
     param([System.Windows.Forms.Form]$Owner)
 
-    # Die Zertifikatserkennung kann durch den Timeout-Schutz gegen haengende
-    # CNG-Schluesselzugriffe (siehe Get-SmartCardCngProviderInfo in Core.psm1) je nach
+    # Die Zertifikatserkennung kann durch den Timeout-Schutz gegen hängende
+    # CNG-Schlüsselzugriffe (siehe Get-SmartCardCngProviderInfo in Core.psm1) je nach
     # Anzahl der Zertifikate und ggf. verwaisten VSC-Verweisen mehrere Sekunden bis
     # niedrige zweistellige Sekunden dauern - Wartecursor als sichtbares Feedback,
     # sonst wirkt die App in dieser Zeit eingefroren.
@@ -1675,7 +1688,7 @@ function Show-VscInventoryDialog {
     $certs = Get-SmartCardCertificates
     [System.Windows.Forms.Cursor]::Current = 'Default'
     if ($Owner) { $Owner.Cursor = 'Default' }
-    Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegeraet(e), $($certs.Count) Zertifikat(e) mit privatem Schluessel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
+    Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegerät(e), $($certs.Count) Zertifikat(e) mit privatem Schlüssel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
     foreach ($rd in $readers) { Write-WizardLog -Message "  Leser '$($rd.FriendlyName)' PcscName='$($rd.PcscName)'" -Level Info }
     foreach ($ct in @($certs | Where-Object IsSmartCard)) { Write-WizardLog -Message "  SC-Cert Reader='$($ct.Reader)' Subject='$($ct.Subject.Substring(0,[Math]::Min(40,$ct.Subject.Length)))'" -Level Info }
 
@@ -1700,7 +1713,7 @@ function Show-VscInventoryDialog {
     $dlg.Controls.Add($dlgLayout)
 
     $lblReadersHeader = New-Object System.Windows.Forms.Label
-    $lblReadersHeader.Text = "Erkannte Smartcard-Lesegeraete (inkl. virtueller TPM-Smartcards): $($readers.Count)"
+    $lblReadersHeader.Text = "Erkannte Smartcard-Lesegeräte (inkl. virtueller TPM-Smartcards): $($readers.Count)"
     $lblReadersHeader.AutoSize = $true
     $lblReadersHeader.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
     $dlgLayout.Controls.Add($lblReadersHeader, 0, 0)
@@ -1712,9 +1725,9 @@ function Show-VscInventoryDialog {
     $lvReaders.MultiSelect = $false
     $lvReaders.GridLines = $true
     $lvReaders.HideSelection = $false
-    [void]$lvReaders.Columns.Add('Lesegeraet', 340)
+    [void]$lvReaders.Columns.Add('Lesegerät', 340)
     [void]$lvReaders.Columns.Add('Status', 90)
-    [void]$lvReaders.Columns.Add('Geraete-ID', 300)
+    [void]$lvReaders.Columns.Add('Geräte-ID', 300)
     $dlgLayout.Controls.Add($lvReaders, 0, 1)
 
     $unmatchedSmartCardMarker = [pscustomobject]@{ IsMarker = $true; Kind = 'unmatched' }
@@ -1728,26 +1741,26 @@ function Show-VscInventoryDialog {
         [void]$lvReaders.Items.Add($readerItem)
     }
 
-    # Zuordnung Zertifikat -> Lesegeraet ueber den PC/SC-Namen ("Microsoft Virtual
-    # Smart Card N"): das Zertifikat meldet ihn als .Reader, das Lesegeraet traegt ihn
+    # Zuordnung Zertifikat -> Lesegerät über den PC/SC-Namen ("Microsoft Virtual
+    # Smart Card N"): das Zertifikat meldet ihn als .Reader, das Lesegerät trägt ihn
     # als .PcscName (siehe Get-VirtualSmartCardReaders / Get-SmartCardCngProviderInfo).
     $readerPcscNames = @($readers | ForEach-Object { $_.PcscName } | Where-Object { $_ })
     $unmatchedSmartCardCerts = @($certs | Where-Object { $_.IsSmartCard -and (-not $_.Reader -or ($readerPcscNames -notcontains $_.Reader)) })
     if ($unmatchedSmartCardCerts.Count -gt 0) {
-        $markerItem = New-Object System.Windows.Forms.ListViewItem("Weitere smartcard-gebundene Zertifikate (Lesegeraet nicht zuordenbar, $($unmatchedSmartCardCerts.Count))")
+        $markerItem = New-Object System.Windows.Forms.ListViewItem("Weitere smartcard-gebundene Zertifikate (Lesegerät nicht zuordenbar, $($unmatchedSmartCardCerts.Count))")
         $markerItem.Tag = $unmatchedSmartCardMarker
         [void]$lvReaders.Items.Add($markerItem)
     }
 
     $otherCerts = @($certs | Where-Object { -not $_.IsSmartCard })
     if ($otherCerts.Count -gt 0) {
-        $markerItem = New-Object System.Windows.Forms.ListViewItem("Sonstige Zertifikate mit privatem Schluessel (nicht als Smartcard erkannt, $($otherCerts.Count))")
+        $markerItem = New-Object System.Windows.Forms.ListViewItem("Sonstige Zertifikate mit privatem Schlüssel (nicht als Smartcard erkannt, $($otherCerts.Count))")
         $markerItem.Tag = $nonSmartCardMarker
         [void]$lvReaders.Items.Add($markerItem)
     }
 
     if ($lvReaders.Items.Count -eq 0) {
-        [void]$lvReaders.Items.Add((New-Object System.Windows.Forms.ListViewItem('Keine Smartcard-Lesegeraete und keine smartcard-gebundenen Zertifikate gefunden.')))
+        [void]$lvReaders.Items.Add((New-Object System.Windows.Forms.ListViewItem('Keine Smartcard-Lesegeräte und keine smartcard-gebundenen Zertifikate gefunden.')))
     }
 
     $readerButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -1756,13 +1769,13 @@ function Show-VscInventoryDialog {
     $dlgLayout.Controls.Add($readerButtonPanel, 0, 2)
 
     $btnDeleteReader = New-Object System.Windows.Forms.Button
-    $btnDeleteReader.Text = 'Ausgewaehlte Smartcard loeschen...'
+    $btnDeleteReader.Text = 'Ausgewählte Smartcard löschen...'
     $btnDeleteReader.Size = New-Object System.Drawing.Size(240, 30)
     $btnDeleteReader.Enabled = $false
     $readerButtonPanel.Controls.Add($btnDeleteReader)
 
     $lblCertsHeader = New-Object System.Windows.Forms.Label
-    $lblCertsHeader.Text = 'Zertifikate: (Lesegeraet oben auswaehlen)'
+    $lblCertsHeader.Text = 'Zertifikate: (Lesegerät oben auswählen)'
     $lblCertsHeader.AutoSize = $true
     $lblCertsHeader.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 4)
     $dlgLayout.Controls.Add($lblCertsHeader, 0, 3)
@@ -1775,7 +1788,7 @@ function Show-VscInventoryDialog {
     $lvCerts.GridLines = $true
     $lvCerts.HideSelection = $false
     [void]$lvCerts.Columns.Add('Subject', 300)
-    [void]$lvCerts.Columns.Add('Gueltig bis', 90)
+    [void]$lvCerts.Columns.Add('Gültig bis', 90)
     [void]$lvCerts.Columns.Add('Thumbprint', 220)
     [void]$lvCerts.Columns.Add('Provider', 200)
     $dlgLayout.Controls.Add($lvCerts, 0, 4)
@@ -1783,7 +1796,7 @@ function Show-VscInventoryDialog {
     function Update-CertListForSelection {
         $lvCerts.Items.Clear()
         if ($lvReaders.SelectedItems.Count -eq 0) {
-            $lblCertsHeader.Text = 'Zertifikate: (Lesegeraet oben auswaehlen)'
+            $lblCertsHeader.Text = 'Zertifikate: (Lesegerät oben auswählen)'
             $btnDeleteReader.Enabled = $false
             return
         }
@@ -1793,10 +1806,10 @@ function Show-VscInventoryDialog {
         if ($selectedTag -and $selectedTag.PSObject.Properties['IsMarker']) {
             $btnDeleteReader.Enabled = $false
             if ($selectedTag.Kind -eq 'unmatched') {
-                $lblCertsHeader.Text = 'Zertifikate: weitere smartcard-gebundene (Lesegeraet nicht zuordenbar)'
+                $lblCertsHeader.Text = 'Zertifikate: weitere smartcard-gebundene (Lesegerät nicht zuordenbar)'
                 $matching = $unmatchedSmartCardCerts
             } else {
-                $lblCertsHeader.Text = 'Zertifikate: sonstige mit privatem Schluessel (nicht als Smartcard erkannt)'
+                $lblCertsHeader.Text = 'Zertifikate: sonstige mit privatem Schlüssel (nicht als Smartcard erkannt)'
                 $matching = $otherCerts
             }
         } elseif ($selectedTag) {
@@ -1829,21 +1842,21 @@ function Show-VscInventoryDialog {
         if (-not $selectedReader -or $selectedReader.PSObject.Properties['IsMarker']) { return }
 
         $confirm = [System.Windows.Forms.MessageBox]::Show(
-            "Virtuelle Smartcard '$($selectedReader.FriendlyName)' wirklich unwiderruflich loeschen?`r`n`r`nAlle darauf gespeicherten Schluessel gehen dabei verloren. Diese Aktion kann nicht rueckgaengig gemacht werden.",
-            'Smartcard loeschen', 'YesNo', 'Warning')
+            "Virtuelle Smartcard '$($selectedReader.FriendlyName)' wirklich unwiderruflich löschen?`r`n`r`nAlle darauf gespeicherten Schlüssel gehen dabei verloren. Diese Aktion kann nicht rückgängig gemacht werden.",
+            'Smartcard löschen', 'YesNo', 'Warning')
         if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
         $btnDeleteReader.Enabled = $false
-        Write-WizardLog -Message "Loesche virtuelle Smartcard: $($selectedReader.FriendlyName) ($($selectedReader.InstanceId))" -Level Command
+        Write-WizardLog -Message "Lösche virtuelle Smartcard: $($selectedReader.FriendlyName) ($($selectedReader.InstanceId))" -Level Command
         $result = Remove-VirtualSmartCard -InstanceId $selectedReader.InstanceId
         if ($result.Success) {
-            Write-WizardLog -Message "Virtuelle Smartcard geloescht: $($selectedReader.FriendlyName)" -Level Success
-            [System.Windows.Forms.MessageBox]::Show('Smartcard geloescht.', 'Erledigt', 'OK', 'Information') | Out-Null
+            Write-WizardLog -Message "Virtuelle Smartcard gelöscht: $($selectedReader.FriendlyName)" -Level Success
+            [System.Windows.Forms.MessageBox]::Show('Smartcard gelöscht.', 'Erledigt', 'OK', 'Information') | Out-Null
             $dlg.Close()
             Show-VscInventoryDialog -Owner $Owner
         } else {
-            Write-WizardLog -Message "Loeschen fehlgeschlagen (Exit-Code $($result.ExitCode)): $($selectedReader.FriendlyName)" -Level Error
-            [System.Windows.Forms.MessageBox]::Show("Loeschen fehlgeschlagen (Exit-Code $($result.ExitCode)). Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
+            Write-WizardLog -Message "Löschen fehlgeschlagen (Exit-Code $($result.ExitCode)): $($selectedReader.FriendlyName)" -Level Error
+            [System.Windows.Forms.MessageBox]::Show("Löschen fehlgeschlagen (Exit-Code $($result.ExitCode)). Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
             $btnDeleteReader.Enabled = $true
         }
     })
@@ -1854,7 +1867,7 @@ function Show-VscInventoryDialog {
     $dlgLayout.Controls.Add($dlgBtnPanel, 0, 5)
 
     $btnCloseInventory = New-Object System.Windows.Forms.Button
-    $btnCloseInventory.Text = 'Schliessen'
+    $btnCloseInventory.Text = 'Schließen'
     $btnCloseInventory.Size = New-Object System.Drawing.Size(120, 30)
     $btnCloseInventory.Margin = New-Object System.Windows.Forms.Padding(10)
     $dlgBtnPanel.Controls.Add($btnCloseInventory)
@@ -1891,7 +1904,7 @@ function Show-SettingsDialog {
     [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 56)))
     $dlg.Controls.Add($dlgLayout)
 
-    # Scrollbarer Inhaltsbereich fuer die Felder - dadurch bleibt die Speichern-Zeile
+    # Scrollbarer Inhaltsbereich für die Felder - dadurch bleibt die Speichern-Zeile
     # unten IMMER voll sichtbar (eigene, fixe Zeile ausserhalb des Scrollbereichs),
     # egal wie viele Felder/Hinweistexte oben Platz brauchen oder wie klein das
     # Dialogfenster gerade ist.
@@ -1911,8 +1924,8 @@ function Show-SettingsDialog {
     $scrollPanel.Controls.Add($settingsLayout)
 
     function Add-SettingsRow {
-        # Label in Spalte 0, Eingabefeld in Spalte 1, gleiche Zeile - spart gegenueber
-        # "Label ueber Feld" rund die Haelfte an vertikalem Platz.
+        # Label in Spalte 0, Eingabefeld in Spalte 1, gleiche Zeile - spart gegenüber
+        # "Label über Feld" rund die Hälfte an vertikalem Platz.
         param(
             [Parameter(Mandatory)][string]$LabelText,
             [Parameter(Mandatory)][System.Windows.Forms.Control]$InputControl
@@ -1936,8 +1949,8 @@ function Show-SettingsDialog {
     }
 
     function Add-SettingsFullRow {
-        # Ein Control, das ueber beide Spalten der ganzen Zeilenbreite geht (Hinweistexte,
-        # Buttons, Ergebnisboxen). -Fill fuer Controls ohne eigenes AutoSize (z.B. eine
+        # Ein Control, das über beide Spalten der ganzen Zeilenbreite geht (Hinweistexte,
+        # Buttons, Ergebnisboxen). -Fill für Controls ohne eigenes AutoSize (z.B. eine
         # Multiline-TextBox), damit sie die volle Zeilenbreite bekommen statt der
         # winzigen TextBox-Standardbreite.
         param(
@@ -1966,18 +1979,18 @@ function Show-SettingsDialog {
     $cboCfgTemplate = New-Object System.Windows.Forms.ComboBox
     $cboCfgTemplate.DropDownStyle = 'DropDown'
     Set-TextBoxPlaceholder -TextBox $cboCfgTemplate -Placeholder 'z.B. SmartcardLogon' -Value $config.Template
-    Add-SettingsRow -LabelText 'Zertifikatstemplate (fuer VSC-Anmeldung):' -InputControl $cboCfgTemplate
+    Add-SettingsRow -LabelText 'Zertifikatstemplate (für VSC-Anmeldung):' -InputControl $cboCfgTemplate
 
     $txtCfgPrefix = New-Object System.Windows.Forms.TextBox
     $txtCfgPrefix.Text = $config.VscNamePrefix
-    Add-SettingsRow -LabelText 'Namenspraefix fuer virtuelle Smartcards:' -InputControl $txtCfgPrefix
+    Add-SettingsRow -LabelText 'Namenspräfix für virtuelle Smartcards:' -InputControl $txtCfgPrefix
 
     $txtCfgJump = New-Object System.Windows.Forms.TextBox
     Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
-    Add-SettingsRow -LabelText 'RDP-Zielserver fuer Plan B:' -InputControl $txtCfgJump
+    Add-SettingsRow -LabelText 'RDP-Zielserver für Plan B:' -InputControl $txtCfgJump
 
     # Editierbares Dropdown mit den beiden Standard-Smartcard-Providern: der Legacy-CSP
-    # (CAPI, fuer V1/V2-Templates) und der CNG-KSP (fuer V3/V4-Templates). Die
+    # (CAPI, für V1/V2-Templates) und der CNG-KSP (für V3/V4-Templates). Die
     # INF-Erzeugung (New-EnrollmentInfFile) erkennt den KSP am Namen und laesst dann
     # die CAPI-Direktiven ProviderType/KeySpec weg.
     $txtCfgCsp = New-Object System.Windows.Forms.ComboBox
@@ -1992,10 +2005,10 @@ function Show-SettingsDialog {
     $txtCfgDomain = New-Object System.Windows.Forms.TextBox
     $discoveryDomainDefault = if ($config.DiscoveryDomain) { $config.DiscoveryDomain } else { Get-DiscoveryDomainGuess }
     Set-TextBoxPlaceholder -TextBox $txtCfgDomain -Placeholder 'z.B. contoso.local oder dc01.contoso.local' -Value $discoveryDomainDefault
-    Add-SettingsRow -LabelText 'AD-Domaene / Domain Controller (PKI-Erkennung):' -InputControl $txtCfgDomain
+    Add-SettingsRow -LabelText 'AD-Domäne / Domain Controller (PKI-Erkennung):' -InputControl $txtCfgDomain
 
     $lblCfgDomainHint = New-Object System.Windows.Forms.Label
-    $lblCfgDomainHint.Text = 'Auf Entra-joined/Workgroup-Rechnern meist noetig, da "serverloses" LDAP-Binding ohne Domain-Join nicht funktioniert. Vorschlag aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.'
+    $lblCfgDomainHint.Text = 'Auf Entra-joined/Workgroup-Rechnern meist nötig, da "serverloses" LDAP-Binding ohne Domain-Join nicht funktioniert. Vorschlag aus UPN abgeleitet, ggf. abweichend vom echten AD-DNS-Namen - bei Bedarf korrigieren.'
     $lblCfgDomainHint.AutoSize = $true
     $lblCfgDomainHint.MaximumSize = New-Object System.Drawing.Size(760, 0)
     $lblCfgDomainHint.ForeColor = [System.Drawing.Color]::Gray
@@ -2027,22 +2040,22 @@ function Show-SettingsDialog {
     $txtDiscoverResultCfg.Font = New-Object System.Drawing.Font('Consolas', 9)
     Add-SettingsFullRow -Control $txtDiscoverResultCfg -Fill
 
-    # --- Enrollment Agent (bruchfreie Ausstellung fuer separate Konten, ohne RDP) ---
+    # --- Enrollment Agent (bruchfreie Ausstellung für separate Konten, ohne RDP) ---
     $lblEaHeader = New-Object System.Windows.Forms.Label
-    $lblEaHeader.Text = 'Enrollment Agent (Ausstellung fuer separate Konten ohne RDP)'
+    $lblEaHeader.Text = 'Enrollment Agent (Ausstellung für separate Konten ohne RDP)'
     $lblEaHeader.AutoSize = $true
     $lblEaHeader.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
     $lblEaHeader.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 2)
     Add-SettingsFullRow -Control $lblEaHeader
 
-    # Sicherheitshinweis: ein EA-Zertifikat, das Logon-Certs fuer Admin-Konten
+    # Sicherheitshinweis: ein EA-Zertifikat, das Logon-Certs für Admin-Konten
     # ausstellen kann, ist gleichbedeutend mit "sich als diese Admins anmelden
-    # koennen" (AD-CS-Eskalationspfad ESC3). Wer es haelt, ist so privilegiert wie
-    # die Zielkonten. Fuer Admin-Zielkonten ist Self-Enrollment als das Konto selbst
-    # (Plan B) meist die sicherere Wahl; EA/EOBO nur als bewusste, moeglichst
-    # eingeschraenkte (Restricted Enrollment Agent) und auditierte Ausnahme.
+    # können" (AD-CS-Eskalationspfad ESC3). Wer es hält, ist so privilegiert wie
+    # die Zielkonten. Für Admin-Zielkonten ist Self-Enrollment als das Konto selbst
+    # (Plan B) meist die sicherere Wahl; EA/EOBO nur als bewusste, möglichst
+    # eingeschränkte (Restricted Enrollment Agent) und auditierte Ausnahme.
     $lblEaWarn = New-Object System.Windows.Forms.Label
-    $lblEaWarn.Text = 'Achtung: Ein EA-Zertifikat, mit dem sich Logon-Certs fuer Admins ausstellen lassen, ist admin-aequivalent (Eskalationspfad ESC3) - wer es besitzt, kann sich als diese Konten anmelden. Fuer Admin-Zielkonten ist Self-Enrollment als das Konto selbst (Plan B) meist sicherer. EA/EOBO nur bewusst, eingeschraenkt (Restricted Enrollment Agent) und auditiert einsetzen; EA-Schluessel auf Hardware/VSC halten.'
+    $lblEaWarn.Text = 'Achtung: Ein EA-Zertifikat, mit dem sich Logon-Certs für Admins ausstellen lassen, ist admin-äquivalent (Eskalationspfad ESC3) - wer es besitzt, kann sich als diese Konten anmelden. Für Admin-Zielkonten ist Self-Enrollment als das Konto selbst (Plan B) meist sicherer. EA/EOBO nur bewusst, eingeschränkt (Restricted Enrollment Agent) und auditiert einsetzen; EA-Schlüssel auf Hardware/VSC halten.'
     $lblEaWarn.AutoSize = $true
     $lblEaWarn.MaximumSize = New-Object System.Drawing.Size(760, 0)
     $lblEaWarn.ForeColor = [System.Drawing.Color]::Firebrick
@@ -2056,10 +2069,10 @@ function Show-SettingsDialog {
     $lblEaStatus.MaximumSize = New-Object System.Drawing.Size(760, 0)
     if ($eaCertsNow.Count -gt 0) {
         $lblEaStatus.ForeColor = [System.Drawing.Color]::ForestGreen
-        $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaCertsNow[0].Subject) (gueltig bis $($eaCertsNow[0].NotAfter.ToString('yyyy-MM-dd'))). Damit kann fuer separate Konten bruchfrei per Plan A ausgestellt werden."
+        $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaCertsNow[0].Subject) (gültig bis $($eaCertsNow[0].NotAfter.ToString('yyyy-MM-dd'))). Damit kann für separate Konten bruchfrei per Plan A ausgestellt werden."
     } else {
         $lblEaStatus.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblEaStatus.Text = 'Kein EA-Zertifikat gefunden. Ohne EA-Zertifikat muss fuer separate Konten der Plan-B/RDP-Weg genutzt werden.'
+        $lblEaStatus.Text = 'Kein EA-Zertifikat gefunden. Ohne EA-Zertifikat muss für separate Konten der Plan-B/RDP-Weg genutzt werden.'
     }
     Add-SettingsFullRow -Control $lblEaStatus
 
@@ -2068,7 +2081,7 @@ function Show-SettingsDialog {
     Add-SettingsRow -LabelText 'EA-Zertifikatstemplate:' -InputControl $txtCfgEaTemplate
 
     $chkEaOnVsc = New-Object System.Windows.Forms.CheckBox
-    $chkEaOnVsc.Text = 'EA-Schluessel auf eigener VSC (TPM/PIN) statt Software-Schluessel'
+    $chkEaOnVsc.Text = 'EA-Schlüssel auf eigener VSC (TPM/PIN) statt Software-Schlüssel'
     $chkEaOnVsc.Checked = $true
     $chkEaOnVsc.AutoSize = $true
     Add-SettingsFullRow -Control $chkEaOnVsc
@@ -2100,17 +2113,17 @@ function Show-SettingsDialog {
         }
         $btnRequestEa.Enabled = $false
         $lblEaResult.ForeColor = [System.Drawing.SystemColors]::WindowText
-        $lblEaResult.Text = 'Beantrage EA-Zertifikat fuer das eigene Konto...'
+        $lblEaResult.Text = 'Beantrage EA-Zertifikat für das eigene Konto...'
         $dlg.Refresh()
 
         $result = Invoke-EnrollmentAgentRequest -Template $eaTemplate -OnVsc:$chkEaOnVsc.Checked
         if ($result.Success) {
             $lblEaResult.ForeColor = [System.Drawing.Color]::ForestGreen
-            $lblEaResult.Text = 'EA-Zertifikat wurde ausgestellt. Es steht ab sofort fuer die Ausstellung an separate Konten (Plan A) zur Verfuegung.'
+            $lblEaResult.Text = 'EA-Zertifikat wurde ausgestellt. Es steht ab sofort für die Ausstellung an separate Konten (Plan A) zur Verfügung.'
             $eaNow = @(Get-EnrollmentAgentCertificates)
             if ($eaNow.Count -gt 0) {
                 $lblEaStatus.ForeColor = [System.Drawing.Color]::ForestGreen
-                $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaNow[0].Subject) (gueltig bis $($eaNow[0].NotAfter.ToString('yyyy-MM-dd')))."
+                $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaNow[0].Subject) (gültig bis $($eaNow[0].NotAfter.ToString('yyyy-MM-dd')))."
             }
         } elseif ($result.Pending) {
             $lblEaResult.ForeColor = [System.Drawing.Color]::DarkOrange
@@ -2128,7 +2141,7 @@ function Show-SettingsDialog {
     $dlgLayout.Controls.Add($footerPanel, 0, 1)
 
     $btnCloseSettings = New-Object System.Windows.Forms.Button
-    $btnCloseSettings.Text = 'Schliessen'
+    $btnCloseSettings.Text = 'Schließen'
     $btnCloseSettings.Size = New-Object System.Drawing.Size(120, 32)
     $btnCloseSettings.Margin = New-Object System.Windows.Forms.Padding(10)
     $footerPanel.Controls.Add($btnCloseSettings)
@@ -2149,7 +2162,7 @@ function Show-SettingsDialog {
 
     $btnDiscoverCfg.Add_Click({
         $btnDiscoverCfg.Enabled = $false
-        $txtDiscoverResultCfg.Text = 'Pruefe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...'
+        $txtDiscoverResultCfg.Text = 'Prüfe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...'
         $dlg.Refresh()
 
         $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
@@ -2170,8 +2183,8 @@ function Show-SettingsDialog {
         Remove-Job -Job $job -Force
 
         if (-not $completed) {
-            $txtDiscoverResultCfg.Text = 'Zeitueberschreitung (>40s). Domaene/DC-Feld pruefen oder Netzwerkverbindung (VPN/Private Access) sicherstellen.'
-            Write-WizardLog -Message 'Automatische Erkennung: Zeitueberschreitung.' -Level Error
+            $txtDiscoverResultCfg.Text = 'Zeitüberschreitung (>40s). Domäne/DC-Feld prüfen oder Netzwerkverbindung (VPN/Private Access) sicherstellen.'
+            Write-WizardLog -Message 'Automatische Erkennung: Zeitüberschreitung.' -Level Error
             $btnDiscoverCfg.Enabled = $true
             return
         }
@@ -2187,13 +2200,13 @@ function Show-SettingsDialog {
                 Set-TextBoxRealValue -TextBox $cboCfgTemplate -Value $allTemplates[0]
             }
 
-            $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und uebernommen - bitte Template pruefen (Dropdown-Pfeil zeigt alle $($allTemplates.Count) auf der CA verfuegbaren Templates) und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
+            $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und übernommen - bitte Template prüfen (Dropdown-Pfeil zeigt alle $($allTemplates.Count) auf der CA verfügbaren Templates) und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
             Write-WizardLog -Message "Automatische Erkennung: $($reachData.ReachableCas.Count) erreichbare CA(s) gefunden." -Level Success
         } elseif ($reachData.AllCas.Count -gt 0) {
             $txtDiscoverResultCfg.Text = "$($reachData.AllCas.Count) CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n" + ($reachData.UnreachableCas -join "`r`n")
             Write-WizardLog -Message "Automatische Erkennung: $($reachData.AllCas.Count) CA(s) gefunden, keine per RPC erreichbar." -Level Info
         } elseif ($reachData.DiscoveryError) {
-            $txtDiscoverResultCfg.Text = "LDAP-Erkennung fehlgeschlagen: $($reachData.DiscoveryError)`r`n`r`nTipp: Domaene/DC-Feld oben pruefen (z.B. expliziten DC-Namen statt DNS-Domaene versuchen) und Netzwerkverbindung (VPN/Private Access) sicherstellen."
+            $txtDiscoverResultCfg.Text = "LDAP-Erkennung fehlgeschlagen: $($reachData.DiscoveryError)`r`n`r`nTipp: Domäne/DC-Feld oben prüfen (z.B. expliziten DC-Namen statt DNS-Domäne versuchen) und Netzwerkverbindung (VPN/Private Access) sicherstellen."
             Write-WizardLog -Message "Automatische Erkennung fehlgeschlagen: $($reachData.DiscoveryError)" -Level Error
         } else {
             $txtDiscoverResultCfg.Text = 'Keine erreichbare CA gefunden.'
@@ -2243,7 +2256,7 @@ function Invoke-WizardResume {
 
     $stageText = if ($state['Stage'] -eq 'Pending') { "Antrag eingereicht, wartet auf Genehmigung (RequestId $($state['RequestId']))" } else { 'CSR erstellt, noch nicht eingereicht' }
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Ein begonnener Antrag vom $($state['SavedAt']) wurde gefunden:`r`n`r`nKarte: $($state['CardName'])`r`nStand: $stageText`r`n`r`nFortsetzen? (Bei 'Nein' wird der gespeicherte Stand verworfen - der offene Antrag im Zertifikatsspeicher bleibt davon unberuehrt.)",
+        "Ein begonnener Antrag vom $($state['SavedAt']) wurde gefunden:`r`n`r`nKarte: $($state['CardName'])`r`nStand: $stageText`r`n`r`nFortsetzen? (Bei 'Nein' wird der gespeicherte Stand verworfen - der offene Antrag im Zertifikatsspeicher bleibt davon unberührt.)",
         'Begonnenen Antrag fortsetzen', 'YesNo', 'Question')
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
         Clear-WizardResumeState
@@ -2266,7 +2279,7 @@ function Invoke-WizardResume {
         Show-PlanAStep -Index 2
         $btnRetrieveA.Visible = $true
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblCertResultA.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - ueber 'Zertifikat abrufen' pruefen, ob er inzwischen genehmigt wurde."
+        $lblCertResultA.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde."
     } else {
         $script:ActivePlan = 'B'
         $script:PlanB_VscCreated = $true
@@ -2279,7 +2292,7 @@ function Invoke-WizardResume {
             Show-PlanBStep -Index 4
             $btnRetrieveB.Visible = $true
             $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
-            $lblSubmitResultB.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - ueber 'Zertifikat abrufen' pruefen, ob er inzwischen genehmigt wurde."
+            $lblSubmitResultB.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde."
         } else {
             $script:PlanB_CsrPath = $state['CsrPath']
             $txtCsrPathB.Text = $state['CsrPath']
@@ -2292,9 +2305,9 @@ function Invoke-WizardResume {
 
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($configIncomplete) {
-    # Erst oeffnen, sobald das Hauptfenster tatsaechlich angezeigt wird (Shown-Event) -
-    # ein modaler Dialog mit -Owner vor dem ersten Show() des Owners fuehrt sonst zu
-    # unzuverlaessigem Fensterverhalten.
+    # Erst öffnen, sobald das Hauptfenster tatsächlich angezeigt wird (Shown-Event) -
+    # ein modaler Dialog mit -Owner vor dem ersten Show() des Owners führt sonst zu
+    # unzuverlässigem Fensterverhalten.
     $form.Add_Shown({ Show-SettingsDialog -Owner $form })
 } else {
     # Fortsetzen-Angebot nur, wenn nicht ohnehin zuerst die Einstellungen zu

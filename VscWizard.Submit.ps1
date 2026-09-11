@@ -1,31 +1,31 @@
-<#
+﻿<#
 .SYNOPSIS
-    VSC-Wizard Einreichungshelfer - eigenstaendiges Begleitwerkzeug fuer die
+    VSC-Wizard Einreichungshelfer - eigenständiges Begleitwerkzeug für die
     RDP-Sitzung auf einem CA-nahen Server (Plan B, Schritt 5).
 .DESCRIPTION
-    Nimmt eine per Zwischenablage eingefuegte Zertifikatsanforderung (CSR, PEM-Text)
+    Nimmt eine per Zwischenablage eingefügte Zertifikatsanforderung (CSR, PEM-Text)
     entgegen, reicht sie bei der Zertifizierungsstelle ein und gibt das ausgestellte
-    Zertifikat wieder als kopierbaren PEM-Text zurueck - damit fuer die Uebergabe
+    Zertifikat wieder als kopierbaren PEM-Text zurück - damit für die Übergabe
     zwischen der lokalen Sitzung (Entra-joined/Workgroup-Rechner oder separates
-    Zielkonto) und der RDP-Sitzung weder Laufwerksfreigabe noch Dateitransfer noetig
+    Zielkonto) und der RDP-Sitzung weder Laufwerksfreigabe noch Dateitransfer nötig
     ist, nur RDP-Zwischenablage (Text).
 
-    Bewusst als EIGENSTAENDIGE Einzeldatei ohne Abhaengigkeit zu VscWizard.Core.psm1
+    Bewusst als EIGENSTAENDIGE Einzeldatei ohne Abhängigkeit zu VscWizard.Core.psm1
     gehalten: laesst sich im Notfall als reiner Text per RDP-Zwischenablage in die
-    Zielsitzung kopieren, dort in eine neue .ps1-Datei einfuegen und direkt starten -
-    ganz ohne den Rest des Projekts mit rueberzukopieren.
+    Zielsitzung kopieren, dort in eine neue .ps1-Datei einfügen und direkt starten -
+    ganz ohne den Rest des Projekts mit rüberzukopieren.
 .NOTES
     Gegenstueck im Hauptwizard: VscWizard.ps1, Plan B Schritt 3 ("CSR erstellen")
     zeigt den CSR-Inhalt ebenfalls als kopierbaren Text an, Schritt 6
-    ("Zertifikat abschliessen") akzeptiert das Ergebnis dieses Tools per Text-Einfuegen
+    ("Zertifikat abschließen") akzeptiert das Ergebnis dieses Tools per Text-Einfügen
     als Alternative zur Dateiauswahl.
 #>
 
 #Requires -Version 5.1
 
-# Siehe VscWizard.Core.psm1 fuer den Hintergrund: in einer PowerShell-7-gepraegten
+# Siehe VscWizard.Core.psm1 für den Hintergrund: in einer PowerShell-7-gepraegten
 # Umgebung kann Windows PowerShell 5.1 beim Autoloading versehentlich die falsche
-# Microsoft.PowerShell.Utility-Modulvariante laden. Fuer dieses Skript nicht
+# Microsoft.PowerShell.Utility-Modulvariante laden. Für dieses Skript nicht
 # zwingend relevant (kein Import-PowerShellDataFile), aber schadet nicht.
 $nativeUtilityModule = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1'
 if (Test-Path $nativeUtilityModule) {
@@ -72,7 +72,7 @@ function Invoke-Tool {
         $stderrTask = $proc.StandardError.ReadToEndAsync()
         if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
             try { $proc.Kill() } catch { }
-            Write-Status 'Zeitueberschreitung.'
+            Write-Status 'Zeitüberschreitung.'
             return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false }
         }
         $stdout = $stdoutTask.Result
@@ -90,11 +90,11 @@ function Invoke-Tool {
 }
 
 function Find-ReachableCA {
-    # Vereinfachte, eigenstaendige Variante der Discovery aus VscWizard.Core.psm1
+    # Vereinfachte, eigenständige Variante der Discovery aus VscWizard.Core.psm1
     # (LDAP-Discovery der Enterprise-CAs + RPC-Erreichbarkeitstest). Auf einem
-    # CA-nahen, domaenen-gebundenen Server (der Zweck dieses Tools) funktioniert
-    # serverloses LDAP-Binding von selbst - der -Server-Parameter bleibt nur fuer
-    # Sonderfaelle erhalten, die GUI bietet ihn nicht mehr an (schlaegt die
+    # CA-nahen, domänen-gebundenen Server (der Zweck dieses Tools) funktioniert
+    # serverloses LDAP-Binding von selbst - der -Server-Parameter bleibt nur für
+    # Sonderfaelle erhalten, die GUI bietet ihn nicht mehr an (schlägt die
     # Erkennung fehl, wird der CA-Konfigurationsstring manuell eingetragen).
     param([string]$Server, [int]$TimeoutSeconds = 8)
 
@@ -111,9 +111,9 @@ function Find-ReachableCA {
         $searcher.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
         [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'dNSHostName', 'certificateTemplates'))
 
-        # Attribute defensiv lesen: je nach Bind-Ziel koennen Ergebnisse ohne die
+        # Attribute defensiv lesen: je nach Bind-Ziel können Ergebnisse ohne die
         # erwarteten Attribute auftauchen (z.B. bei versehentlichem Bind gegen eine
-        # fremde/oeffentliche Domaene) - ungeschuetztes ['cn'][0] wirft dann
+        # fremde/öffentliche Domäne) - ungeschuetztes ['cn'][0] wirft dann
         # "Cannot index into a null array".
         $cas = foreach ($r in $searcher.FindAll()) {
             if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
@@ -127,11 +127,11 @@ function Find-ReachableCA {
             $ping = Invoke-Tool -FilePath 'certutil.exe' -ArgumentList @('-ping', '-config', $ca.ConfigString) -TimeoutSeconds $TimeoutSeconds
             if ($ping.Success) { $ca }
         }
-        # Als Array-Objekt (Komma-Operator) zurueckgeben: PowerShell packt ein
+        # Als Array-Objekt (Komma-Operator) zurückgeben: PowerShell packt ein
         # einelementiges @(...) beim Funktionsreturn wieder aus, und ein einzelnes
         # PSCustomObject hat in Windows PowerShell 5.1 KEINE synthetische
         # .Count-Eigenschaft (erst ab PowerShell 6.1) - der Aufrufer saehe dann
-        # trotz erfolgreichem Fund "Count = null" und wuerfe das Ergebnis weg.
+        # trotz erfolgreichem Fund "Count = null" und würfe das Ergebnis weg.
         return , @($reachable)
     } catch {
         Write-Status "LDAP-Erkennung fehlgeschlagen: $($_.Exception.Message)"
@@ -174,7 +174,7 @@ function New-FormLabel {
     return $lbl
 }
 
-$layout.Controls.Add((New-FormLabel -Text 'CSR aus der lokalen Sitzung hier einfuegen (PEM-Text, aus VscWizard Plan B Schritt 3 kopiert):' -Style Bold), 0, 0)
+$layout.Controls.Add((New-FormLabel -Text 'CSR aus der lokalen Sitzung hier einfügen (PEM-Text, aus VscWizard Plan B Schritt 3 kopiert):' -Style Bold), 0, 0)
 
 $txtCsr = New-Object System.Windows.Forms.TextBox
 $txtCsr.Multiline = $true
@@ -209,9 +209,9 @@ function Add-CaRow {
     $caPanel.Controls.Add($Control, 1, $rowIndex)
 }
 
-# Bewusst KEIN Domaenen-Feld: dieses Tool laeuft auf einem domaenen-gebundenen,
+# Bewusst KEIN Domänen-Feld: dieses Tool läuft auf einem domänen-gebundenen,
 # CA-nahen Server, wo serverloses LDAP-Binding von selbst funktioniert. Die
-# fruehere UPN-Vorbefuellung war zudem irrefuehrend, da der UPN-Suffix (z.B. der
+# fruehere UPN-Vorbefüllung war zudem irreführend, da der UPN-Suffix (z.B. der
 # Entra-Mandant) nichts mit dem AD-DNS-Namen zu tun haben muss.
 $txtCA = New-Object System.Windows.Forms.TextBox
 Add-CaRow -LabelText 'CA-Konfigurationsstring:' -Control $txtCA
@@ -239,7 +239,7 @@ $btnRetrieve.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
 $btnRetrieve.Visible = $false
 $layout.Controls.Add($btnRetrieve, 0, 5)
 
-$layout.Controls.Add((New-FormLabel -Text 'Ergebnis (PEM-Text - zum Kopieren zurueck in die lokale Sitzung markiert/kopiert):' -Style Bold), 0, 6)
+$layout.Controls.Add((New-FormLabel -Text 'Ergebnis (PEM-Text - zum Kopieren zurück in die lokale Sitzung markiert/kopiert):' -Style Bold), 0, 6)
 
 $txtResult = New-Object System.Windows.Forms.TextBox
 $txtResult.Multiline = $true
@@ -279,7 +279,7 @@ $btnDiscover.Add_Click({
             [void]$cboTemplate.Items.AddRange($allTemplates)
             $cboTemplate.Text = $allTemplates[0]
         }
-        Write-Status "$($cas.Count) erreichbare CA(s) gefunden, erste uebernommen."
+        Write-Status "$($cas.Count) erreichbare CA(s) gefunden, erste übernommen."
     } else {
         Write-Status 'Keine erreichbare CA gefunden - bitte CA-Konfigurationsstring manuell eintragen.'
     }
@@ -301,7 +301,7 @@ function Complete-Submission {
         $txtResult.SelectAll()
         $txtResult.Focus()
         Set-Clipboard -Value $txtResult.Text
-        Write-Status 'Ergebnis in die Zwischenablage kopiert. Auf der lokalen Sitzung in Plan B Schritt 6 einfuegen.'
+        Write-Status 'Ergebnis in die Zwischenablage kopiert. Auf der lokalen Sitzung in Plan B Schritt 6 einfügen.'
     } catch {
         Write-Status "Fehler beim Aufbereiten des Ergebnisses: $($_.Exception.Message)"
     }
@@ -309,7 +309,7 @@ function Complete-Submission {
 
 $btnSubmit.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtCsr.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfuegen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfügen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     if ([string]::IsNullOrWhiteSpace($txtCA.Text) -or [string]::IsNullOrWhiteSpace($cboTemplate.Text)) {
