@@ -259,6 +259,9 @@ $script:ActivePlan = $null
 # Woher der Plan-A/B-Ablauf betreten wurde - steuert, wohin "Zurück" aus dessen
 # Schritt 0 fuehrt: 'Scenario' (direkt aus einem Szenario) oder 'Mode' (klassische Moduswahl).
 $script:PlanEntryFrom = 'Scenario'
+# Verlängern (Szenario 02): Re-Enroll auf eine BESTEHENDE Karte - der Plan-A-
+# "Anfordern"-Schritt wird wiederverwendet, das Erstellen uebersprungen.
+$script:PlanA_RenewMode = $false
 
 $tabPlanA = New-Object System.Windows.Forms.Panel
 $tabPlanA.Dock = 'Fill'
@@ -694,6 +697,7 @@ $scnList.Add_SizeChanged($scnResize)
 
 function Show-ScenarioStep {
     $script:ActivePlan = 'SCEN'
+    $script:PlanA_RenewMode = $false
     $tabPlanA.Visible = $false
     $tabPlanB.Visible = $false
     $pnlModeSelect.Visible = $false
@@ -758,6 +762,87 @@ function Show-AccountInputDialog {
     return $null
 }
 
+function Show-VscPickerDialog {
+    # Auswahl der zu verlängernden Karte aus den vorhandenen VSCs, mit Restlaufzeit
+    # des (frühesten) Zertifikats auf der jeweiligen Karte.
+    param($Readers, $Certs)
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Karte für Verlängerung wählen'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
+    $dlg.ClientSize = New-Object System.Drawing.Size(560, 320)
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = 'Welche virtuelle Smartcard soll verlängert werden?'
+    $lbl.Location = New-Object System.Drawing.Point(12, 12)
+    $lbl.Size = New-Object System.Drawing.Size(536, 20)
+
+    $list = New-Object System.Windows.Forms.ListBox
+    $list.Location = New-Object System.Drawing.Point(12, 38)
+    $list.Size = New-Object System.Drawing.Size(536, 220)
+    $list.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    foreach ($r in $Readers) {
+        $cardCerts = @($Certs | Where-Object { $_.Reader -and $r.PcscName -and $_.Reader -eq $r.PcscName })
+        $expiryNote = if ($cardCerts.Count -gt 0) {
+            $soonest = ($cardCerts | Sort-Object NotAfter | Select-Object -First 1).NotAfter
+            "gültig bis $($soonest.ToString('yyyy-MM-dd'))"
+        } else { 'kein Zertifikat gefunden' }
+        $pcsc = if ($r.PcscName) { $r.PcscName } else { '?' }
+        [void]$list.Items.Add("$($r.FriendlyName)  [$pcsc]  -  $expiryNote")
+    }
+    if ($list.Items.Count -gt 0) { $list.SelectedIndex = 0 }
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Verlängern'; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $ok.Location = New-Object System.Drawing.Point(372, 276); $ok.Size = New-Object System.Drawing.Size(90, 28)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Abbrechen'; $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancel.Location = New-Object System.Drawing.Point(468, 276); $cancel.Size = New-Object System.Drawing.Size(80, 28)
+
+    $dlg.Controls.AddRange(@($lbl, $list, $ok, $cancel))
+    $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+    $res = $dlg.ShowDialog($form)
+    if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $list.SelectedIndex -ge 0) {
+        return $Readers[$list.SelectedIndex]
+    }
+    return $null
+}
+
+function Start-Renewal {
+    # Szenario 02: re-enrollt auf eine BESTEHENDE Karte - ohne Neuerstellung. Dafür
+    # wird der Plan-A-"Anfordern"-Schritt (Index 2) mit den Daten der gewählten Karte
+    # direkt angesprungen (analog zum Fortsetzen eines Antrags).
+    $readers = @(Get-VirtualSmartCardReaders)
+    if ($readers.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show('Keine virtuelle Smartcard gefunden. Für eine Erstausstellung bitte Szenario 01 (Bootstrap) oder 03 (direkt) verwenden.', 'Verlängern', 'OK', 'Information') | Out-Null
+        return
+    }
+    if ($readers.Count -eq 1) {
+        $sel = $readers[0]
+    } else {
+        $certs = @(Get-SmartCardCertificates)
+        $sel = Show-VscPickerDialog -Readers $readers -Certs $certs
+        if (-not $sel) { return }
+    }
+
+    $script:TargetAccount = $null
+    $script:PlanA_VscCreated = $true
+    $script:PlanA_CardName = $sel.FriendlyName
+    $script:PlanA_PcscName = $sel.PcscName
+    $script:PlanA_CertIssued = $false
+    $script:PlanA_PendingRequestId = $null
+    $script:PlanA_RenewMode = $true
+    $script:PlanEntryFrom = 'Scenario'
+
+    $pnlScenario.Visible = $false
+    $pnlModeSelect.Visible = $false
+    $script:ActivePlan = 'A'
+    $tabPlanA.Visible = $true
+    Show-PlanAStep -Index 2
+    Write-WizardLog -Message "Verlängern: Re-Enroll auf bestehende Karte '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" }). Im Kartenauswahl-Dialog dieselbe Karte wählen." -Level Info
+}
+
 function Invoke-ScenarioNextClick {
     if (-not $script:SelectedScenario) {
         $lblScnSub.Visible = $false
@@ -781,9 +866,9 @@ function Invoke-ScenarioNextClick {
             Enter-Plan -Plan $plan
         }
         2 {
-            # Verlängern: erst die vorhandenen Karten + Restlaufzeit zeigen (Erkennung).
-            Show-VscInventoryDialog -Owner $form
-            [System.Windows.Forms.MessageBox]::Show('Oben siehst du die vorhandenen virtuellen Smartcards samt Zertifikaten und Restlaufzeit. Das automatische Re-Enrollment auf die bestehende Karte (ohne Neuerstellung) ist der nächste Ausbauschritt. Bis dahin: für eine Neuausstellung Szenario 03 nutzen.', 'Verlängern - Erkennung', 'OK', 'Information') | Out-Null
+            # Verlängern: Re-Enroll auf eine bestehende Karte (Kartenauswahl + Restlaufzeit,
+            # dann direkt in den Anfordern-Schritt, ohne Neuerstellung).
+            Start-Renewal
         }
         3 {
             # Direkt für dich: kein separates Konto, direkt in den Plan-A-Ablauf.
@@ -1161,6 +1246,13 @@ function Invoke-PlanANextClick {
 }
 
 function Invoke-PlanABackClick {
+    # Im Verlängern-Modus wurde direkt bei "Anfordern" (Index 2) eingestiegen - "Zurück"
+    # führt dort zur Szenario-Auswahl, nicht zum (übersprungenen) Erstellen-Schritt.
+    if ($script:PlanA_RenewMode -and $script:PlanACurrentStep -eq 2) {
+        $tabPlanA.Visible = $false
+        Show-ScenarioStep
+        return
+    }
     if ($script:PlanACurrentStep -gt 0) {
         Show-PlanAStep -Index ($script:PlanACurrentStep - 1)
     } else {
