@@ -377,6 +377,28 @@ function Complete-Submission {
     }
 }
 
+function ConvertTo-CleanPemRequest {
+    # Saeubert eine eingefuegte CSR zu kanonischem PEM (siehe VscWizard.Core.psm1) -
+    # verhindert CRYPT_E_ASN1_BADTAG durch BOM/Whitespace/kaputte Zeilenumbrueche.
+    param([Parameter(Mandatory)][string]$Text)
+    $t = $Text -replace "$([char]0xFEFF)", ''
+    $header = 'NEW CERTIFICATE REQUEST'
+    if ($t -match '(?s)-----BEGIN ([A-Z0-9 ]+)-----(.*?)-----END \1-----') {
+        $header = $Matches[1].Trim(); $body = $Matches[2]
+    } else { $body = $t }
+    $b64 = ($body -replace '[^A-Za-z0-9+/=]', '')
+    if (-not $b64) { return $null }
+    try { [void][Convert]::FromBase64String($b64) } catch { return $null }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("-----BEGIN $header-----`r`n")
+    for ($i = 0; $i -lt $b64.Length; $i += 64) {
+        $len = [Math]::Min(64, $b64.Length - $i)
+        [void]$sb.Append($b64.Substring($i, $len)); [void]$sb.Append("`r`n")
+    }
+    [void]$sb.Append("-----END $header-----`r`n")
+    return $sb.ToString()
+}
+
 $btnSubmit.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtCsr.Text)) {
         [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfügen.', 'Hinweis', 'OK', 'Warning') | Out-Null
@@ -391,8 +413,14 @@ $btnSubmit.Add_Click({
     $btnRetrieve.Visible = $false
     $txtResult.Text = ''
 
+    $csrClean = ConvertTo-CleanPemRequest -Text $txtCsr.Text
+    if (-not $csrClean) {
+        [System.Windows.Forms.MessageBox]::Show('Der eingefügte Text ist keine gültige Zertifikatsanforderung (kein gültiges Base64-PEM). Bitte die CSR erneut kopieren/laden.', 'Ungültige CSR', 'OK', 'Warning') | Out-Null
+        $btnSubmit.Enabled = $true
+        return
+    }
     $csrPath = Join-Path $script:WorkDir 'request.req'
-    Set-Content -Path $csrPath -Value $txtCsr.Text -Encoding ASCII
+    Set-Content -Path $csrPath -Value $csrClean -Encoding ASCII -NoNewline
     $cerPath = Join-Path $script:WorkDir 'certnew.cer'
 
     $submit = Invoke-Tool -FilePath 'certreq.exe' -ArgumentList @('-submit', '-config', $txtCA.Text, '-attrib', "CertificateTemplate:$($cboTemplate.Text)", $csrPath, $cerPath)

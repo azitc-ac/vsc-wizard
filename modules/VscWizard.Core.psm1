@@ -1063,6 +1063,39 @@ Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`
 
 #region Zertifikatsanforderung (certreq)
 
+function ConvertTo-CleanPemRequest {
+    # Saeubert eine eingefuegte/geladene CSR zu einem kanonischen PEM, an dem certreq
+    # zuverlaessig parsen kann. Haeufige Ursache fuer CRYPT_E_ASN1_BADTAG (0x8009310b)
+    # beim Submit: ein fuehrendes BOM-Zeichen, Fremd-Whitespace, kaputte Zeilenumbrueche
+    # oder Text vor/nach dem PEM-Block aus dem Copy&Paste-/RDP-Round-trip.
+    # Vorgehen: PEM-Block extrahieren, reines Base64 herausfiltern, validieren und
+    # sauber bei 64 Zeichen neu umbrechen. Gibt $null zurueck, wenn kein gueltiges
+    # Base64 vorliegt (dann ist die Quelle wirklich defekt, nicht nur unsauber).
+    param([Parameter(Mandatory)][string]$Text)
+
+    $t = $Text -replace "$([char]0xFEFF)", ''   # BOM-Zeichen entfernen
+    $header = 'NEW CERTIFICATE REQUEST'
+    if ($t -match '(?s)-----BEGIN ([A-Z0-9 ]+)-----(.*?)-----END \1-----') {
+        $header = $Matches[1].Trim()
+        $body = $Matches[2]
+    } else {
+        $body = $t   # kein Header gefunden - als reinen Base64-Koerper behandeln
+    }
+
+    $b64 = ($body -replace '[^A-Za-z0-9+/=]', '')
+    if (-not $b64) { return $null }
+    try { [void][Convert]::FromBase64String($b64) } catch { return $null }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("-----BEGIN $header-----`r`n")
+    for ($i = 0; $i -lt $b64.Length; $i += 64) {
+        $len = [Math]::Min(64, $b64.Length - $i)
+        [void]$sb.Append($b64.Substring($i, $len)); [void]$sb.Append("`r`n")
+    }
+    [void]$sb.Append("-----END $header-----`r`n")
+    return $sb.ToString()
+}
+
 function New-EnrollmentInfFile {
     param(
         [Parameter(Mandatory)][string]$Subject,

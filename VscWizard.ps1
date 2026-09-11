@@ -1616,34 +1616,26 @@ $btnSelectCsrB.Add_Click({
 $btnSubmitB.Add_Click({
     # Standardweg: eingefügter CSR-Text (der Text-Workflow erzeugt auf dieser
     # Maschine keine CSR-Datei); die Dateiauswahl bleibt als Alternative.
-    $csrPath = $null
+    # CSR-Rohtext aus Paste ODER Datei holen und dann kanonisch säubern - das
+    # verhindert CRYPT_E_ASN1_BADTAG (0x8009310b) durch BOM/UTF-16/Fremd-Whitespace/
+    # kaputte Zeilenumbrüche aus dem Copy&Paste-/RDP-Round-trip.
+    $csrRaw = $null
     if (-not [string]::IsNullOrWhiteSpace($txtCsrPasteB.Text)) {
-        $csrPath = Join-Path (Get-WizardWorkingDir) "PlanB-pasted-$([guid]::NewGuid()).req"
-        Set-Content -Path $csrPath -Value $txtCsrPasteB.Text -Encoding ASCII
+        $csrRaw = $txtCsrPasteB.Text
     } elseif ($txtSelectedCsrB.Text) {
-        $csrPath = $txtSelectedCsrB.Text
-        # Manuell gespeicherte CSR-Dateien kommen je nach Editor als UTF-16 oder
-        # UTF-8-mit-BOM daher - certreq erwartet ASCII/ANSI-PEM ohne BOM und
-        # scheitert sonst mit CRYPT_E_ASN1_BADTAG (0x8009310b). Solche Dateien
-        # werden vor dem Submit automatisch in eine ASCII-Arbeitskopie transkodiert.
-        try {
-            $csrBytes = [System.IO.File]::ReadAllBytes($csrPath)
-            $hasBom = ($csrBytes.Length -ge 2 -and (
-                ($csrBytes[0] -eq 0xFF -and $csrBytes[1] -eq 0xFE) -or
-                ($csrBytes[0] -eq 0xFE -and $csrBytes[1] -eq 0xFF) -or
-                ($csrBytes.Length -ge 3 -and $csrBytes[0] -eq 0xEF -and $csrBytes[1] -eq 0xBB -and $csrBytes[2] -eq 0xBF)))
-            if ($hasBom) {
-                $csrText = [System.IO.File]::ReadAllText($csrPath)  # erkennt BOM selbst
-                $csrPath = Join-Path (Get-WizardWorkingDir) "PlanB-transcoded-$([guid]::NewGuid()).req"
-                Set-Content -Path $csrPath -Value $csrText -Encoding ASCII
-                Write-WizardLog -Message 'CSR-Datei enthielt ein BOM/UTF-16-Encoding - für certreq automatisch nach ASCII transkodiert.' -Level Info
-            }
-        } catch { }
+        try { $csrRaw = [System.IO.File]::ReadAllText($txtSelectedCsrB.Text) } catch { $csrRaw = $null }
     }
-    if (-not $csrPath) {
+    if ([string]::IsNullOrWhiteSpace($csrRaw)) {
         [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CSR-Text einfügen (oder alternativ eine CSR-Datei auswählen).', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
+    $csrClean = ConvertTo-CleanPemRequest -Text $csrRaw
+    if (-not $csrClean) {
+        [System.Windows.Forms.MessageBox]::Show('Der eingefügte/geladene Text ist keine gültige Zertifikatsanforderung (kein gültiges Base64-PEM). Bitte die CSR aus Schritt 3 erneut kopieren und einfügen.', 'Ungültige CSR', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $csrPath = Join-Path (Get-WizardWorkingDir) "PlanB-pasted-$([guid]::NewGuid()).req"
+    Set-Content -Path $csrPath -Value $csrClean -Encoding ASCII -NoNewline
     if (-not $cboTemplateSubmitB.SelectedItem) {
         [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswählen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
