@@ -429,10 +429,12 @@ function Show-ModeSelectStep {
     $script:ActivePlan = $null
     $tabPlanA.Visible = $false
     $tabPlanB.Visible = $false
+    if ($pnlScenario) { $pnlScenario.Visible = $false }
     $pnlModeSelect.Visible = $true
     Update-ModeSelectPlanChoice
-    $lblGlobalStep.Text = 'Schritt 1: Modus'
-    $btnBackShared.Enabled = $false
+    $lblGlobalStep.Text = 'Schritt 2: Konto & Weg'
+    # Zurueck fuehrt jetzt auf die Szenario-Auswahl (Schritt 1).
+    $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = $true
 }
 
@@ -456,6 +458,251 @@ function Invoke-ModeSelectNextClick {
         $script:ActivePlan = 'B'
         $tabPlanB.Visible = $true
         Show-PlanBStep -Index 0
+    }
+}
+
+#endregion
+
+# ============================================================================
+#region SCHRITT 1: SZENARIO-AUSWAHL (neue Startseite, routet in die bestehenden Ablaeufe)
+# ============================================================================
+
+# Farbpalette (klassisch, passend zum WinForms-Look aus dem Design-Mockup).
+$scnStripe = @{
+    blue  = [System.Drawing.Color]::FromArgb(47, 111, 176)
+    green = [System.Drawing.Color]::FromArgb(46, 125, 82)
+    teal  = [System.Drawing.Color]::FromArgb(42, 128, 145)
+    red   = [System.Drawing.Color]::FromArgb(181, 52, 42)
+}
+$scnSelColor  = [System.Drawing.Color]::FromArgb(229, 241, 251)
+$scnTagTool   = [System.Drawing.Color]::FromArgb(46, 125, 82)
+$scnTagYou    = [System.Drawing.Color]::FromArgb(176, 110, 20)
+$scnTagGate   = [System.Drawing.Color]::FromArgb(42, 128, 145)
+$scnTagDanger = [System.Drawing.Color]::FromArgb(181, 52, 42)
+
+# Szenario-Definitionen (Reihenfolge wie im Runbook). Steps: T = Tag, X = Text.
+$script:Scenarios = @(
+    [pscustomobject]@{
+        Id = 1; Title = 'Neues SC-only-Admin-Konto einrichten'; Sub = 'GEFUEHRT - BOOTSTRAP   Erste VSC fuer ein Konto ohne Karte (loest das Henne-Ei-Problem).'; Stripe = 'blue'
+        Steps = @(
+            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto temporaer auf Passwort-Anmeldung zulassen (SC-only kurz aus).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'VSC auf dieser Maschine erstellen, PIN vergeben.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR erzeugen (Schluessel auf der VSC).' }
+            [pscustomobject]@{ T = 'Pruefung'; X = 'Direkt-Einreichung moeglich? ja: direkt einreichen. nein: per RDP als Zielkonto auf Einreich-Host.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'Zertifikat auf die VSC uebernehmen.' }
+            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto wieder auf "Smartcard erforderlich" setzen.' }
+        )
+        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Passwort ist einmaliger Bootstrap. VSC dort erstellen, wo sie genutzt wird.' }
+    }
+    [pscustomobject]@{
+        Id = 2; Title = 'Zertifikat verlaengern'; Sub = 'GEFUEHRT - VOR ABLAUF   Erneuerung ueber eine noch gueltige VSC, ohne Passwort.'; Stripe = 'blue'
+        Steps = @(
+            [pscustomobject]@{ T = 'Tool'; X = 'Vorhandene VSC + Zertifikat erkennen, Restlaufzeit anzeigen.' }
+            [pscustomobject]@{ T = 'Du';   X = 'Mit gueltiger Karte anmelden (Smartcard-Redirect, kein Passwort).' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Neuen CSR erzeugen und einreichen.' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Neues Zertifikat auf die bestehende VSC uebernehmen.' }
+        )
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'Bereits abgelaufen -> kein Chain moeglich -> Szenario 01 (Bootstrap).' }
+    }
+    [pscustomobject]@{
+        Id = 3; Title = 'VSC fuer dieses Konto direkt ausstellen'; Sub = 'AUTOMATISIERT   Geradliniger Weg, wenn die CA von hier erreichbar ist.'; Stripe = 'green'
+        Steps = @(
+            [pscustomobject]@{ T = 'Pruefung'; X = 'Direkt-Einreichung pruefen (Kerberos, DNS, certutil -ping).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'VSC erstellen, PIN vergeben.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR -> direkt einreichen -> Zertifikat uebernehmen.' }
+        )
+        Guard = $null
+    }
+    [pscustomobject]@{
+        Id = 4; Title = 'Cloud-Global-Admin: Smartcard + VSC'; Sub = 'GEFUEHRT - ENTRA   Phishing-resistente Anmeldung: YubiKey (portabel) und VSC.'; Stripe = 'blue'
+        Steps = @(
+            [pscustomobject]@{ T = 'Tool'; X = 'Teil A (lokal): Zertifikat auf YubiKey (PIV) und/oder VSC provisionieren.' }
+            [pscustomobject]@{ T = 'Du';   X = 'Teil B (CBA): ausstellende CA in den Entra-Vertrauensspeicher importieren.' }
+            [pscustomobject]@{ T = 'Du';   X = 'CBA aktivieren; Username-Binding; CRL oeffentlich erreichbar.' }
+            [pscustomobject]@{ T = 'Du';   X = 'Alternative: FIDO2/Passkey auf demselben YubiKey (ohne PKI-in-Entra).' }
+        )
+        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Gefuehrter Ablauf folgt (in Arbeit) - Details im RUNBOOK.md.' }
+    }
+    [pscustomobject]@{
+        Id = 5; Title = 'VSCs verwalten'; Sub = 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und loeschen.'; Stripe = 'teal'
+        Steps = @(
+            [pscustomobject]@{ T = 'Tool'; X = 'Inventar: Reader, Karten, Zertifikate mit Ablaufdatum.' }
+            [pscustomobject]@{ T = 'Du';   X = 'Auswaehlen und loeschen (tpmvscmgr destroy).' }
+        )
+        Guard = $null
+    }
+    [pscustomobject]@{
+        Id = 6; Title = 'Fuer ein anderes Konto ausstellen (EOBO)'; Sub = 'FORTGESCHRITTEN   Enroll on Behalf Of mit Enrollment-Agent-Zertifikat.'; Stripe = 'red'
+        Steps = @(
+            [pscustomobject]@{ T = 'Tool'; X = 'EA-Zertifikat erkennen; EOBO-Antrag (RequesterName=Ziel, Build-from-AD).' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Antrag co-signieren, einreichen, auf VSC uebernehmen.' }
+        )
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-aequivalent. Fuer Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
+    }
+)
+$script:SelectedScenario = $null
+
+$pnlScenario = New-Object System.Windows.Forms.Panel
+$pnlScenario.Dock = 'Fill'
+$pnlScenario.Visible = $false
+$pnlContentArea.Controls.Add($pnlScenario)
+
+$scnRoot = New-Object System.Windows.Forms.TableLayoutPanel
+$scnRoot.Dock = 'Fill'; $scnRoot.ColumnCount = 1; $scnRoot.RowCount = 2
+[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 76)))
+[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$pnlScenario.Controls.Add($scnRoot)
+
+$scnHeader = New-Object System.Windows.Forms.Panel
+$scnHeader.Dock = 'Fill'
+$scnRoot.Controls.Add($scnHeader, 0, 0)
+$lblScnTitle = New-WizardLabel -Text 'Was moechtest du tun?' -X 16 -Y 12 -Width 760 -Style Bold
+$lblScnTitle.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
+$lblScnTitle.Height = 26
+$lblScnSub = New-WizardLabel -Text 'Szenario waehlen - der Wizard richtet Karte, Antrag und Einreichungsweg passend ein.' -X 16 -Y 42 -Width 760
+$lblScnSub.ForeColor = [System.Drawing.Color]::DimGray
+$lblScnValidation = New-WizardLabel -Text '' -X 16 -Y 42 -Width 760
+$lblScnValidation.ForeColor = [System.Drawing.Color]::Firebrick
+$lblScnValidation.Visible = $false
+$scnHeader.Controls.AddRange(@($lblScnTitle, $lblScnSub, $lblScnValidation))
+
+$scnSplit = New-Object System.Windows.Forms.TableLayoutPanel
+$scnSplit.Dock = 'Fill'; $scnSplit.ColumnCount = 2; $scnSplit.RowCount = 1
+[void]$scnSplit.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 56)))
+[void]$scnSplit.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 44)))
+$scnRoot.Controls.Add($scnSplit, 0, 1)
+
+$scnList = New-Object System.Windows.Forms.FlowLayoutPanel
+$scnList.Dock = 'Fill'; $scnList.FlowDirection = 'TopDown'; $scnList.WrapContents = $false; $scnList.AutoScroll = $true
+$scnList.Padding = New-Object System.Windows.Forms.Padding(10, 6, 10, 6)
+$scnSplit.Controls.Add($scnList, 0, 0)
+
+$scnDetailsGroup = New-Object System.Windows.Forms.GroupBox
+$scnDetailsGroup.Text = 'Ablauf'; $scnDetailsGroup.Dock = 'Fill'
+$scnDetailsGroup.Margin = New-Object System.Windows.Forms.Padding(6, 6, 10, 10)
+$scnSplit.Controls.Add($scnDetailsGroup, 1, 0)
+
+$scnDetails = New-Object System.Windows.Forms.RichTextBox
+$scnDetails.Dock = 'Fill'; $scnDetails.ReadOnly = $true; $scnDetails.BorderStyle = 'None'
+$scnDetails.BackColor = [System.Drawing.SystemColors]::Window
+$scnDetails.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$scnDetailsGroup.Controls.Add($scnDetails)
+
+function Add-ScnColoredText {
+    param($Rtb, [string]$Text, [System.Drawing.Color]$Color, [switch]$Bold)
+    $Rtb.SelectionStart = $Rtb.TextLength
+    $Rtb.SelectionLength = 0
+    $Rtb.SelectionColor = $Color
+    $style = if ($Bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }
+    $Rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9, $style)
+    $Rtb.AppendText($Text)
+}
+
+function Set-ScenarioDetails {
+    param($Scenario)
+    $scnDetails.Clear()
+    if (-not $Scenario) { return }
+    $ink = [System.Drawing.SystemColors]::WindowText
+    Add-ScnColoredText -Rtb $scnDetails -Text ("{0:D2}  {1}`r`n`r`n" -f $Scenario.Id, $Scenario.Title) -Color $ink -Bold
+    foreach ($s in $Scenario.Steps) {
+        $tagColor = switch ($s.T) { 'Tool' { $scnTagTool } 'Du' { $scnTagYou } 'Pruefung' { $scnTagGate } default { $ink } }
+        Add-ScnColoredText -Rtb $scnDetails -Text ("[{0}] " -f $s.T) -Color $tagColor -Bold
+        Add-ScnColoredText -Rtb $scnDetails -Text ("{0}`r`n" -f $s.X) -Color $ink
+    }
+    if ($Scenario.Guard) {
+        $gColor = if ($Scenario.Guard.Kind -eq 'danger') { $scnTagDanger } else { $scnTagYou }
+        Add-ScnColoredText -Rtb $scnDetails -Text "`r`n! " -Color $gColor -Bold
+        Add-ScnColoredText -Rtb $scnDetails -Text $Scenario.Guard.Text -Color $gColor
+    }
+    $scnDetails.SelectionStart = 0
+    $scnDetails.ScrollToCaret()
+}
+
+function Select-ScenarioById {
+    param([int]$Id)
+    $script:SelectedScenario = $Id
+    foreach ($row in $scnList.Controls) {
+        if ([int]$row.Tag -eq $Id) { $row.BackColor = $scnSelColor } else { $row.BackColor = [System.Drawing.SystemColors]::Window }
+    }
+    Set-ScenarioDetails -Scenario ($script:Scenarios | Where-Object { $_.Id -eq $Id })
+    $lblScnValidation.Visible = $false
+    $lblScnSub.Visible = $true
+}
+
+# Gemeinsamer Klick-Handler: liest die Szenario-Id aus .Tag des angeklickten Controls.
+$scnRowClick = { param($s, $e) $id = $s.Tag; if ($null -ne $id) { Select-ScenarioById -Id ([int]$id) } }
+
+foreach ($scn in $script:Scenarios) {
+    $row = New-Object System.Windows.Forms.Panel
+    $row.Height = 62; $row.Width = 380
+    $row.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
+    $row.BackColor = [System.Drawing.SystemColors]::Window
+    $row.BorderStyle = 'FixedSingle'
+    $row.Tag = $scn.Id
+    $row.Cursor = [System.Windows.Forms.Cursors]::Hand
+
+    $stripe = New-Object System.Windows.Forms.Panel
+    $stripe.Dock = 'Left'; $stripe.Width = 5; $stripe.BackColor = $scnStripe[$scn.Stripe]
+    $row.Controls.Add($stripe)
+
+    $lblT = New-Object System.Windows.Forms.Label
+    $lblT.Text = ("{0:D2}   {1}" -f $scn.Id, $scn.Title)
+    $lblT.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+    $lblT.Location = New-Object System.Drawing.Point(14, 8); $lblT.AutoSize = $true
+    $lblT.Tag = $scn.Id
+    $row.Controls.Add($lblT)
+
+    $lblS = New-Object System.Windows.Forms.Label
+    $lblS.Text = $scn.Sub
+    $lblS.ForeColor = [System.Drawing.Color]::DimGray
+    $lblS.Location = New-Object System.Drawing.Point(14, 32); $lblS.AutoSize = $true
+    $lblS.Tag = $scn.Id
+    $row.Controls.Add($lblS)
+
+    $row.Add_Click($scnRowClick)
+    $lblT.Add_Click($scnRowClick)
+    $lblS.Add_Click($scnRowClick)
+    $stripe.Add_Click($scnRowClick)
+
+    [void]$scnList.Controls.Add($row)
+}
+
+# Zeilenbreite an die (variable) Listenbreite anpassen.
+$scnResize = {
+    $w = $scnList.ClientSize.Width - 24
+    if ($w -lt 200) { $w = 200 }
+    foreach ($row in $scnList.Controls) { $row.Width = $w }
+}
+$scnList.Add_SizeChanged($scnResize)
+
+function Show-ScenarioStep {
+    $script:ActivePlan = 'SCEN'
+    $tabPlanA.Visible = $false
+    $tabPlanB.Visible = $false
+    $pnlModeSelect.Visible = $false
+    $pnlScenario.Visible = $true
+    & $scnResize
+    $lblGlobalStep.Text = 'Schritt 1: Szenario'
+    $btnBackShared.Enabled = $false
+    $btnNextShared.Enabled = $true
+}
+
+function Invoke-ScenarioNextClick {
+    if (-not $script:SelectedScenario) {
+        $lblScnSub.Visible = $false
+        $lblScnValidation.Text = 'Bitte ein Szenario auswaehlen.'
+        $lblScnValidation.Visible = $true
+        return
+    }
+    switch ($script:SelectedScenario) {
+        1 { $radOther.Checked = $true; $pnlScenario.Visible = $false; Show-ModeSelectStep; $txtOtherAccount.Focus() }
+        2 { $radSelf.Checked = $true;  $pnlScenario.Visible = $false; Show-ModeSelectStep }
+        3 { $radSelf.Checked = $true;  $pnlScenario.Visible = $false; Show-ModeSelectStep }
+        4 {
+            [System.Windows.Forms.MessageBox]::Show('Der gefuehrte Cloud-GA-Ablauf (Entra CBA / FIDO2) ist noch in Arbeit. Die Schritte stehen als Checkliste im RUNBOOK.md. Fuer die lokale Zertifikats-/VSC-Ausstellung koennen vorerst die Szenarien 01-03 genutzt werden.', 'Cloud-Global-Admin (in Arbeit)', 'OK', 'Information') | Out-Null
+        }
+        5 { Show-VscInventoryDialog -Owner $form }
+        6 { $radOther.Checked = $true; $pnlScenario.Visible = $false; Show-ModeSelectStep; $txtOtherAccount.Focus() }
     }
 }
 
@@ -1392,17 +1639,19 @@ function Invoke-PlanBBackClick {
 
 $btnNextShared.Add_Click({
     switch ($script:ActivePlan) {
-        'A' { Invoke-PlanANextClick }
-        'B' { Invoke-PlanBNextClick }
+        'A'    { Invoke-PlanANextClick }
+        'B'    { Invoke-PlanBNextClick }
+        'SCEN' { Invoke-ScenarioNextClick }
         default { Invoke-ModeSelectNextClick }
     }
 })
 
 $btnBackShared.Add_Click({
     switch ($script:ActivePlan) {
-        'A' { Invoke-PlanABackClick }
-        'B' { Invoke-PlanBBackClick }
-        default { }
+        'A'    { Invoke-PlanABackClick }
+        'B'    { Invoke-PlanBBackClick }
+        'SCEN' { }
+        default { Show-ScenarioStep }  # Mode-Select (Schritt 2) -> zurueck zur Szenario-Auswahl
     }
 })
 
@@ -1983,7 +2232,7 @@ function Show-SettingsDialog {
 #region STARTUP
 # ============================================================================
 
-Show-ModeSelectStep
+Show-ScenarioStep
 
 function Invoke-WizardResume {
     # Begonnenen Antrag aus einer frueheren Sitzung wieder aufnehmen (siehe
@@ -2003,6 +2252,7 @@ function Invoke-WizardResume {
     }
 
     if ($state['TargetAccount']) { $script:TargetAccount = $state['TargetAccount'] } else { $script:TargetAccount = $null }
+    $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
 
     if ($state['Plan'] -eq 'A') {
