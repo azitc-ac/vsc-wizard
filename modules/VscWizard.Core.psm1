@@ -579,7 +579,7 @@ function New-VirtualSmartCard {
     $nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($nativeArch -eq 'ARM64') {
         Write-WizardLog -Message 'ARM64 erkannt: COM-Helfer (.NET Framework) nicht nutzbar - verwende direkt tpmvscmgr.exe.' -Level Info
-        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName
+        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
     }
 
     $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
@@ -667,7 +667,7 @@ function New-VirtualSmartCard {
         # COM-Weg fehlgeschlagen (z.B. 0x800700C1 bei Architektur-Mismatch) -
         # auf den nativen tpmvscmgr.exe zurueckfallen, der arch-unabhaengig laeuft.
         Write-WizardLog -Message "COM-Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" }) - Fallback über tpmvscmgr.exe." -Level Error
-        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName
+        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
     }
     return [pscustomobject]@{
         Success    = $success
@@ -684,7 +684,11 @@ function New-VirtualSmartCardViaTpmVscMgr {
     # daher sichtbares Fenster, kein -WindowStyle Hidden). Erfolg wird danach anhand
     # eines neu hinzugekommenen Smartcard-Readers mit diesem FriendlyName erkannt, da
     # -Verb RunAs keine Ausgabeumleitung erlaubt.
-    param([Parameter(Mandatory)][string]$CardName)
+    param(
+        [Parameter(Mandatory)][string]$CardName,
+        # Wird als /PINPOLICY minlen an tpmvscmgr durchgereicht.
+        [int]$PinPolicyMinLength = 6
+    )
 
     $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
     if (-not (Test-Path $tpmvscmgr)) {
@@ -693,15 +697,16 @@ function New-VirtualSmartCardViaTpmVscMgr {
         return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
     }
 
-    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' über tpmvscmgr.exe (PIN-Eingabe im elevierten Konsolenfenster; PIN-Mindestlänge 8)." -Level Command
+    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' über tpmvscmgr.exe (PIN-Eingabe im elevierten Konsolenfenster; PIN-Mindestlänge $PinPolicyMinLength)." -Level Command
 
     # Vorher vorhandene Reader merken, um die neue Karte danach sicher zu identifizieren.
     $before = @(Get-VirtualSmartCardReaders | ForEach-Object { $_.InstanceId })
 
     # /AdminKey DEFAULT + /PIN PROMPT + /generate: der dokumentierte Weg fuer eine
-    # enrollment-faehige Karte. /PIN PROMPT erfordert ein interaktives Fenster - daher
-    # Start-Process (nicht Invoke-ExternalCommand mit Umleitung).
-    $vscArgs = "create /name `"$CardName`" /AdminKey DEFAULT /PIN PROMPT /generate"
+    # enrollment-faehige Karte. /PINPOLICY minlen setzt die PIN-Mindestlänge. /PIN PROMPT
+    # erfordert ein interaktives Fenster - daher Start-Process (nicht Invoke-ExternalCommand
+    # mit Umleitung).
+    $vscArgs = "create /name `"$CardName`" /AdminKey DEFAULT /PIN PROMPT /PINPOLICY minlen $PinPolicyMinLength /generate"
     try {
         if (Test-IsElevated) {
             Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Wait -ErrorAction Stop

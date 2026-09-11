@@ -6,4 +6,5 @@
     VscNamePrefix = 'VSC-'
     DiscoveryDomain = 'contoso.local'
     RdpJumpServer = 'rdp01.contoso.local'
+    PinMinLength = '6'
 }

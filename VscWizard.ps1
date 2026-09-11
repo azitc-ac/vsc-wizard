@@ -47,6 +47,16 @@ function New-WizardLabel {
     return $lbl
 }
 
+function Get-ConfiguredPinMinLength {
+    # PIN-Mindestlänge aus der Konfiguration (Default 6), auf einen sinnvollen
+    # Bereich geklemmt. Gilt für COM- (Manager2-PIN-Policy) und tpmvscmgr-Weg.
+    $min = 6
+    if ($config.PinMinLength) { $min = [int]$config.PinMinLength }
+    if ($min -lt 4) { $min = 4 }
+    if ($min -gt 20) { $min = 20 }
+    return $min
+}
+
 # $script:TargetAccount ist $null (= aktuell angemeldeter Benutzer) oder ein auf dem
 # Landing-Screen eingegebenes Zielkonto. VSC- und CSR-Erstellung laufen unabhängig
 # davon immer im aktuellen Benutzerkontext (die Smartcard-PIN ist kontounabhängig
@@ -77,7 +87,7 @@ function Invoke-EnrollmentAgentRequest {
     if ($OnVsc) {
         $cardName = "$($config.VscNamePrefix)EA-$env:USERNAME"
         Write-WizardLog -Message "Erstelle VSC für EA-Zertifikat ('$cardName')." -Level Command
-        $vsc = New-VirtualSmartCard -CardName $cardName
+        $vsc = New-VirtualSmartCard -CardName $cardName -PinPolicyMinLength (Get-ConfiguredPinMinLength)
         if (-not $vsc.Success) {
             return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'VSC-Erstellung für EA-Zertifikat fehlgeschlagen.' }
         }
@@ -988,7 +998,7 @@ $btnCreateVscA.Add_Click({
     $form.Refresh()
 
     try {
-        $result = New-VirtualSmartCard -CardName $txtCardNameA.Text
+        $result = New-VirtualSmartCard -CardName $txtCardNameA.Text -PinPolicyMinLength (Get-ConfiguredPinMinLength)
     } catch {
         $result = [pscustomobject]@{ Success = $false; ExitCode = $null; Message = $_.Exception.Message }
         Write-WizardLog -Message "Unerwarteter Fehler bei der VSC-Erstellung: $($_.Exception.Message)" -Level Error
@@ -1316,7 +1326,7 @@ $btnCreateVscB.Add_Click({
     $form.Refresh()
 
     try {
-        $result = New-VirtualSmartCard -CardName $txtCardNameB.Text
+        $result = New-VirtualSmartCard -CardName $txtCardNameB.Text -PinPolicyMinLength (Get-ConfiguredPinMinLength)
     } catch {
         $result = [pscustomobject]@{ Success = $false; ExitCode = $null; Message = $_.Exception.Message }
         Write-WizardLog -Message "Unerwarteter Fehler bei der VSC-Erstellung: $($_.Exception.Message)" -Level Error
@@ -2162,6 +2172,12 @@ function Show-SettingsDialog {
     $txtCfgPrefix.Text = $config.VscNamePrefix
     Add-SettingsRow -LabelText 'Namenspräfix für virtuelle Smartcards:' -InputControl $txtCfgPrefix
 
+    $numCfgPinMin = New-Object System.Windows.Forms.NumericUpDown
+    $numCfgPinMin.Minimum = 4
+    $numCfgPinMin.Maximum = 20
+    $numCfgPinMin.Value = (Get-ConfiguredPinMinLength)
+    Add-SettingsRow -LabelText 'PIN-Mindestlänge (COM: ab 6; tpmvscmgr/ARM64: /PINPOLICY):' -InputControl $numCfgPinMin
+
     $txtCfgJump = New-Object System.Windows.Forms.TextBox
     Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder 'z.B. pki-jump.contoso.local' -Value $config.RdpJumpServer
     Add-SettingsRow -LabelText 'RDP-Zielserver für Plan B:' -InputControl $txtCfgJump
@@ -2401,6 +2417,7 @@ function Show-SettingsDialog {
             CspName       = $txtCfgCsp.Text
             DiscoveryDomain = Get-TextBoxRealValue -TextBox $txtCfgDomain
             EATemplate    = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
+            PinMinLength  = [int]$numCfgPinMin.Value
             WorkingDir    = $config.WorkingDir
         }
         Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
