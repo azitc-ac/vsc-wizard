@@ -1004,15 +1004,54 @@ function Remove-SmartCardCertificateFromCard {
         [string]$Thumbprint
     )
 
-    Write-WizardLog -Message "Entferne Schlüssel-Container '$ContainerName' (Provider '$Provider') von der Karte - ggf. erscheint der PIN-Dialog." -Level Command
-    $result = Invoke-ExternalCommand -FilePath 'certutil.exe' -ArgumentList @('-csp', $Provider, '-delkey', $ContainerName) -TimeoutSeconds 120
+    Write-WizardLog -Message "Entferne Schlüssel-Container '$ContainerName' (Provider '$Provider') von der Karte - 'certutil -delkey' erfordert Administratorrechte (UAC), danach ggf. PIN-Dialog." -Level Command
 
-    if (-not $result.Success) {
+    $ok = $false
+    $detail = ''
+    if (Test-IsElevated) {
+        # Bereits eleviert: direkt mit Ausgabe-Erfassung.
+        $result = Invoke-ExternalCommand -FilePath 'certutil.exe' -ArgumentList @('-csp', $Provider, '-delkey', $ContainerName) -TimeoutSeconds 120
+        $ok = $result.Success
         $detail = "$($result.StdOut) $($result.StdErr)".Trim()
+    } else {
+        # Nicht eleviert: 'certutil -delkey' braucht Adminrechte -> eleviert starten.
+        # RunAs erlaubt keine Ausgabeumleitung, daher laeuft ein kleiner Wrapper, der
+        # Exit-Code + Ausgabe in eine Datei in C:\Users\Public schreibt (fuer beide
+        # Konten lesbar, auch bei Ueber-die-Schulter-Elevation).
+        $publicDir = Join-Path $env:SystemDrive 'Users\Public'
+        $token = [guid]::NewGuid().ToString('N')
+        $scriptPath = Join-Path $publicDir "vscwizard-delkey-$token.ps1"
+        $outPath = Join-Path $publicDir "vscwizard-delkey-$token.txt"
+        $wrapper = @"
+`$o = & certutil.exe -csp '$Provider' -delkey '$ContainerName' 2>&1
+Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`n")) -Encoding UTF8
+"@
+        Set-Content -Path $scriptPath -Value $wrapper -Encoding UTF8
+        try {
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -Verb RunAs -Wait -ErrorAction Stop
+        } catch {
+            Remove-Item $scriptPath, $outPath -ErrorAction SilentlyContinue
+            $msg = "Elevierter Löschvorgang konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
+            Write-WizardLog -Message $msg -Level Error
+            return [pscustomobject]@{ Success = $false; Message = $msg }
+        }
+        if (Test-Path $outPath) {
+            $content = (Get-Content -Path $outPath -Raw -ErrorAction SilentlyContinue)
+            if ($content -match 'EXIT=(-?\d+)') { $ok = ($Matches[1] -eq '0') }
+            $detail = "$content".Trim()
+        } else {
+            $detail = 'Kein Ergebnis vom elevierten Prozess erhalten.'
+        }
+        Remove-Item $scriptPath, $outPath -ErrorAction SilentlyContinue
+    }
+
+    if (-not $ok) {
         Write-WizardLog -Message "Löschen des Schlüssel-Containers fehlgeschlagen: $detail" -Level Error
         return [pscustomobject]@{ Success = $false; Message = "certutil -delkey fehlgeschlagen. $detail" }
     }
 
+    # Store-Eintrag im AKTUELLEN (angemeldeten) Benutzerkontext bereinigen - der
+    # verweist nach dem Löschen auf einen nicht mehr vorhandenen Schlüssel.
     if ($Thumbprint) {
         Remove-Item -Path "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
     }
