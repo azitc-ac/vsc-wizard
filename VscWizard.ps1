@@ -270,8 +270,9 @@ $script:ActivePlan = $null
 # Schritt 0 fuehrt: 'Scenario' (direkt aus einem Szenario) oder 'Mode' (klassische Moduswahl).
 $script:PlanEntryFrom = 'Scenario'
 # Verlängern (Szenario 02): Re-Enroll auf eine BESTEHENDE Karte - der Plan-A-
-# "Anfordern"-Schritt wird wiederverwendet, das Erstellen uebersprungen.
+# "Anfordern"- bzw. Plan-B-"CSR"-Schritt wird wiederverwendet, das Erstellen uebersprungen.
 $script:PlanA_RenewMode = $false
+$script:PlanB_RenewMode = $false
 
 $tabPlanA = New-Object System.Windows.Forms.Panel
 $tabPlanA.Dock = 'Fill'
@@ -708,6 +709,7 @@ $scnList.Add_SizeChanged($scnResize)
 function Show-ScenarioStep {
     $script:ActivePlan = 'SCEN'
     $script:PlanA_RenewMode = $false
+    $script:PlanB_RenewMode = $false
     $tabPlanA.Visible = $false
     $tabPlanB.Visible = $false
     $pnlModeSelect.Visible = $false
@@ -840,6 +842,26 @@ function Enter-PlanARenewal {
     Show-PlanAStep -Index 2
 }
 
+function Enter-PlanBRenewal {
+    # Verlängern eines Fremdkonto-Certs OHNE EA-Zertifikat: Sprung in den Plan-B-
+    # "CSR"-Schritt (Index 2) fuer die bestehende Karte, das Erstellen wird
+    # uebersprungen. Die Einreichung erfolgt danach als das Zielkonto (RDP-Schritt).
+    param($Reader, [string]$TargetAccount)
+    $script:TargetAccount = $TargetAccount
+    $script:PlanB_VscCreated = $true
+    $script:PlanB_CardName = $Reader.FriendlyName
+    $script:PlanB_PcscName = $Reader.PcscName
+    $script:PlanB_CsrPath = $null
+    $script:PlanB_PendingRequestId = $null
+    $script:PlanB_RenewMode = $true
+    $script:PlanEntryFrom = 'Scenario'
+    $pnlScenario.Visible = $false
+    $pnlModeSelect.Visible = $false
+    $script:ActivePlan = 'B'
+    $tabPlanB.Visible = $true
+    Show-PlanBStep -Index 2
+}
+
 function Start-Renewal {
     # Szenario 02: re-enrollt auf eine BESTEHENDE Karte - ohne Neuerstellung.
     # WICHTIG: die Identitaet wird aus dem vorhandenen Zertifikat der Karte abgeleitet,
@@ -885,7 +907,12 @@ function Start-Renewal {
     $hasEa = (@(Get-EnrollmentAgentCertificates)).Count -gt 0
 
     if (-not $hasEa) {
-        [System.Windows.Forms.MessageBox]::Show("Die Karte '$($sel.FriendlyName)' enthält ein Zertifikat für ein ANDERES Konto ($cardIdentity), nicht für deinen aktuell angemeldeten Benutzer ($currentUpn).`r`n`r`nEine Verlängerung dafür muss als dieses Konto erfolgen. Ohne Enrollment-Agent-Zertifikat geht das nur über Plan B (als das Konto anmelden, z.B. per RDP) - siehe Szenario 01/06 bzw. RUNBOOK. Abbruch, um kein Zertifikat für den falschen Benutzer auszustellen.", 'Verlängern - falsches Konto vermeiden', 'OK', 'Warning') | Out-Null
+        # Kein EA-Zertifikat -> geführter Plan-B-Renewal: CSR lokal auf die bestehende
+        # Karte, Einreichung als das Zielkonto (RDP-Schritt). So wird NICHT fälschlich
+        # für den angemeldeten Benutzer ausgestellt.
+        [System.Windows.Forms.MessageBox]::Show("Die Karte '$($sel.FriendlyName)' gehört dem Konto '$cardIdentity' (nicht deinem angemeldeten Benutzer '$currentUpn').`r`n`r`nDa kein Enrollment-Agent-Zertifikat vorliegt, wird per Plan B verlängert: Der CSR entsteht jetzt lokal auf der Karte; die Einreichung erfolgt anschließend ALS dieses Konto (RDP-Schritt - dort als '$cardIdentity' anmelden, z.B. mit der noch gültigen Karte). Danach wird das neue Zertifikat wieder lokal auf die Karte übernommen.`r`n`r`n(Alternativ: einmalig ein EA-Zertifikat beantragen - dann geht Verlängern ohne RDP.)", 'Verlängern über Plan B', 'OK', 'Information') | Out-Null
+        Write-WizardLog -Message "Verlängern (Fremdkonto '$cardIdentity', Plan B) auf Karte '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" })." -Level Info
+        Enter-PlanBRenewal -Reader $sel -TargetAccount $cardIdentity
         return
     }
 
@@ -1868,6 +1895,13 @@ function Invoke-PlanBNextClick {
 }
 
 function Invoke-PlanBBackClick {
+    # Verlängern-Modus (Einstieg direkt bei "CSR", Index 2): "Zurück" fuehrt zur
+    # Szenario-Auswahl, nicht zum uebersprungenen Erstellen-Schritt.
+    if ($script:PlanB_RenewMode -and $script:PlanBCurrentStep -eq 2) {
+        $tabPlanB.Visible = $false
+        Show-ScenarioStep
+        return
+    }
     if ($script:PlanBCurrentStep -gt 0) {
         Show-PlanBStep -Index ($script:PlanBCurrentStep - 1)
     } else {
