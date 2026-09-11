@@ -361,6 +361,9 @@ function Complete-Submission {
     param([string]$CerPath)
     try {
         $b64Path = Join-Path $script:WorkDir 'issued.b64.cer'
+        # Alte Ausgabedatei entfernen - certutil -encode ueberschreibt NICHT und
+        # scheitert sonst bei einem zweiten Lauf mit ERROR_FILE_EXISTS (0x80070050).
+        Remove-Item -Path $b64Path -Force -ErrorAction SilentlyContinue
         $encodeResult = Invoke-Tool -FilePath 'certutil.exe' -ArgumentList @('-encode', $CerPath, $b64Path)
         if ($encodeResult.Success -and (Test-Path $b64Path)) {
             $txtResult.Text = (Get-Content -Path $b64Path -Raw)
@@ -422,6 +425,9 @@ $btnSubmit.Add_Click({
     $csrPath = Join-Path $script:WorkDir 'request.req'
     Set-Content -Path $csrPath -Value $csrClean -Encoding ASCII -NoNewline
     $cerPath = Join-Path $script:WorkDir 'certnew.cer'
+    # Alte Ausgabedateien entfernen - sonst fragt certreq beim erneuten Einreichen
+    # interaktiv "overwrite? certnew.cer/.rsp" (kann den erfassten Prozess blockieren).
+    Remove-Item -Path $cerPath, (Join-Path $script:WorkDir 'certnew.rsp') -Force -ErrorAction SilentlyContinue
 
     $submit = Invoke-Tool -FilePath 'certreq.exe' -ArgumentList @('-submit', '-config', $txtCA.Text, '-attrib', "CertificateTemplate:$($cboTemplate.Text)", $csrPath, $cerPath)
 

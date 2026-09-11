@@ -193,8 +193,8 @@ $mainLayout.Dock = 'Fill'
 $mainLayout.RowCount = 3
 $mainLayout.ColumnCount = 1
 [void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 44)))
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 72)))
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 28)))
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 76)))
+[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 24)))
 $form.Controls.Add($mainLayout)
 
 #endregion
@@ -1236,7 +1236,9 @@ $btnResetA.Size = New-Object System.Drawing.Size(240, 32)
 $pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA))
 
 function Update-PlanASummary {
-    $summary = Get-IssuedCertificateSummary -SubjectContains (Get-EnrollmentIdentity).SearchTerm
+    $id = Get-EnrollmentIdentity
+    $matchTerm = if ($id.Upn) { $id.Upn } else { $id.SearchTerm }
+    $summary = Get-IssuedCertificateSummary -Match $matchTerm
     if ($summary) {
         $lblSummaryA.Text = "Kartenname: $($script:PlanA_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
     } else {
@@ -1252,7 +1254,13 @@ $btnResetA.Add_Click({
     $lblVscResultA.Text = ''
     $lblCertResultA.Text = ''
     $btnRetrieveA.Visible = $false
-    Show-PlanAStep -Index 1
+    $script:PlanA_RenewMode = $false
+    if ($script:PlanEntryFrom -eq 'Scenario') {
+        $tabPlanA.Visible = $false
+        Show-ScenarioStep
+    } else {
+        Show-PlanAStep -Index 1
+    }
 })
 
 # --- Navigation Plan A ---
@@ -1529,16 +1537,15 @@ Nächste Schritte:
 
 $reason
 
-1. Per RDP verbinden mit: $($config.RdpJumpServer)
-2. Dort anmelden als: $($identity.DisplayName)
-3. Die CSR-Datei auf den Server kopieren (z.B. über Zwischenablage/Laufwerksfreigabe):
-   $($script:PlanB_CsrPath)
-4. Diesen Wizard auf dem Server erneut starten, ebenfalls den Tab "Plan B" wählen
-   und bis zu Schritt "Antrag einreichen (auf dem Server)" weiterklicken.
+1. Die CSR ist bereits in der Zwischenablage (auch als Datei: $($script:PlanB_CsrPath)).
+2. Per RDP verbinden mit: $($config.RdpJumpServer) - dort anmelden als: $($identity.DisplayName)
+3. Auf dem Server den Einreichungshelfer 'VscWizard.Submit.ps1' (bzw. VscWizard.Submit.exe)
+   starten, die CSR einfügen, CA/Template wählen und "Antrag einreichen".
+4. Das ausgestellte Zertifikat dort mit "Kopieren" in die Zwischenablage holen.
 
-Auf "Weiter" klicken, sobald du auf dem Server angemeldet bist. Die Übernahme des
-fertigen Zertifikats (Schritt 6) erfolgt danach wieder auf DIESEM Rechner in DEINEM
-eigenen Konto - certreq verwaltet den offenen Antrag hier, nicht beim Zielkonto.
+Dann hier auf "Weiter" klicken: du gelangst direkt zum Schritt "Zertifikat abschließen",
+wo du das kopierte Zertifikat einfügst und übernimmst. Die Übernahme erfolgt auf DIESEM
+Rechner in DEINEM Konto - die Karte (und der offene Antrag) liegen hier, nicht beim Zielkonto.
 "@
 }
 
@@ -1742,7 +1749,9 @@ $btnSelectCerB.Add_Click({
 })
 
 function Update-PlanBSummary {
-    $summary = Get-IssuedCertificateSummary -SubjectContains (Get-EnrollmentIdentity).SearchTerm
+    $id = Get-EnrollmentIdentity
+    $matchTerm = if ($id.Upn) { $id.Upn } else { $id.SearchTerm }
+    $summary = Get-IssuedCertificateSummary -Match $matchTerm
     if ($summary) {
         $lblSummaryB.Text = "Kartenname: $($script:PlanB_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
     } else {
@@ -1814,7 +1823,14 @@ $btnResetB.Add_Click({
     $lblSubmitResultB.Text = ''
     $lblCompleteResultB.Text = ''
     $btnRetrieveB.Visible = $false
-    Show-PlanBStep -Index 1
+    $script:PlanB_RenewMode = $false
+    # Aus einem Szenario gekommen -> zurück zur Startseite; sonst neuer Plan-B-Durchlauf.
+    if ($script:PlanEntryFrom -eq 'Scenario') {
+        $tabPlanB.Visible = $false
+        Show-ScenarioStep
+    } else {
+        Show-PlanBStep -Index 1
+    }
 })
 
 # --- Navigation Plan B ---
@@ -1884,7 +1900,13 @@ function Invoke-PlanBNextClick {
             }
             Show-PlanBStep -Index 3
         }
-        3 { Show-PlanBStep -Index 4 }
+        3 {
+            # Fuer ein separates Konto wird NICHT lokal eingereicht (das liefe als
+            # angemeldeter Benutzer). Der lokale Submit-Schritt (Index 4) wird daher
+            # uebersprungen - eingereicht wird als das Zielkonto per Helfer auf dem
+            # Server; hier geht es direkt zum "Zertifikat uebernehmen".
+            if ($script:TargetAccount) { Show-PlanBStep -Index 5 } else { Show-PlanBStep -Index 4 }
+        }
         4 {
             # Kein hartes Gate: wurde der Antrag anderweitig eingereicht (z.B. per
             # Einreichungshelfer in der RDP-Sitzung), gibt es auf DIESER Maschine
@@ -1907,6 +1929,12 @@ function Invoke-PlanBBackClick {
     if ($script:PlanB_RenewMode -and $script:PlanBCurrentStep -eq 2) {
         $tabPlanB.Visible = $false
         Show-ScenarioStep
+        return
+    }
+    # Separates Konto: der lokale Submit (Index 4) wird uebersprungen - "Zurück" aus
+    # dem Uebernehmen-Schritt (5) fuehrt daher zurueck zur RDP-Uebergabe (3).
+    if ($script:TargetAccount -and $script:PlanBCurrentStep -eq 5) {
+        Show-PlanBStep -Index 3
         return
     }
     if ($script:PlanBCurrentStep -gt 0) {

@@ -1289,13 +1289,22 @@ function Complete-CertificateEnrollment {
 }
 
 function Get-IssuedCertificateSummary {
-    param([Parameter(Mandatory)][string]$SubjectContains)
+    # Findet das (neueste) frisch ausgestellte Zertifikat. Matcht den Suchbegriff
+    # gegen den Subject ODER den UPN im SubjectAltName - wichtig, weil bei
+    # Build-from-AD-Templates der Subject nur "CN=adm-t0" ist, das Konto sich aber
+    # ueber die UPN (adm-t0@contoso.com) identifiziert, die im SAN steht.
+    param([Parameter(Mandatory)][string]$Match)
 
-    $certs = Get-ChildItem -Path 'Cert:\CurrentUser\My' | Where-Object {
-        $_.Subject -like "*$SubjectContains*" -and $_.HasPrivateKey
-    } | Sort-Object NotBefore -Descending
+    $result = Get-ChildItem -Path 'Cert:\CurrentUser\My' -ErrorAction SilentlyContinue | Where-Object { $_.HasPrivateKey } | Where-Object {
+        if ($_.Subject -like "*$Match*") { return $true }
+        try {
+            $san = $_.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } | Select-Object -First 1
+            if ($san -and ($san.Format($true) -like "*$Match*")) { return $true }
+        } catch { }
+        return $false
+    } | Sort-Object NotBefore -Descending | Select-Object -First 1
 
-    return $certs | Select-Object -First 1 | Select-Object Subject, Thumbprint, NotBefore, NotAfter
+    return $result | Select-Object Subject, Thumbprint, NotBefore, NotAfter
 }
 
 #endregion
