@@ -256,6 +256,9 @@ $navShared.Controls.Add($btnNextShared, 2, 0)
 # Schritt-Satz ist aktiv. Weiter/Zurück werten dies aus, um an die richtige Stelle zu
 # delegieren (siehe Invoke-SharedNext/Back weiter unten, definiert nach Plan A/B).
 $script:ActivePlan = $null
+# Woher der Plan-A/B-Ablauf betreten wurde - steuert, wohin "Zurück" aus dessen
+# Schritt 0 fuehrt: 'Scenario' (direkt aus einem Szenario) oder 'Mode' (klassische Moduswahl).
+$script:PlanEntryFrom = 'Scenario'
 
 $tabPlanA = New-Object System.Windows.Forms.Panel
 $tabPlanA.Dock = 'Fill'
@@ -462,6 +465,7 @@ function Invoke-ModeSelectNextClick {
         $script:TargetAccount = $null
     }
     $lblLandingValidation.Text = ''
+    $script:PlanEntryFrom = 'Mode'
     $pnlModeSelect.Visible = $false
     if ($radPlanA.Checked) {
         $script:ActivePlan = 'A'
@@ -700,6 +704,60 @@ function Show-ScenarioStep {
     $btnNextShared.Enabled = $true
 }
 
+function Enter-Plan {
+    # Direkt aus einem Szenario in den Plan-A/B-Ablauf springen - OHNE die Moduswahl
+    # (für wen / welcher Ablauf), denn das Szenario hat diese Fragen bereits
+    # beantwortet. $script:PlanEntryFrom='Scenario' sorgt dafuer, dass "Zurück" aus
+    # Schritt 0 wieder zur Szenario-Auswahl fuehrt.
+    param([ValidateSet('A', 'B')][string]$Plan)
+    $script:PlanEntryFrom = 'Scenario'
+    $pnlScenario.Visible = $false
+    $pnlModeSelect.Visible = $false
+    if ($Plan -eq 'A') {
+        $script:ActivePlan = 'A'; $tabPlanA.Visible = $true; Show-PlanAStep -Index 0
+    } else {
+        $script:ActivePlan = 'B'; $tabPlanB.Visible = $true; Show-PlanBStep -Index 0
+    }
+}
+
+function Get-ScenarioPlanForSeparateAccount {
+    # Separates Konto: mit Enrollment-Agent-Zertifikat bruchfrei per Plan A (EOBO),
+    # sonst Plan B (Einreichung als Zielkonto, z.B. per RDP).
+    if ((@(Get-EnrollmentAgentCertificates)).Count -gt 0) { 'A' } else { 'B' }
+}
+
+function Show-AccountInputDialog {
+    # Schlanke Abfrage NUR des Zielkontos (statt der kompletten Moduswahl).
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Zielkonto'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
+    $dlg.ClientSize = New-Object System.Drawing.Size(440, 120)
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = 'Zielkonto (z.B. CONTOSO\adm.mustermann - DOMAIN\Konto bevorzugt):'
+    $lbl.Location = New-Object System.Drawing.Point(12, 14)
+    $lbl.Size = New-Object System.Drawing.Size(416, 20)
+
+    $txt = New-Object System.Windows.Forms.TextBox
+    $txt.Location = New-Object System.Drawing.Point(12, 38)
+    $txt.Size = New-Object System.Drawing.Size(416, 24)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Weiter'; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $ok.Location = New-Object System.Drawing.Point(256, 80); $ok.Size = New-Object System.Drawing.Size(80, 28)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Abbrechen'; $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancel.Location = New-Object System.Drawing.Point(344, 80); $cancel.Size = New-Object System.Drawing.Size(84, 28)
+
+    $dlg.Controls.AddRange(@($lbl, $txt, $ok, $cancel))
+    $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+    $res = $dlg.ShowDialog($form)
+    if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $txt.Text.Trim()) { return $txt.Text.Trim() }
+    return $null
+}
+
 function Invoke-ScenarioNextClick {
     if (-not $script:SelectedScenario) {
         $lblScnSub.Visible = $false
@@ -708,14 +766,41 @@ function Invoke-ScenarioNextClick {
         return
     }
     switch ($script:SelectedScenario) {
-        1 { $radOther.Checked = $true; $pnlScenario.Visible = $false; Show-ModeSelectStep; $txtOtherAccount.Focus() }
-        2 { $radSelf.Checked = $true;  $pnlScenario.Visible = $false; Show-ModeSelectStep }
-        3 { $radSelf.Checked = $true;  $pnlScenario.Visible = $false; Show-ModeSelectStep }
+        1 {
+            # Bootstrap: separates Konto. Mit EA-Zertifikat per EOBO (Plan A, ohne
+            # temporäres Passwort); sonst Plan B, der das einmalige Bootstrap-Passwort braucht.
+            $acct = Show-AccountInputDialog
+            if (-not $acct) { return }
+            $script:TargetAccount = $acct
+            $plan = Get-ScenarioPlanForSeparateAccount
+            if ($plan -eq 'B') {
+                [System.Windows.Forms.MessageBox]::Show("Bootstrap für $acct (Plan B):`r`n`r`nDas Konto muss für die erste Ausstellung vorübergehend Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), damit der Submit als Zielkonto erfolgen kann. Nach erfolgreicher Übernahme das Konto wieder auf 'Smartcard erforderlich' setzen.", 'Bootstrap - Hinweis', 'OK', 'Information') | Out-Null
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("Bootstrap für $acct (Plan A / Enroll on Behalf Of):`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt. Ein temporäres Passwort ist dafür NICHT nötig.", 'Bootstrap - Hinweis', 'OK', 'Information') | Out-Null
+            }
+            Enter-Plan -Plan $plan
+        }
+        2 {
+            # Verlängern: erst die vorhandenen Karten + Restlaufzeit zeigen (Erkennung).
+            Show-VscInventoryDialog -Owner $form
+            [System.Windows.Forms.MessageBox]::Show('Oben siehst du die vorhandenen virtuellen Smartcards samt Zertifikaten und Restlaufzeit. Das automatische Re-Enrollment auf die bestehende Karte (ohne Neuerstellung) ist der nächste Ausbauschritt. Bis dahin: für eine Neuausstellung Szenario 03 nutzen.', 'Verlängern - Erkennung', 'OK', 'Information') | Out-Null
+        }
+        3 {
+            # Direkt für dich: kein separates Konto, direkt in den Plan-A-Ablauf.
+            $script:TargetAccount = $null
+            Enter-Plan -Plan 'A'
+        }
         4 {
             [System.Windows.Forms.MessageBox]::Show('Der geführte Cloud-GA-Ablauf (Entra CBA / FIDO2) ist noch in Arbeit. Die Schritte stehen als Checkliste im RUNBOOK.md. Für die lokale Zertifikats-/VSC-Ausstellung können vorerst die Szenarien 01-03 genutzt werden.', 'Cloud-Global-Admin (in Arbeit)', 'OK', 'Information') | Out-Null
         }
         5 { Show-VscInventoryDialog -Owner $form }
-        6 { $radOther.Checked = $true; $pnlScenario.Visible = $false; Show-ModeSelectStep; $txtOtherAccount.Focus() }
+        6 {
+            # EOBO für ein anderes Konto: Zielkonto abfragen, dann Plan A (EA) bzw. Plan B.
+            $acct = Show-AccountInputDialog
+            if (-not $acct) { return }
+            $script:TargetAccount = $acct
+            Enter-Plan -Plan (Get-ScenarioPlanForSeparateAccount)
+        }
     }
 }
 
@@ -1080,7 +1165,7 @@ function Invoke-PlanABackClick {
         Show-PlanAStep -Index ($script:PlanACurrentStep - 1)
     } else {
         $tabPlanA.Visible = $false
-        Show-ModeSelectStep
+        if ($script:PlanEntryFrom -eq 'Scenario') { Show-ScenarioStep } else { Show-ModeSelectStep }
     }
 }
 
@@ -1640,7 +1725,7 @@ function Invoke-PlanBBackClick {
         Show-PlanBStep -Index ($script:PlanBCurrentStep - 1)
     } else {
         $tabPlanB.Visible = $false
-        Show-ModeSelectStep
+        if ($script:PlanEntryFrom -eq 'Scenario') { Show-ScenarioStep } else { Show-ModeSelectStep }
     }
 }
 
