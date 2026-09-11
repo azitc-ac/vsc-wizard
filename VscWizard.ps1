@@ -1275,7 +1275,12 @@ $btnResetA.Text = 'Weitere Smartcard beantragen'
 $btnResetA.Location = New-Object System.Drawing.Point(20, 170)
 $btnResetA.Size = New-Object System.Drawing.Size(240, 32)
 
-$pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA))
+$btnStartA = New-Object System.Windows.Forms.Button
+$btnStartA.Text = 'Zum Startbildschirm'
+$btnStartA.Location = New-Object System.Drawing.Point(280, 170)
+$btnStartA.Size = New-Object System.Drawing.Size(200, 32)
+
+$pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA, $btnStartA))
 
 function Update-PlanASummary {
     $id = Get-EnrollmentIdentity
@@ -1303,6 +1308,13 @@ $btnResetA.Add_Click({
     } else {
         Show-PlanAStep -Index 1
     }
+})
+
+# Immer zurück zum Startbildschirm - unabhängig vom Einstieg (Szenario oder Verlängerung).
+$btnStartA.Add_Click({
+    $script:PlanA_RenewMode = $false
+    $tabPlanA.Visible = $false
+    Show-ScenarioStep
 })
 
 # --- Navigation Plan A ---
@@ -1780,7 +1792,12 @@ $btnResetB.Text = 'Weitere Smartcard beantragen'
 $btnResetB.Location = New-Object System.Drawing.Point(20, 510)
 $btnResetB.Size = New-Object System.Drawing.Size(240, 32)
 
-$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCerTextLabelB, $txtCerTextB, $btnCompleteFromTextB, $lblCompleteResultB, $lblSummaryB, $btnResetB))
+$btnStartB = New-Object System.Windows.Forms.Button
+$btnStartB.Text = 'Zum Startbildschirm'
+$btnStartB.Location = New-Object System.Drawing.Point(280, 510)
+$btnStartB.Size = New-Object System.Drawing.Size(200, 32)
+
+$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCerTextLabelB, $txtCerTextB, $btnCompleteFromTextB, $lblCompleteResultB, $lblSummaryB, $btnResetB, $btnStartB))
 
 $btnSelectCerB.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -1902,6 +1919,14 @@ $btnResetB.Add_Click({
     } else {
         Show-PlanBStep -Index 1
     }
+})
+
+# Immer zurück zum Startbildschirm (Szenario-Auswahl) - unabhängig davon, wie der
+# Ablauf betreten wurde (Szenario ODER Verlängerung aus der Inventar-/Renewal-Sicht).
+$btnStartB.Add_Click({
+    $script:PlanB_RenewMode = $false
+    $tabPlanB.Visible = $false
+    Show-ScenarioStep
 })
 
 # --- Navigation Plan B ---

@@ -357,24 +357,57 @@ $btnDiscover.Add_Click({
     $btnDiscover.Enabled = $true
 })
 
+function ConvertTo-CleanPemCertificate {
+    # Erzeugt aus einer Zertifikatsdatei GARANTIERT ein sauberes, EINFACH umschlossenes
+    # PEM (-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----).
+    #
+    # WICHTIG (das war der Bug): 'certreq -submit' schreibt certnew.cer bereits als PEM.
+    # Ein nachgelagertes 'certutil -encode' base64-kodiert diese bereits-PEM-Datei ALS
+    # GANZES und legt ein ZWEITES BEGIN/END drumherum - beim Decoden kommt innen nochmal
+    # ein BEGIN/END heraus, und Windows lehnt das CER ab. Deshalb NICHT mehr -encode,
+    # sondern das Zertifikat laden und den DER-Inhalt selbst sauber umschliessen.
+    param([Parameter(Mandatory)][string]$CerPath)
+    try {
+        # X509Certificate2 laedt sowohl DER als auch (einfaches) base64-PEM automatisch.
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CerPath
+        $b64  = [Convert]::ToBase64String($cert.RawData)
+        $sb   = New-Object System.Text.StringBuilder
+        [void]$sb.AppendLine('-----BEGIN CERTIFICATE-----')
+        for ($i = 0; $i -lt $b64.Length; $i += 64) {
+            $len = [Math]::Min(64, $b64.Length - $i)
+            [void]$sb.AppendLine($b64.Substring($i, $len))
+        }
+        [void]$sb.AppendLine('-----END CERTIFICATE-----')
+        return $sb.ToString().TrimEnd() + "`r`n"
+    } catch {
+        return $null
+    }
+}
+
 function Complete-Submission {
     param([string]$CerPath)
     try {
-        $b64Path = Join-Path $script:WorkDir 'issued.b64.cer'
-        # Alte Ausgabedatei entfernen - certutil -encode ueberschreibt NICHT und
-        # scheitert sonst bei einem zweiten Lauf mit ERROR_FILE_EXISTS (0x80070050).
-        Remove-Item -Path $b64Path -Force -ErrorAction SilentlyContinue
-        $encodeResult = Invoke-Tool -FilePath 'certutil.exe' -ArgumentList @('-encode', $CerPath, $b64Path)
-        if ($encodeResult.Success -and (Test-Path $b64Path)) {
-            $txtResult.Text = (Get-Content -Path $b64Path -Raw)
+        $clean = ConvertTo-CleanPemCertificate -CerPath $CerPath
+        if ($clean) {
+            $txtResult.Text = $clean
+            Write-Status 'Zertifikat aufbereitet (sauberes PEM, einfach umschlossen).'
         } else {
-            $txtResult.Text = (Get-Content -Path $CerPath -Raw)
-            Write-Status 'certutil -encode fehlgeschlagen, zeige Rohinhalt der Zertifikatsdatei stattdessen.'
+            # Notfall-Fallback: Rohinhalt zeigen. Falls doppelt umschlossen (altes
+            # Verhalten / Fremddatei), den INNEREN BEGIN/END-Block extrahieren.
+            $raw = Get-Content -Path $CerPath -Raw
+            $certBlocks = [regex]::Matches($raw, '(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----')
+            if ($certBlocks.Count -gt 0) {
+                $txtResult.Text = $certBlocks[$certBlocks.Count - 1].Value.Trim() + "`r`n"
+                Write-Status 'Zertifikat konnte nicht geladen werden - innerer PEM-Block extrahiert.'
+            } else {
+                $txtResult.Text = $raw
+                Write-Status 'Zertifikat konnte nicht als X.509 geladen werden - Rohinhalt angezeigt. Bitte pruefen.'
+            }
         }
         $txtResult.SelectAll()
         $txtResult.Focus()
         Set-Clipboard -Value $txtResult.Text
-        Write-Status 'Ergebnis in die Zwischenablage kopiert. Auf der lokalen Sitzung in Plan B Schritt 6 einfügen.'
+        Write-Status 'Ergebnis in die Zwischenablage kopiert. Auf der lokalen Sitzung in Plan B Schritt 6 einfügen. (Falls die RDP-Zwischenablage nicht sauber synchronisiert: "Speichern unter..." und die Datei uebertragen.)'
     } catch {
         Write-Status "Fehler beim Aufbereiten des Ergebnisses: $($_.Exception.Message)"
     }
