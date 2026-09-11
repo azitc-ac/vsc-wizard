@@ -742,6 +742,7 @@ function Get-ScenarioPlanForSeparateAccount {
 
 function Show-AccountInputDialog {
     # Schlanke Abfrage NUR des Zielkontos (statt der kompletten Moduswahl).
+    param([string]$Prefill)
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = 'Zielkonto'
     $dlg.FormBorderStyle = 'FixedDialog'
@@ -757,6 +758,7 @@ function Show-AccountInputDialog {
     $txt = New-Object System.Windows.Forms.TextBox
     $txt.Location = New-Object System.Drawing.Point(12, 38)
     $txt.Size = New-Object System.Drawing.Size(416, 24)
+    if ($Prefill) { $txt.Text = $Prefill }
 
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = 'Weiter'; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -819,38 +821,81 @@ function Show-VscPickerDialog {
     return $null
 }
 
-function Start-Renewal {
-    # Szenario 02: re-enrollt auf eine BESTEHENDE Karte - ohne Neuerstellung. Dafür
-    # wird der Plan-A-"Anfordern"-Schritt (Index 2) mit den Daten der gewählten Karte
-    # direkt angesprungen (analog zum Fortsetzen eines Antrags).
-    $readers = @(Get-VirtualSmartCardReaders)
-    if ($readers.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show('Keine virtuelle Smartcard gefunden. Für eine Erstausstellung bitte Szenario 01 (Bootstrap) oder 03 (direkt) verwenden.', 'Verlängern', 'OK', 'Information') | Out-Null
-        return
-    }
-    if ($readers.Count -eq 1) {
-        $sel = $readers[0]
-    } else {
-        $certs = @(Get-SmartCardCertificates)
-        $sel = Show-VscPickerDialog -Readers $readers -Certs $certs
-        if (-not $sel) { return }
-    }
-
-    $script:TargetAccount = $null
+function Enter-PlanARenewal {
+    # Gemeinsamer Sprung in den Plan-A-"Anfordern"-Schritt (Index 2) fuer eine
+    # bestehende Karte - ohne Neuerstellung (analog zum Fortsetzen eines Antrags).
+    param($Reader, [string]$TargetAccount)
+    $script:TargetAccount = $TargetAccount   # $null = aktueller Benutzer
     $script:PlanA_VscCreated = $true
-    $script:PlanA_CardName = $sel.FriendlyName
-    $script:PlanA_PcscName = $sel.PcscName
+    $script:PlanA_CardName = $Reader.FriendlyName
+    $script:PlanA_PcscName = $Reader.PcscName
     $script:PlanA_CertIssued = $false
     $script:PlanA_PendingRequestId = $null
     $script:PlanA_RenewMode = $true
     $script:PlanEntryFrom = 'Scenario'
-
     $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
     $script:ActivePlan = 'A'
     $tabPlanA.Visible = $true
     Show-PlanAStep -Index 2
-    Write-WizardLog -Message "Verlängern: Re-Enroll auf bestehende Karte '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" }). Im Kartenauswahl-Dialog dieselbe Karte wählen." -Level Info
+}
+
+function Start-Renewal {
+    # Szenario 02: re-enrollt auf eine BESTEHENDE Karte - ohne Neuerstellung.
+    # WICHTIG: die Identitaet wird aus dem vorhandenen Zertifikat der Karte abgeleitet,
+    # NICHT vom angemeldeten Benutzer angenommen. Sonst wuerde (bei Build-from-AD-
+    # Templates) fuer den falschen Benutzer ausgestellt - z.B. ein Normaluser-Cert auf
+    # eine Admin-Karte.
+    $readers = @(Get-VirtualSmartCardReaders)
+    if ($readers.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show('Keine virtuelle Smartcard gefunden. Für eine Erstausstellung bitte Szenario 01 (Bootstrap) oder 03 (direkt) verwenden.', 'Verlängern', 'OK', 'Information') | Out-Null
+        return
+    }
+    $certs = @(Get-SmartCardCertificates)
+    if ($readers.Count -eq 1) {
+        $sel = $readers[0]
+    } else {
+        $sel = Show-VscPickerDialog -Readers $readers -Certs $certs
+        if (-not $sel) { return }
+    }
+
+    # Karten-Identitaet aus ihrem (neuesten) Zertifikat bestimmen.
+    $cardCerts = @($certs | Where-Object { $_.Reader -and $sel.PcscName -and $_.Reader -eq $sel.PcscName })
+    $cardCert = $cardCerts | Sort-Object NotAfter -Descending | Select-Object -First 1
+    $cardUpn = if ($cardCert) { $cardCert.Upn } else { $null }
+    $currentUpn = Get-CurrentUpn
+
+    if (-not $cardCert) {
+        [System.Windows.Forms.MessageBox]::Show("Auf der Karte '$($sel.FriendlyName)' wurde kein Zertifikat gefunden, aus dem sich das Konto ableiten liesse. Verlängern setzt ein vorhandenes Zertifikat voraus - für eine Erstausstellung bitte Szenario 01 (Bootstrap) oder 03 (direkt) verwenden.", 'Verlängern', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    $isSelf = $cardUpn -and $currentUpn -and ($cardUpn.Trim() -ieq $currentUpn.Trim())
+
+    if ($isSelf) {
+        # Karte gehoert dem aktuell angemeldeten Benutzer -> direktes Self-Renewal.
+        Write-WizardLog -Message "Verlängern (eigenes Konto '$cardUpn'): Re-Enroll auf '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" }). Im Kartenauswahl-Dialog dieselbe Karte wählen." -Level Info
+        Enter-PlanARenewal -Reader $sel -TargetAccount $null
+        return
+    }
+
+    # Karte gehoert einem ANDEREN Konto (z.B. Admin) -> NICHT als aktueller Benutzer
+    # ausstellen. Es muss fuer dieses Konto ausgestellt werden (EOBO bzw. Plan B).
+    $cardIdentity = if ($cardUpn) { $cardUpn } else { $cardCert.Subject }
+    $hasEa = (@(Get-EnrollmentAgentCertificates)).Count -gt 0
+
+    if (-not $hasEa) {
+        [System.Windows.Forms.MessageBox]::Show("Die Karte '$($sel.FriendlyName)' enthält ein Zertifikat für ein ANDERES Konto ($cardIdentity), nicht für deinen aktuell angemeldeten Benutzer ($currentUpn).`r`n`r`nEine Verlängerung dafür muss als dieses Konto erfolgen. Ohne Enrollment-Agent-Zertifikat geht das nur über Plan B (als das Konto anmelden, z.B. per RDP) - siehe Szenario 01/06 bzw. RUNBOOK. Abbruch, um kein Zertifikat für den falschen Benutzer auszustellen.", 'Verlängern - falsches Konto vermeiden', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    # EA-Zertifikat vorhanden: per EOBO fuer das Kartenkonto ausstellen. Zielkonto
+    # bestaetigen/ergaenzen lassen (EOBO braucht moeglichst DOMAIN\Konto).
+    [System.Windows.Forms.MessageBox]::Show("Die Karte '$($sel.FriendlyName)' gehört dem Konto '$cardIdentity' (nicht deinem angemeldeten Benutzer '$currentUpn'). Die Verlängerung wird per Enroll on Behalf Of für dieses Konto ausgestellt - bitte im nächsten Dialog das Zielkonto bestätigen (DOMAIN\Konto bevorzugt).", 'Verlängern - anderes Konto', 'OK', 'Information') | Out-Null
+    $acct = Show-AccountInputDialog -Prefill $cardIdentity
+    if (-not $acct) { return }
+    Write-WizardLog -Message "Verlängern (Fremdkonto, EOBO) für '$acct' auf Karte '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" })." -Level Info
+    Enter-PlanARenewal -Reader $sel -TargetAccount $acct
 }
 
 function Invoke-ScenarioNextClick {

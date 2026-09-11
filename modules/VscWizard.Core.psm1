@@ -959,8 +959,21 @@ function Get-SmartCardCertificates {
         if (-not $cert.HasPrivateKey) { continue }
         $info = Get-SmartCardCertificateInfo -Certificate $cert
         $isSmartCard = $info.IsHardware -or ($info.Provider -and $info.Provider -match 'Smart Card')
+        # UPN (Principal Name) aus dem SubjectAltName lesen - identifiziert das KONTO,
+        # fuer das die Karte ausgestellt wurde (wichtig fuer die Verlaengerung, damit
+        # nicht versehentlich fuer den falschen Benutzer re-enrollt wird). Format($true)
+        # ist lokalisiert, daher ueber ein E-Mail-/UPN-Muster statt fester Feldnamen.
+        $upn = $null
+        try {
+            $san = $cert.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } | Select-Object -First 1
+            if ($san) {
+                $sanTxt = $san.Format($true)
+                if ($sanTxt -match '([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})') { $upn = $Matches[1] }
+            }
+        } catch { }
         [pscustomobject]@{
             Subject        = $cert.Subject
+            Upn            = $upn
             Thumbprint     = $cert.Thumbprint
             NotBefore      = $cert.NotBefore
             NotAfter       = $cert.NotAfter
