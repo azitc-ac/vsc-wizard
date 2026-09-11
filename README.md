@@ -1,5 +1,9 @@
 # VSC-Wizard
 
+> **Runbook:** Handlungsanleitungen pro Szenario (Bootstrap, Verlaengerung,
+> Cloud-GA, EOBO, Server-Core-Submit, Single-Exe-Packaging) stehen in
+> [RUNBOOK.md](RUNBOOK.md).
+
 Ein Wizard-Tool fuer AD-Administratoren zur Beantragung virtueller Smartcards
 (TPM Virtual Smart Card). Fuehrt Schritt fuer Schritt durch die Erstellung der
 Karte und die Zertifikatsbeantragung. Der Ablauf ist als durchgaengige
