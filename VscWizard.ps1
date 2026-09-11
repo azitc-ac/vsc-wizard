@@ -1771,9 +1771,18 @@ $btnCompleteFromTextB.Add_Click({
         [System.Windows.Forms.MessageBox]::Show('Bitte zuerst den CER-Text einfügen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
+    # Das eingefügte CER genauso kanonisch säubern wie die CSR - sonst scheitert
+    # 'certreq -accept' mit demselben CRYPT_E_ASN1_BADTAG durch BOM/Whitespace aus
+    # dem Copy&Paste-/RDP-Round-trip. ConvertTo-CleanPemRequest erhält den PEM-Header
+    # (hier CERTIFICATE) und validiert das Base64.
+    $cerClean = ConvertTo-CleanPemRequest -Text $txtCerTextB.Text
+    if (-not $cerClean) {
+        [System.Windows.Forms.MessageBox]::Show('Der eingefügte Text ist kein gültiges Zertifikat (kein gültiges Base64-PEM). Bitte das CER aus dem Einreicher-Helfer erneut kopieren und einfügen.', 'Ungültiges Zertifikat', 'OK', 'Warning') | Out-Null
+        return
+    }
     $btnCompleteFromTextB.Enabled = $false
     $pastedCerPath = Join-Path (Get-WizardWorkingDir) "PlanB-pasted-$([guid]::NewGuid()).cer"
-    Set-Content -Path $pastedCerPath -Value $txtCerTextB.Text -Encoding ASCII
+    Set-Content -Path $pastedCerPath -Value $cerClean -Encoding ASCII -NoNewline
     Complete-PlanBEnrollment -CerPath $pastedCerPath
     Remove-Item -Path $pastedCerPath -ErrorAction SilentlyContinue
     $btnCompleteFromTextB.Enabled = $true
@@ -1809,6 +1818,12 @@ $btnResetB.Add_Click({
 })
 
 # --- Navigation Plan B ---
+# Schritt-Panels scrollbar machen, damit bei kleinerem Fenster keine Buttons
+# (z.B. unten im Uebernehmen-Schritt) abgeschnitten werden - die Controls sind
+# absolut positioniert, AutoScroll blendet dann bei Bedarf einen Scrollbalken ein.
+@($pnlModeSelect, $pnlA1, $pnlA2, $pnlA3, $pnlA4, $pnlB1, $pnlB2, $pnlB3, $pnlB4, $pnlB5, $pnlB6) |
+    ForEach-Object { $_.AutoScroll = $true }
+
 $planBStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'CSR erstellen', 'Übergabe per RDP', 'Antrag einreichen (auf dem Server)', 'Zertifikat abschließen (lokal)')
 
 function Update-PlanBStatus {
