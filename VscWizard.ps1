@@ -2062,8 +2062,10 @@ function Show-VscInventoryDialog {
             [void]$certItem.SubItems.Add($c.Thumbprint)
             $providerText = if ($c.Provider) { $c.Provider } elseif ($c.DetectionError) { "unbekannt (Fehler: $($c.DetectionError))" } else { 'unbekannt' }
             [void]$certItem.SubItems.Add($providerText)
+            $certItem.Tag = $c   # Cert-Objekt fuer das gezielte Entfernen
             [void]$lvCerts.Items.Add($certItem)
         }
+        if ($btnDeleteCert) { $btnDeleteCert.Enabled = $false }
     }
 
     $lvReaders.Add_SelectedIndexChanged({ Update-CertListForSelection })
@@ -2113,6 +2115,47 @@ function Show-VscInventoryDialog {
     $btnRefreshInventory.Add_Click({
         $dlg.Close()
         Show-VscInventoryDialog -Owner $Owner
+    })
+
+    # Einzelnes Zertifikat (Schlüssel-Container) gezielt von einer Karte entfernen.
+    $btnDeleteCert = New-Object System.Windows.Forms.Button
+    $btnDeleteCert.Text = 'Zertifikat von Karte entfernen...'
+    $btnDeleteCert.Size = New-Object System.Drawing.Size(240, 30)
+    $btnDeleteCert.Margin = New-Object System.Windows.Forms.Padding(10)
+    $btnDeleteCert.Enabled = $false
+    $dlgBtnPanel.Controls.Add($btnDeleteCert)
+
+    $lvCerts.Add_SelectedIndexChanged({
+        $c = if ($lvCerts.SelectedItems.Count -gt 0) { $lvCerts.SelectedItems[0].Tag } else { $null }
+        # Nur aktivieren, wenn ein echtes Smartcard-Cert mit bekanntem Container gewählt ist.
+        $btnDeleteCert.Enabled = [bool]($c -and $c.KeyContainerName -and $c.Provider -and $c.IsSmartCard)
+    })
+
+    $btnDeleteCert.Add_Click({
+        if ($lvCerts.SelectedItems.Count -eq 0) { return }
+        $c = $lvCerts.SelectedItems[0].Tag
+        if (-not ($c -and $c.KeyContainerName -and $c.Provider)) {
+            [System.Windows.Forms.MessageBox]::Show('Für dieses Zertifikat ist kein Schlüssel-Container/Provider bekannt - Entfernen von der Karte nicht möglich.', 'Nicht möglich', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $idLine = if ($c.Upn) { "Konto (UPN): $($c.Upn)" } else { "Subject: $($c.Subject)" }
+        $confirm = [System.Windows.Forms.MessageBox]::Show(
+            "Dieses Zertifikat samt Schlüssel UNWIDERRUFLICH von der Karte entfernen?`r`n`r`n$idLine`r`nGültig bis: $($c.NotAfter.ToString('yyyy-MM-dd'))`r`nThumbprint: $($c.Thumbprint)`r`nLesegerät: $($c.Reader)`r`n`r`nNur den zu entfernenden Eintrag bestätigen - andere Zertifikate auf der Karte bleiben unberührt. Ggf. erscheint der PIN-Dialog der Karte.",
+            'Zertifikat von Karte entfernen', 'YesNo', 'Warning')
+        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $btnDeleteCert.Enabled = $false
+        $dlg.Cursor = 'WaitCursor'; $dlg.Refresh()
+        $res = Remove-SmartCardCertificateFromCard -Provider $c.Provider -ContainerName $c.KeyContainerName -Thumbprint $c.Thumbprint
+        $dlg.Cursor = 'Default'
+        if ($res.Success) {
+            [System.Windows.Forms.MessageBox]::Show('Zertifikat wurde von der Karte entfernt.', 'Erledigt', 'OK', 'Information') | Out-Null
+            $dlg.Close()
+            Show-VscInventoryDialog -Owner $Owner
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Entfernen fehlgeschlagen: $($res.Message) Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
+            $btnDeleteCert.Enabled = $true
+        }
     })
 
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }

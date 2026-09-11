@@ -836,7 +836,7 @@ function Get-SmartCardCertificateInfo {
     # Heuristik unabhängiges Signal.
     param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
 
-    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; DetectionError = $null }
+    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; KeyContainerName = $null; DetectionError = $null }
 
     try {
         $capiKey = $Certificate.PrivateKey
@@ -844,6 +844,7 @@ function Get-SmartCardCertificateInfo {
             $info.Provider = $capiKey.CspKeyContainerInfo.ProviderName
             $info.Reader = $capiKey.CspKeyContainerInfo.Reader
             $info.IsHardware = [bool]$capiKey.CspKeyContainerInfo.HardwareDevice
+            $info.KeyContainerName = $capiKey.CspKeyContainerInfo.KeyContainerName
         }
     } catch {
         $info.DetectionError = $_.Exception.Message
@@ -857,6 +858,7 @@ function Get-SmartCardCertificateInfo {
             $info.Provider = $cngResult.Provider
             $info.Reader = $cngResult.Reader
             $info.IsHardware = $cngResult.IsHardware
+            $info.KeyContainerName = $cngResult.Container
         } elseif ($cngResult.DetectionError -and -not $info.DetectionError) {
             $info.DetectionError = $cngResult.DetectionError
         }
@@ -904,6 +906,7 @@ if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
     $k = $rsaKey.Key
     if ($k -and $k.Provider) {
         Write-Output "Provider=$($k.Provider.Provider)"
+        Write-Output "Container=$($k.KeyName)"
         # NCrypt-Property "SmartCardReader" (ohne Leerzeichen!) - PC/SC-Lesegerätename.
         # Fehlt bei Nicht-Smartcard-CNG-Schlüsseln; dann still überspringen.
         try {
@@ -916,6 +919,7 @@ if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
     Write-Output "Provider=$($rsaKey.CspKeyContainerInfo.ProviderName)"
     Write-Output "Reader=$($rsaKey.CspKeyContainerInfo.Reader)"
     Write-Output "IsHardware=$([bool]$rsaKey.CspKeyContainerInfo.HardwareDevice)"
+    Write-Output "Container=$($rsaKey.CspKeyContainerInfo.KeyContainerName)"
 }
 '@
     Set-Content -Path $scriptPath -Value $lookupScript -Encoding UTF8
@@ -924,7 +928,7 @@ if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-Thumbprint', $Thumbprint
     ) -TimeoutSeconds $TimeoutSeconds -Silent
 
-    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; DetectionError = $null; TimedOut = $false }
+    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; Container = $null; DetectionError = $null; TimedOut = $false }
     if ($result.StdErr -eq 'Timeout') {
         $info.TimedOut = $true
         return $info
@@ -933,6 +937,7 @@ if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
         if ($line -match '^Provider=(.*)$') { $info.Provider = $Matches[1] }
         elseif ($line -match '^Reader=(.*)$') { $info.Reader = $Matches[1] }
         elseif ($line -match '^IsHardware=(.*)$') { $info.IsHardware = [bool]::Parse($Matches[1]) }
+        elseif ($line -match '^Container=(.*)$') { $info.Container = $Matches[1] }
     }
     if (-not $info.Provider -and $result.StdErr) { $info.DetectionError = $result.StdErr.Trim() }
     return $info
@@ -972,18 +977,47 @@ function Get-SmartCardCertificates {
             }
         } catch { }
         [pscustomobject]@{
-            Subject        = $cert.Subject
-            Upn            = $upn
-            Thumbprint     = $cert.Thumbprint
-            NotBefore      = $cert.NotBefore
-            NotAfter       = $cert.NotAfter
-            Provider       = $info.Provider
-            Reader         = $info.Reader
-            IsSmartCard    = [bool]$isSmartCard
-            DetectionError = $info.DetectionError
+            Subject          = $cert.Subject
+            Upn              = $upn
+            Thumbprint       = $cert.Thumbprint
+            NotBefore        = $cert.NotBefore
+            NotAfter         = $cert.NotAfter
+            Provider         = $info.Provider
+            Reader           = $info.Reader
+            KeyContainerName = $info.KeyContainerName
+            IsSmartCard      = [bool]$isSmartCard
+            DetectionError   = $info.DetectionError
         }
     }
     return @($results)
+}
+
+function Remove-SmartCardCertificateFromCard {
+    # Entfernt EINEN Schlüssel-Container (samt zugehörigem Zertifikat) von einer
+    # Karte - z.B. ein versehentlich zusätzlich aufgespieltes Cert. Nutzt
+    # 'certutil -csp <Provider> -delkey <Container>' (fragt ggf. die Karten-PIN).
+    # Entfernt danach den (nun verwaisten) Eintrag aus dem Benutzer-Zertifikatsspeicher.
+    # KEINE Sicherheitsabfrage hier - die Bestätigung ist Aufgabe der GUI.
+    param(
+        [Parameter(Mandatory)][string]$Provider,
+        [Parameter(Mandatory)][string]$ContainerName,
+        [string]$Thumbprint
+    )
+
+    Write-WizardLog -Message "Entferne Schlüssel-Container '$ContainerName' (Provider '$Provider') von der Karte - ggf. erscheint der PIN-Dialog." -Level Command
+    $result = Invoke-ExternalCommand -FilePath 'certutil.exe' -ArgumentList @('-csp', $Provider, '-delkey', $ContainerName) -TimeoutSeconds 120
+
+    if (-not $result.Success) {
+        $detail = "$($result.StdOut) $($result.StdErr)".Trim()
+        Write-WizardLog -Message "Löschen des Schlüssel-Containers fehlgeschlagen: $detail" -Level Error
+        return [pscustomobject]@{ Success = $false; Message = "certutil -delkey fehlgeschlagen. $detail" }
+    }
+
+    if ($Thumbprint) {
+        Remove-Item -Path "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
+    }
+    Write-WizardLog -Message 'Schlüssel-Container von der Karte entfernt und Speicher-Eintrag bereinigt.' -Level Success
+    return [pscustomobject]@{ Success = $true; Message = '' }
 }
 
 #endregion

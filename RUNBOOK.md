@@ -171,7 +171,8 @@ ist Portal-/Graph-seitig).
 | # | Wer | Schritt |
 |---|---|---|
 | 1 | **[Tool]** | Inventar: VSC-Reader, Karteninhalt, Zertifikate mit Ablaufdatum und Provider. |
-| 2 | **[Du]** | Auswaehlen und loeschen - ueber `tpmvscmgr destroy` (zuverlaessiger als die COM-API, siehe README "Bekannte Einschraenkungen"). |
+| 2 | **[Du]** | Ganze Karte loeschen - ueber `tpmvscmgr destroy` (zuverlaessiger als die COM-API, siehe README "Bekannte Einschraenkungen"). |
+| 3 | **[Du]** | EINZELNES Zertifikat von einer Karte entfernen (z.B. versehentlich zusaetzlich aufgespieltes): Zertifikat in der Liste waehlen -> "Zertifikat von Karte entfernen". Zeigt Konto (UPN)/Subject/Thumbprint zur Kontrolle und entfernt nur diesen Schluessel-Container (`certutil -delkey`), andere Zertifikate der Karte bleiben. |
 
 ---
 
