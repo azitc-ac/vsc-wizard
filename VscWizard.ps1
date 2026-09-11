@@ -865,32 +865,63 @@ function Enter-PlanBRenewal {
 function Invoke-RenewalCleanup {
     # Nach einer Verlängerung liegt (weil certreq -new einen NEUEN Schlüssel erzeugt)
     # zusätzlich das ALTE Zertifikat/der alte Container auf der Karte. Diese Funktion
-    # findet auf der Karte alle Zertifikate desselben Kontos, behält das NEUESTE
-    # (gerade ausgestellte) und bietet an, die älteren zu entfernen - damit "Verlängern"
-    # effektiv ein Ersetzen wird. Voraussetzung: das alte Zertifikat ist im
-    # Benutzer-Zertifikatsspeicher sichtbar (dieselben Daten wie im Inventar).
+    # behält das NEUESTE Zertifikat der KARTE (grösstes NotBefore = gerade ausgestellt)
+    # und bietet an, die älteren auf DERSELBEN Karte zu entfernen - damit "Verlängern"
+    # effektiv ein Ersetzen wird.
+    #
+    # WICHTIG (das war der stille Aussteiger): früher wurde zusätzlich nach dem KONTO
+    # gefiltert (UPN/Subject aus Get-EnrollmentIdentity). Bei Fremdkonto-Verlängerung
+    # baut die CA aber aus dem AD (Build-from-AD): das ausgestellte Zertifikat trägt die
+    # AD-UPN (z.B. adm-t1@contoso.com), NICHT den beim Antrag genutzten Term
+    # (adm-t1@contoso.local). Der UPN-Vergleich schlug fehl -> nichts gefunden -> keine
+    # Abfrage. Deshalb jetzt KARTEN-bezogen (Reader), ohne fragilen Konto-Term. Die zu
+    # entfernenden Zertifikate werden im Dialog explizit aufgelistet - der Nutzer
+    # entscheidet. $UpnOrTerm bleibt nur fuer Logging/Rueckwaertskompatibilitaet.
     param([string]$PcscName, [string]$UpnOrTerm)
-    if (-not $PcscName -or -not $UpnOrTerm) { return }
+    if (-not $PcscName) {
+        Write-WizardLog -Message 'Aufräumen übersprungen: kein PC/SC-Kartenname bekannt (PcscName leer).' -Level Warn
+        return
+    }
 
-    $cardCerts = @(Get-SmartCardCertificates | Where-Object {
-        $_.Reader -eq $PcscName -and $_.KeyContainerName -and $_.Provider -and (
-            ($_.Upn -and ($_.Upn -ieq $UpnOrTerm)) -or ($_.Subject -like "*$UpnOrTerm*")
-        )
-    })
-    if ($cardCerts.Count -le 1) { return }   # nichts Älteres vorhanden
+    $cardCerts = @(Get-SmartCardCertificates | Where-Object { $_.Reader -and ($_.Reader -eq $PcscName) })
+    Write-WizardLog -Message "Aufräumen: $($cardCerts.Count) Zertifikat(e) auf Karte '$PcscName' gefunden." -Level Info
+    if ($cardCerts.Count -le 1) {
+        Write-WizardLog -Message 'Aufräumen: nur ein Zertifikat auf der Karte - nichts zu entfernen.' -Level Info
+        return
+    }
 
     $sorted = @($cardCerts | Sort-Object NotBefore -Descending)
-    $old = @($sorted | Select-Object -Skip 1)   # das neueste behalten
-    $list = ($old | ForEach-Object { "- $($_.Subject)  (gültig bis $($_.NotAfter.ToString('yyyy-MM-dd')))" }) -join "`r`n"
+    $keep = $sorted[0]
+    $old  = @($sorted | Select-Object -Skip 1)   # das neueste (gerade ausgestellte) behalten
+    Write-WizardLog -Message "Aufräumen: behalte '$($keep.Subject)' (gültig bis $($keep.NotAfter.ToString('yyyy-MM-dd'))), $($old.Count) ältere(s) zum Entfernen." -Level Info
+
+    $list = ($old | ForEach-Object { "- $($_.Subject)`r`n   gültig bis $($_.NotAfter.ToString('yyyy-MM-dd')), Thumbprint $($_.Thumbprint)" }) -join "`r`n"
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Nach der Verlängerung liegt auf der Karte noch $($old.Count) älteres Zertifikat desselben Kontos. Jetzt entfernen, damit nur das neue bleibt?`r`n`r`n$list`r`n`r`nDas gerade ausgestellte (neueste) Zertifikat bleibt erhalten. Je Entfernung erscheint ggf. eine UAC-/PIN-Abfrage.",
+        "Auf der Karte liegen nach der Verlängerung noch $($old.Count) ältere(s) Zertifikat(e). Jetzt entfernen, damit nur das neue bleibt?`r`n`r`nBEHALTEN (neu):`r`n- $($keep.Subject)`r`n   gültig bis $($keep.NotAfter.ToString('yyyy-MM-dd'))`r`n`r`nENTFERNEN:`r`n$list`r`n`r`nJe Entfernung erscheint ggf. eine UAC-/PIN-Abfrage.",
         'Verlängern - altes Zertifikat entfernen', 'YesNo', 'Question')
-    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Write-WizardLog -Message 'Aufräumen: vom Benutzer abgelehnt - ältere Zertifikate bleiben auf der Karte.' -Level Info
+        return
+    }
 
     foreach ($c in $old) {
-        $res = Remove-SmartCardCertificateFromCard -Provider $c.Provider -ContainerName $c.KeyContainerName -Thumbprint $c.Thumbprint
-        if (-not $res.Success) {
-            Write-WizardLog -Message "Altes Zertifikat konnte nicht entfernt werden ($($c.Thumbprint)): $($res.Message)" -Level Error
+        if ($c.Provider -and $c.KeyContainerName) {
+            $res = Remove-SmartCardCertificateFromCard -Provider $c.Provider -ContainerName $c.KeyContainerName -Thumbprint $c.Thumbprint
+            if ($res.Success) {
+                Write-WizardLog -Message "Altes Zertifikat entfernt ($($c.Thumbprint))." -Level Success
+            } else {
+                Write-WizardLog -Message "Altes Zertifikat konnte nicht entfernt werden ($($c.Thumbprint)): $($res.Message)" -Level Error
+            }
+        } else {
+            # Kein Container/Provider ermittelbar: wenigstens aus dem Zertifikatsspeicher
+            # entfernen (der Schlüsselcontainer auf der Karte bleibt dann evtl. zurück).
+            Write-WizardLog -Message "Altes Zertifikat ohne ermittelbaren Schlüsselcontainer ($($c.Thumbprint)) - entferne nur aus dem Zertifikatsspeicher." -Level Warn
+            try {
+                Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $c.Thumbprint } | Remove-Item -Force -ErrorAction Stop
+                Write-WizardLog -Message "Altes Zertifikat aus dem Speicher entfernt ($($c.Thumbprint)); Container auf der Karte ggf. manuell prüfen (certutil -scinfo)." -Level Success
+            } catch {
+                Write-WizardLog -Message "Entfernen aus dem Speicher fehlgeschlagen ($($c.Thumbprint)): $($_.Exception.Message)" -Level Error
+            }
         }
     }
 }
@@ -1235,6 +1266,7 @@ $btnRequestCertA.Add_Click({
         if ($script:PlanA_RenewMode) {
             $idA = Get-EnrollmentIdentity
             Invoke-RenewalCleanup -PcscName $script:PlanA_PcscName -UpnOrTerm $(if ($idA.Upn) { $idA.Upn } else { $idA.SearchTerm })
+            Update-PlanASummary
         }
     } else {
         $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
@@ -1257,6 +1289,7 @@ $btnRetrieveA.Add_Click({
             if ($script:PlanA_RenewMode) {
                 $idA = Get-EnrollmentIdentity
                 Invoke-RenewalCleanup -PcscName $script:PlanA_PcscName -UpnOrTerm $(if ($idA.Upn) { $idA.Upn } else { $idA.SearchTerm })
+                Update-PlanASummary
             }
         }
     } else {
@@ -1269,28 +1302,63 @@ $pnlA4 = New-Object System.Windows.Forms.Panel
 $pnlA4.Dock = 'Fill'
 $pnlStepsA.Controls.Add($pnlA4)
 
-$lblSummaryA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 140
+$lblSummaryA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 190
 $btnResetA = New-Object System.Windows.Forms.Button
 $btnResetA.Text = 'Weitere Smartcard beantragen'
-$btnResetA.Location = New-Object System.Drawing.Point(20, 170)
+$btnResetA.Location = New-Object System.Drawing.Point(20, 220)
 $btnResetA.Size = New-Object System.Drawing.Size(240, 32)
 
 $btnStartA = New-Object System.Windows.Forms.Button
 $btnStartA.Text = 'Zum Startbildschirm'
-$btnStartA.Location = New-Object System.Drawing.Point(280, 170)
+$btnStartA.Location = New-Object System.Drawing.Point(280, 220)
 $btnStartA.Size = New-Object System.Drawing.Size(200, 32)
 
 $pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA, $btnStartA))
 
+function Get-CardValiditySummaryText {
+    # Baut den Zusammenfassungstext für die Abschluss-Seite. Wenn der PC/SC-Kartenname
+    # bekannt ist, werden ALLE Zertifikate DIESER Karte einzeln mit ihrer jeweiligen
+    # Gültigkeit gelistet (die Karte selbst hat kein Ablaufdatum - die Zertifikate
+    # darauf schon, und ggf. mehrere mit unterschiedlichen Daten). Fallback: die
+    # bisherige term-basierte Suche im Zertifikatsspeicher.
+    param([string]$CardName, [string]$PcscName, [string]$MatchTerm)
+
+    $certs = @()
+    if ($PcscName) {
+        $certs = @(Get-SmartCardCertificates |
+            Where-Object { $_.Reader -and ($_.Reader -eq $PcscName) } |
+            Sort-Object NotAfter)
+    }
+
+    if ($certs.Count -eq 0) {
+        $summary = Get-IssuedCertificateSummary -Match $MatchTerm
+        if ($summary) {
+            return "Kartenname: $CardName`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
+        }
+        return "Kartenname: $CardName`r`nKein passendes Zertifikat gefunden."
+    }
+
+    if ($certs.Count -eq 1) {
+        $c = $certs[0]
+        return "Kartenname: $CardName`r`nZertifikat: $($c.Subject)`r`nThumbprint: $($c.Thumbprint)`r`nGültig ab: $($c.NotBefore)`r`nGültig bis: $($c.NotAfter)"
+    }
+
+    # Mehrere Zertifikate auf der Karte -> je Zertifikat die Gültigkeit einzeln.
+    $lines = @("Kartenname: $CardName", "Auf der Karte liegen $($certs.Count) Zertifikate:")
+    $i = 0
+    foreach ($c in $certs) {
+        $i++
+        $lines += "  $i) $($c.Subject)"
+        $lines += "     gültig $($c.NotBefore.ToString('yyyy-MM-dd')) bis $($c.NotAfter.ToString('yyyy-MM-dd'))  (Thumbprint $($c.Thumbprint))"
+    }
+    $lines += 'Hinweis: Beim Smartcard-Logon nutzt Windows i.d.R. das erste passende Zertifikat. Für "eine Karte = ein Zertifikat" die älteren entfernen (Aufräum-Abfrage nach dem Verlängern oder Szenario 05).'
+    return ($lines -join "`r`n")
+}
+
 function Update-PlanASummary {
     $id = Get-EnrollmentIdentity
     $matchTerm = if ($id.Upn) { $id.Upn } else { $id.SearchTerm }
-    $summary = Get-IssuedCertificateSummary -Match $matchTerm
-    if ($summary) {
-        $lblSummaryA.Text = "Kartenname: $($script:PlanA_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
-    } else {
-        $lblSummaryA.Text = 'Kein passendes Zertifikat gefunden.'
-    }
+    $lblSummaryA.Text = Get-CardValiditySummaryText -CardName $script:PlanA_CardName -PcscName $script:PlanA_PcscName -MatchTerm $matchTerm
 }
 
 $btnResetA.Add_Click({
@@ -1785,16 +1853,16 @@ $btnCompleteFromTextB.Size = New-Object System.Drawing.Size(200, 32)
 
 $lblCompleteResultB = New-WizardLabel -Text '' -X 20 -Y 344 -Width 780 -Height 40
 
-$lblSummaryB = New-WizardLabel -Text '' -X 20 -Y 390 -Width 780 -Height 110
+$lblSummaryB = New-WizardLabel -Text '' -X 20 -Y 390 -Width 780 -Height 190
 
 $btnResetB = New-Object System.Windows.Forms.Button
 $btnResetB.Text = 'Weitere Smartcard beantragen'
-$btnResetB.Location = New-Object System.Drawing.Point(20, 510)
+$btnResetB.Location = New-Object System.Drawing.Point(20, 590)
 $btnResetB.Size = New-Object System.Drawing.Size(240, 32)
 
 $btnStartB = New-Object System.Windows.Forms.Button
 $btnStartB.Text = 'Zum Startbildschirm'
-$btnStartB.Location = New-Object System.Drawing.Point(280, 510)
+$btnStartB.Location = New-Object System.Drawing.Point(280, 590)
 $btnStartB.Size = New-Object System.Drawing.Size(200, 32)
 
 $pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCerTextLabelB, $txtCerTextB, $btnCompleteFromTextB, $lblCompleteResultB, $lblSummaryB, $btnResetB, $btnStartB))
@@ -1810,12 +1878,7 @@ $btnSelectCerB.Add_Click({
 function Update-PlanBSummary {
     $id = Get-EnrollmentIdentity
     $matchTerm = if ($id.Upn) { $id.Upn } else { $id.SearchTerm }
-    $summary = Get-IssuedCertificateSummary -Match $matchTerm
-    if ($summary) {
-        $lblSummaryB.Text = "Kartenname: $($script:PlanB_CardName)`r`nZertifikat: $($summary.Subject)`r`nThumbprint: $($summary.Thumbprint)`r`nGültig ab: $($summary.NotBefore)`r`nGültig bis: $($summary.NotAfter)"
-    } else {
-        $lblSummaryB.Text = 'Kein passendes Zertifikat gefunden.'
-    }
+    $lblSummaryB.Text = Get-CardValiditySummaryText -CardName $script:PlanB_CardName -PcscName $script:PlanB_PcscName -MatchTerm $matchTerm
 }
 
 function Complete-PlanBEnrollment {
@@ -1843,6 +1906,7 @@ function Complete-PlanBEnrollment {
         if ($script:PlanB_RenewMode) {
             $idB = Get-EnrollmentIdentity
             Invoke-RenewalCleanup -PcscName $script:PlanB_PcscName -UpnOrTerm $(if ($idB.Upn) { $idB.Upn } else { $idB.SearchTerm })
+            Update-PlanBSummary   # nach dem Aufräumen den finalen Kartenstand zeigen
         }
     } else {
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::Firebrick
