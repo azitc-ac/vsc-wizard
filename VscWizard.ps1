@@ -862,6 +862,39 @@ function Enter-PlanBRenewal {
     Show-PlanBStep -Index 2
 }
 
+function Invoke-RenewalCleanup {
+    # Nach einer Verlängerung liegt (weil certreq -new einen NEUEN Schlüssel erzeugt)
+    # zusätzlich das ALTE Zertifikat/der alte Container auf der Karte. Diese Funktion
+    # findet auf der Karte alle Zertifikate desselben Kontos, behält das NEUESTE
+    # (gerade ausgestellte) und bietet an, die älteren zu entfernen - damit "Verlängern"
+    # effektiv ein Ersetzen wird. Voraussetzung: das alte Zertifikat ist im
+    # Benutzer-Zertifikatsspeicher sichtbar (dieselben Daten wie im Inventar).
+    param([string]$PcscName, [string]$UpnOrTerm)
+    if (-not $PcscName -or -not $UpnOrTerm) { return }
+
+    $cardCerts = @(Get-SmartCardCertificates | Where-Object {
+        $_.Reader -eq $PcscName -and $_.KeyContainerName -and $_.Provider -and (
+            ($_.Upn -and ($_.Upn -ieq $UpnOrTerm)) -or ($_.Subject -like "*$UpnOrTerm*")
+        )
+    })
+    if ($cardCerts.Count -le 1) { return }   # nichts Älteres vorhanden
+
+    $sorted = @($cardCerts | Sort-Object NotBefore -Descending)
+    $old = @($sorted | Select-Object -Skip 1)   # das neueste behalten
+    $list = ($old | ForEach-Object { "- $($_.Subject)  (gültig bis $($_.NotAfter.ToString('yyyy-MM-dd')))" }) -join "`r`n"
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "Nach der Verlängerung liegt auf der Karte noch $($old.Count) älteres Zertifikat desselben Kontos. Jetzt entfernen, damit nur das neue bleibt?`r`n`r`n$list`r`n`r`nDas gerade ausgestellte (neueste) Zertifikat bleibt erhalten. Je Entfernung erscheint ggf. eine UAC-/PIN-Abfrage.",
+        'Verlängern - altes Zertifikat entfernen', 'YesNo', 'Question')
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+    foreach ($c in $old) {
+        $res = Remove-SmartCardCertificateFromCard -Provider $c.Provider -ContainerName $c.KeyContainerName -Thumbprint $c.Thumbprint
+        if (-not $res.Success) {
+            Write-WizardLog -Message "Altes Zertifikat konnte nicht entfernt werden ($($c.Thumbprint)): $($res.Message)" -Level Error
+        }
+    }
+}
+
 function Start-Renewal {
     # Szenario 02: re-enrollt auf eine BESTEHENDE Karte - ohne Neuerstellung.
     # WICHTIG: die Identitaet wird aus dem vorhandenen Zertifikat der Karte abgeleitet,
@@ -1198,6 +1231,10 @@ $btnRequestCertA.Add_Click({
         Clear-WizardResumeState
         $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblCertResultA.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
+        if ($script:PlanA_RenewMode) {
+            $idA = Get-EnrollmentIdentity
+            Invoke-RenewalCleanup -PcscName $script:PlanA_PcscName -UpnOrTerm $(if ($idA.Upn) { $idA.Upn } else { $idA.SearchTerm })
+        }
     } else {
         $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
         $lblCertResultA.Text = 'Übernahme des Zertifikats fehlgeschlagen. Details siehe Log.'
@@ -1216,6 +1253,10 @@ $btnRetrieveA.Add_Click({
             $btnRetrieveA.Visible = $false
             $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
             $lblCertResultA.Text = 'Zertifikat wurde erfolgreich abgerufen und auf der virtuellen Smartcard hinterlegt.'
+            if ($script:PlanA_RenewMode) {
+                $idA = Get-EnrollmentIdentity
+                Invoke-RenewalCleanup -PcscName $script:PlanA_PcscName -UpnOrTerm $(if ($idA.Upn) { $idA.Upn } else { $idA.SearchTerm })
+            }
         }
     } else {
         [System.Windows.Forms.MessageBox]::Show('Zertifikat ist noch nicht ausgestellt.', 'Hinweis', 'OK', 'Information') | Out-Null
@@ -1769,6 +1810,10 @@ function Complete-PlanBEnrollment {
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblCompleteResultB.Text = 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.'
         Update-PlanBSummary
+        if ($script:PlanB_RenewMode) {
+            $idB = Get-EnrollmentIdentity
+            Invoke-RenewalCleanup -PcscName $script:PlanB_PcscName -UpnOrTerm $(if ($idB.Upn) { $idB.Upn } else { $idB.SearchTerm })
+        }
     } else {
         $lblCompleteResultB.ForeColor = [System.Drawing.Color]::Firebrick
         $lblCompleteResultB.Text = 'Übernahme fehlgeschlagen. Details siehe Log.'
