@@ -1028,7 +1028,12 @@ Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`
 "@
         Set-Content -Path $scriptPath -Value $wrapper -Encoding UTF8
         try {
-            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -Verb RunAs -Wait -ErrorAction Stop
+            # -WindowStyle Hidden: bei -Verb RunAs erzwingt Windows ShellExecute; der
+            # Hidden-Style wird zu SW_HIDE, sodass das elevierte PowerShell-Fenster
+            # NICHT aufblitzt (nur der UAC-Dialog erscheint, der ist unvermeidbar).
+            # Gleiche Technik wie beim 'tpmvscmgr destroy' weiter oben. certutil erbt
+            # die versteckte Konsole des Hosts und oeffnet kein eigenes Fenster.
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop
         } catch {
             Remove-Item $scriptPath, $outPath -ErrorAction SilentlyContinue
             $msg = "Elevierter Löschvorgang konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
