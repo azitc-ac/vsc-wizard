@@ -237,36 +237,43 @@ Transport + Authentifizierung, **nicht** die Enroll-Berechtigung auf dem Templat
 
 ---
 
-## Packaging: Single-Exe + Signatur [geplant]
+## Packaging: Single-Exe + Signatur (`build.ps1`)
 
 Ziel: eine anklickbare `.exe` fuer einfache Bedienung und weniger lose Dateien -
 ohne neue Abhaengigkeit (die eingebaute Windows PowerShell 5.1 genuegt).
 
 ### build.ps1
 
-1. **Merge:** `modules/VscWizard.Core.psm1` in eine Kopie von `VscWizard.ps1`
-   einbetten (statt `Import-Module` zur Laufzeit). **Wichtig fuer ExecutionPolicy
-   Restricted**, siehe unten.
-2. **Wrappen** mit Win-PS2EXE:
-   `-STA` (WinForms), `-noConsole`, `-requireAdmin` (UAC fuer `tpmvscmgr`),
-   `-iconFile <icon>`, Versionsinfo.
-3. **Config bleibt extern** (neben der Exe bzw. in `%APPDATA%`), vom
-   Einstellungen-Dialog geschrieben - nicht in die Exe einbacken.
-4. **Signieren** (`Set-AuthenticodeSignature`) mit einem internen
-   Code-Signing-Zertifikat, um SmartScreen/AV-Warnungen zu vermeiden.
+`.\build.ps1` (einmalig Win-PS2EXE aus der PSGallery), optional
+`.\build.ps1 -CertThumbprint <Thumbprint>` zum Signieren. Erzeugt in `dist\`:
 
-### ExecutionPolicy und CLM - was die Exe loest und was nicht
+1. **`VscWizard.Submit.exe`** - der Einreicher-Helfer als **echte Einzeldatei**
+   (self-contained, keine Nebendateien). Auf den RDP-/Einreich-Host kopieren.
+2. **`VscWizard.exe`** - der Haupt-Wizard. Bewusst **nicht** gemergt: der Wizard
+   startet Hintergrund-Jobs, die `VscWizard.Core.psm1` zur Laufzeit vom Pfad
+   nachladen - ein Inline-Merge wuerde die brechen. Daher als **Drop-in-Ersatz**
+   fuer `.ps1`/`.bat` verteilen, zusammen mit dem Ordner `modules\` und
+   `config.psd1` DANEBEN.
 
-- **ExecutionPolicy (auch Restricted/AllSigned):** PS2EXE fuehrt den **eingebetteten
-  Code in-memory** aus und laedt **keine `.ps1`/`.psm1` von der Platte** ->
-  ExecutionPolicy (ein Datei-Gate) greift **nicht**. **Bedingung:** der Merge aus
-  Schritt 1, damit zur Laufzeit kein Datei-Load stattfindet. Die Exe **hilft** hier
-  also.
+Beide werden mit `-STA` (WinForms) und `-noConsole` (reine GUI) gebaut. **Kein
+`-requireAdmin`**: der Wizard MUSS im Kontext des angemeldeten Benutzers laufen
+(er eleviert nur einzelne Aktionen wie `tpmvscmgr`/`certutil` selbst) - ein global
+elevierter Prozess wuerde z.B. den falschen Zertifikatsspeicher sehen.
+
+### ExecutionPolicy und CLM
+
+- **PS2EXE fuehrt den eingebetteten Code in-memory aus** - ExecutionPolicy (ein
+  Datei-Gate fuer `.ps1`/`.psm1`) greift auf den Exe-Start nicht. `VscWizard.Submit.exe`
+  ist damit voll ExecutionPolicy-unabhaengig. Der Haupt-Wizard startet zwar
+  Kind-Prozesse, die Skripte vom Datentraeger laden - diese rufen `powershell.exe`
+  aber mit `-ExecutionPolicy Bypass` bzw. beziehen sich auf die mitgelieferten
+  Modul-/Lookup-Dateien; auf einer streng per Policy gesperrten Maschine ist das
+  vor dem Ausrollen zu verifizieren.
 - **AppLocker / WDAC mit Constrained Language Mode:** CLM kann die gehostete
   PowerShell einschraenken und WinForms/`Add-Type` brechen; WDAC kann unsignierte
-  `.exe` blocken. In solchen Umgebungen ist **Signieren Pflicht**, und nur ein
-  echter C#/.NET-Standalone waere gegen CLM immun. Das ist der einzige Fall, in dem
-  die PS2EXE-Exe an Grenzen stoesst - ansonsten nicht noetig.
+  `.exe` blocken. Dort ist **Signieren Pflicht**, und nur ein echter
+  C#/.NET-Standalone waere gegen CLM immun - der einzige Fall, in dem die PS2EXE-Exe
+  an Grenzen stoesst.
 
 ### Server Core
 

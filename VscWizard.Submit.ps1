@@ -174,7 +174,17 @@ function New-FormLabel {
     return $lbl
 }
 
-$layout.Controls.Add((New-FormLabel -Text 'CSR aus der lokalen Sitzung hier einfügen (PEM-Text, aus VscWizard Plan B Schritt 3 kopiert):' -Style Bold), 0, 0)
+$csrHeader = New-Object System.Windows.Forms.FlowLayoutPanel
+$csrHeader.AutoSize = $true
+$csrHeader.FlowDirection = 'LeftToRight'
+$csrHeader.WrapContents = $false
+$csrHeader.Controls.Add((New-FormLabel -Text 'CSR aus der lokalen Sitzung einfügen (PEM-Text, aus VscWizard Plan B Schritt 3) - oder Datei laden:' -Style Bold))
+$btnLoadCsr = New-Object System.Windows.Forms.Button
+$btnLoadCsr.Text = 'CSR laden...'
+$btnLoadCsr.Size = New-Object System.Drawing.Size(110, 26)
+$btnLoadCsr.Margin = New-Object System.Windows.Forms.Padding(12, 4, 0, 0)
+$csrHeader.Controls.Add($btnLoadCsr)
+$layout.Controls.Add($csrHeader, 0, 0)
 
 $txtCsr = New-Object System.Windows.Forms.TextBox
 $txtCsr.Multiline = $true
@@ -239,7 +249,24 @@ $btnRetrieve.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
 $btnRetrieve.Visible = $false
 $layout.Controls.Add($btnRetrieve, 0, 5)
 
-$layout.Controls.Add((New-FormLabel -Text 'Ergebnis (PEM-Text - zum Kopieren zurück in die lokale Sitzung markiert/kopiert):' -Style Bold), 0, 6)
+$resultHeader = New-Object System.Windows.Forms.FlowLayoutPanel
+$resultHeader.AutoSize = $true
+$resultHeader.FlowDirection = 'LeftToRight'
+$resultHeader.WrapContents = $false
+$resultHeader.Controls.Add((New-FormLabel -Text 'Ergebnis (PEM-Text) - zurück in die lokale Sitzung:' -Style Bold))
+$btnCopyCer = New-Object System.Windows.Forms.Button
+$btnCopyCer.Text = 'Kopieren'
+$btnCopyCer.Size = New-Object System.Drawing.Size(100, 26)
+$btnCopyCer.Margin = New-Object System.Windows.Forms.Padding(12, 4, 0, 0)
+$btnCopyCer.Enabled = $false
+$resultHeader.Controls.Add($btnCopyCer)
+$btnSaveCer = New-Object System.Windows.Forms.Button
+$btnSaveCer.Text = 'Speichern unter...'
+$btnSaveCer.Size = New-Object System.Drawing.Size(130, 26)
+$btnSaveCer.Margin = New-Object System.Windows.Forms.Padding(6, 4, 0, 0)
+$btnSaveCer.Enabled = $false
+$resultHeader.Controls.Add($btnSaveCer)
+$layout.Controls.Add($resultHeader, 0, 6)
 
 $txtResult = New-Object System.Windows.Forms.TextBox
 $txtResult.Multiline = $true
@@ -257,6 +284,49 @@ $txtLog.ScrollBars = 'Vertical'
 $txtLog.Font = New-Object System.Drawing.Font('Consolas', 8)
 $txtLog.Dock = 'Fill'
 $layout.Controls.Add($txtLog, 0, 9)
+
+# CSR aus Datei laden (Alternative zum Einfügen).
+$btnLoadCsr.Add_Click({
+    $ofd = New-Object System.Windows.Forms.OpenFileDialog
+    $ofd.Filter = 'CSR/PEM (*.csr;*.req;*.pem;*.txt)|*.csr;*.req;*.pem;*.txt|Alle Dateien (*.*)|*.*'
+    if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        try {
+            $txtCsr.Text = Get-Content -Path $ofd.FileName -Raw -ErrorAction Stop
+            Write-Status "CSR aus Datei geladen: $($ofd.FileName)"
+        } catch {
+            Write-Status "CSR-Datei konnte nicht gelesen werden: $($_.Exception.Message)"
+        }
+    }
+})
+
+# Kopieren/Speichern-Buttons nur bei vorhandenem Ergebnis aktiv.
+$txtResult.Add_TextChanged({
+    $has = -not [string]::IsNullOrWhiteSpace($txtResult.Text)
+    $btnCopyCer.Enabled = $has
+    $btnSaveCer.Enabled = $has
+})
+
+$btnCopyCer.Add_Click({
+    if ($txtResult.Text) {
+        Set-Clipboard -Value $txtResult.Text
+        Write-Status 'Zertifikat in die Zwischenablage kopiert.'
+    }
+})
+
+$btnSaveCer.Add_Click({
+    if (-not $txtResult.Text) { return }
+    $sfd = New-Object System.Windows.Forms.SaveFileDialog
+    $sfd.Filter = 'Zertifikat (*.cer;*.pem)|*.cer;*.pem|Alle Dateien (*.*)|*.*'
+    $sfd.FileName = 'issued.cer'
+    if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        try {
+            Set-Content -Path $sfd.FileName -Value $txtResult.Text -Encoding Ascii -ErrorAction Stop
+            Write-Status "Zertifikat gespeichert: $($sfd.FileName)"
+        } catch {
+            Write-Status "Speichern fehlgeschlagen: $($_.Exception.Message)"
+        }
+    }
+})
 
 #endregion
 
