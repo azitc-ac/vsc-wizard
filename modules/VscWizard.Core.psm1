@@ -571,6 +571,17 @@ function New-VirtualSmartCard {
         [int]$PinPolicyMinLength = 6
     )
 
+    # ARM64: .NET Framework hat KEINE native ARM64-Laufzeit - ein AnyCPU-FW-Exe
+    # laeuft dort als x86-Emulation, und der native TPM-VSC-COM-Server laesst sich
+    # in einen solchen Prozess nicht laden (QueryInterface scheitert mit
+    # 0x800700C1 BAD_EXE_FORMAT). Auf ARM64 daher direkt den nativen tpmvscmgr.exe
+    # nutzen (PIN-Eingabe dann im elevierten Konsolenfenster).
+    $nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    if ($nativeArch -eq 'ARM64') {
+        Write-WizardLog -Message 'ARM64 erkannt: COM-Helfer (.NET Framework) nicht nutzbar - verwende direkt tpmvscmgr.exe.' -Level Info
+        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName
+    }
+
     $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
     if (-not (Test-Path $helperSource)) {
         $msg = "Helfer-Quelldatei nicht gefunden: $helperSource"
@@ -653,7 +664,10 @@ function New-VirtualSmartCard {
         $pcscNote = if ($pcscName) { "; erscheint in Windows-Kartendialogen als '$pcscName'" } else { '' }
         Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId); $policyNote$pcscNote)." -Level Success
     } else {
-        Write-WizardLog -Message "Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" })" -Level Error
+        # COM-Weg fehlgeschlagen (z.B. 0x800700C1 bei Architektur-Mismatch) -
+        # auf den nativen tpmvscmgr.exe zurueckfallen, der arch-unabhaengig laeuft.
+        Write-WizardLog -Message "COM-Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" }) - Fallback über tpmvscmgr.exe." -Level Error
+        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName
     }
     return [pscustomobject]@{
         Success    = $success
@@ -662,6 +676,62 @@ function New-VirtualSmartCard {
         Message    = $res.Message
         PcscName   = $pcscName
     }
+}
+
+function New-VirtualSmartCardViaTpmVscMgr {
+    # Nativer Fallback/Primaerweg (ARM64): erstellt die VSC mit dem eingebauten
+    # tpmvscmgr.exe. Die PIN wird im elevierten KONSOLENFENSTER abgefragt (/PIN PROMPT,
+    # daher sichtbares Fenster, kein -WindowStyle Hidden). Erfolg wird danach anhand
+    # eines neu hinzugekommenen Smartcard-Readers mit diesem FriendlyName erkannt, da
+    # -Verb RunAs keine Ausgabeumleitung erlaubt.
+    param([Parameter(Mandatory)][string]$CardName)
+
+    $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
+    if (-not (Test-Path $tpmvscmgr)) {
+        $msg = 'tpmvscmgr.exe nicht gefunden (System32).'
+        Write-WizardLog -Message $msg -Level Error
+        return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
+    }
+
+    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' über tpmvscmgr.exe (PIN-Eingabe im elevierten Konsolenfenster; PIN-Mindestlänge 8)." -Level Command
+
+    # Vorher vorhandene Reader merken, um die neue Karte danach sicher zu identifizieren.
+    $before = @(Get-VirtualSmartCardReaders | ForEach-Object { $_.InstanceId })
+
+    # /AdminKey DEFAULT + /PIN PROMPT + /generate: der dokumentierte Weg fuer eine
+    # enrollment-faehige Karte. /PIN PROMPT erfordert ein interaktives Fenster - daher
+    # Start-Process (nicht Invoke-ExternalCommand mit Umleitung).
+    $vscArgs = "create /name `"$CardName`" /AdminKey DEFAULT /PIN PROMPT /generate"
+    try {
+        if (Test-IsElevated) {
+            Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Wait -ErrorAction Stop
+        } else {
+            Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -Wait -ErrorAction Stop
+        }
+    } catch {
+        $msg = "tpmvscmgr.exe konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
+        Write-WizardLog -Message $msg -Level Error
+        return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
+    }
+
+    # Neue Karte finden: bevorzugt ein neu hinzugekommener Reader mit diesem Namen.
+    $newReader = $null
+    for ($attempt = 0; $attempt -lt 6 -and -not $newReader; $attempt++) {
+        if ($attempt -gt 0) { Start-Sleep -Milliseconds 800 }
+        $readers = @(Get-VirtualSmartCardReaders)
+        $newReader = $readers | Where-Object { $_.FriendlyName -eq $CardName -and $_.InstanceId -notin $before } | Select-Object -First 1
+        if (-not $newReader) { $newReader = $readers | Where-Object { $_.FriendlyName -eq $CardName } | Select-Object -First 1 }
+    }
+
+    if ($newReader) {
+        $pcscNote = if ($newReader.PcscName) { "; erscheint in Windows-Kartendialogen als '$($newReader.PcscName)'" } else { '' }
+        Write-WizardLog -Message "Virtuelle Smartcard '$CardName' über tpmvscmgr erstellt (InstanceId $($newReader.InstanceId)$pcscNote)." -Level Success
+        return [pscustomobject]@{ Success = $true; InstanceId = $newReader.InstanceId; HResult = $null; Message = ''; PcscName = $newReader.PcscName }
+    }
+
+    $msg = "Nach dem tpmvscmgr-Lauf wurde keine Karte '$CardName' gefunden (Abbruch, abweichende/zu kurze PIN oder Erstellung fehlgeschlagen)."
+    Write-WizardLog -Message $msg -Level Error
+    return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
 }
 
 function Get-VirtualSmartCardReaders {
