@@ -1131,8 +1131,9 @@ $pnlA3 = New-Object System.Windows.Forms.Panel
 $pnlA3.Dock = 'Fill'
 $pnlStepsA.Controls.Add($pnlA3)
 
-$lblCardHintA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 34
-$lblCardHintA.ForeColor = [System.Drawing.Color]::SteelBlue
+$lblCardHintA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 44
+$lblCardHintA.ForeColor = [System.Drawing.Color]::ForestGreen
+$lblCardHintA.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
 
 $lblTemplateA = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 58 -Width 300
 $cboTemplateA = New-Object System.Windows.Forms.ComboBox
@@ -1349,7 +1350,7 @@ function Show-PlanAStep {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
             $lblCardHintA.Text = if ($script:PlanA_PcscName) {
-                "Hinweis: im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanA_PcscName)' wählen (das ist '$($script:PlanA_CardName)')."
+                "➜ Im Windows-Kartenauswahl-Dialog die Karte `"$($script:PlanA_PcscName)`" wählen  (= '$($script:PlanA_CardName)')."
             } else { '' }
         }
         3 { Update-PlanASummary }
@@ -1475,7 +1476,7 @@ $pnlB3 = New-Object System.Windows.Forms.Panel
 $pnlB3.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB3)
 
-$lblCsrInfoB = New-WizardLabel -Text 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.' -X 20 -Y 20 -Width 780 -Height 40
+$lblCsrInfoB = New-WizardLabel -Text 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.' -X 20 -Y 20 -Width 780 -Height 48
 
 $btnCreateCsrB = New-Object System.Windows.Forms.Button
 $btnCreateCsrB.Text = 'CSR erstellen'
@@ -1803,6 +1804,18 @@ function Update-PlanBSummary {
 function Complete-PlanBEnrollment {
     param([Parameter(Mandatory)][string]$CerPath)
 
+    # Vorab prüfen, ob die Datei wirklich ein vollständiges, parsbares Zertifikat ist -
+    # so gibt es bei abgeschnittenem/verunreinigtem CER (z.B. RDP-Zwischenablage) eine
+    # klare Meldung statt des kryptischen CRYPT_E_ASN1_BADTAG von certreq -accept.
+    try {
+        $null = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CerPath
+    } catch {
+        Write-WizardLog -Message "CER-Vorprüfung fehlgeschlagen: $($_.Exception.Message)" -Level Error
+        $lblCompleteResultB.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblCompleteResultB.Text = 'Das ist kein vollständiges, gültiges Zertifikat (evtl. beim Kopieren über RDP abgeschnitten). Tipp: im Einreicher-Helfer mit "Speichern unter..." als Datei sichern, per RDP-Laufwerk übertragen und hier "Aus Datei übernehmen".'
+        return
+    }
+
     $complete = Complete-CertificateEnrollment -CerPath $CerPath
     if ($complete.Success) {
         $script:PlanB_CertIssued = $true
@@ -1847,8 +1860,21 @@ $btnCompleteB.Add_Click({
         [System.Windows.Forms.MessageBox]::Show('Bitte zuerst eine CER-Datei auswählen.', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
+    # Auch den Datei-Weg säubern: eine als Text (PEM) gespeicherte CER-Datei kann ein
+    # BOM/Encoding tragen. Reine DER-Dateien enthalten kein "BEGIN" - dann direkt nehmen.
+    $cerPathToUse = $txtSelectedCerB.Text
+    try {
+        $rawFile = [System.IO.File]::ReadAllText($txtSelectedCerB.Text)
+        if ($rawFile -match '-----BEGIN') {
+            $clean = ConvertTo-CleanPemRequest -Text $rawFile
+            if ($clean) {
+                $cerPathToUse = Join-Path (Get-WizardWorkingDir) "PlanB-fileclean-$([guid]::NewGuid()).cer"
+                Set-Content -Path $cerPathToUse -Value $clean -Encoding ASCII -NoNewline
+            }
+        }
+    } catch { }
     $btnCompleteB.Enabled = $false
-    Complete-PlanBEnrollment -CerPath $txtSelectedCerB.Text
+    Complete-PlanBEnrollment -CerPath $cerPathToUse
     $btnCompleteB.Enabled = $true
 })
 
@@ -1917,11 +1943,16 @@ function Show-PlanBStep {
         0 { Update-PlanBStatus }
         2 {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
-            # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
-            $lblCsrInfoB.Text = if ($script:PlanB_PcscName) {
-                "Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Im Windows-Kartenauswahl-Dialog die Karte '$($script:PlanB_PcscName)' wählen (das ist '$($script:PlanB_CardName)'); es erscheint ggf. ein PIN-Dialog."
+            # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N" -
+            # deshalb prominent (fett/grün) hervorheben.
+            if ($script:PlanB_PcscName) {
+                $lblCsrInfoB.ForeColor = [System.Drawing.Color]::ForestGreen
+                $lblCsrInfoB.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+                $lblCsrInfoB.Text = "➜ Im Windows-Kartenauswahl-Dialog die Karte `"$($script:PlanB_PcscName)`" wählen  (= '$($script:PlanB_CardName)'). Danach ggf. PIN-Dialog."
             } else {
-                'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.'
+                $lblCsrInfoB.ForeColor = [System.Drawing.SystemColors]::ControlText
+                $lblCsrInfoB.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+                $lblCsrInfoB.Text = 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.'
             }
         }
         3 { Update-PlanBHandoff }
