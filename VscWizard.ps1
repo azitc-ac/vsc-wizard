@@ -25,10 +25,44 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
-Import-Module (Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1') -Force
+# Basisverzeichnis robust bestimmen - MUSS sowohl als .ps1 (dann $PSScriptRoot) als
+# auch als PS2EXE-.exe funktionieren. In einer PS2EXE-Exe ist $PSScriptRoot je nach
+# Version LEER; dann liefert der Prozesspfad (die .exe selbst) das richtige Verzeichnis.
+# Ohne das schlägt der Modul-Import still fehl und man sieht nur eine Kaskade von
+# "... ist nicht erkannt"-Fehlern (u.a. Import-VscWizardConfig).
+$script:BaseDir = $PSScriptRoot
+if (-not $script:BaseDir -and $MyInvocation.MyCommand.Path) {
+    $script:BaseDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if (-not $script:BaseDir) {
+    try { $script:BaseDir = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) } catch { }
+}
+if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
 
-$script:ConfigPath = Join-Path $PSScriptRoot 'config.psd1'
-$config = Import-VscWizardConfig -Path $script:ConfigPath
+$script:ModulePath = Join-Path $script:BaseDir 'modules\VscWizard.Core.psm1'
+if (-not (Test-Path $script:ModulePath)) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Das Kernmodul wurde nicht gefunden:`r`n$script:ModulePath`r`n`r`nDie Datei/EXE braucht den Ordner 'modules\' UND 'config.psd1' DIREKT DANEBEN.`r`n`r`nSo startest du richtig:`r`n - Aus dem geklonten Repo: VscWizard.bat doppelklicken (nicht eine einzelne .exe kopieren).`r`n - Als EXE: '.\build.ps1' ausführen und die EXE aus 'dist\' zusammen mit dem dort erzeugten Ordner 'modules\' und 'config.psd1' verwenden.",
+        'VSC-Wizard - Start fehlgeschlagen', 'OK', 'Error') | Out-Null
+    exit 1
+}
+try {
+    Import-Module $script:ModulePath -Force -ErrorAction Stop
+} catch {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Das Kernmodul konnte nicht geladen werden:`r`n$($_.Exception.Message)`r`n`r`nPfad: $script:ModulePath",
+        'VSC-Wizard - Start fehlgeschlagen', 'OK', 'Error') | Out-Null
+    exit 1
+}
+
+$script:ConfigPath = Join-Path $script:BaseDir 'config.psd1'
+# Fehlt config.psd1 (z.B. nur die EXE ohne Beiwerk kopiert), NICHT abstürzen: mit
+# leerer Konfiguration starten - der Wizard öffnet dann den Einstellungen-Tab.
+try {
+    $config = Import-VscWizardConfig -Path $script:ConfigPath
+} catch {
+    $config = @{}
+}
 
 function New-WizardLabel {
     param(
@@ -412,7 +446,7 @@ $btnCheckDirect.Add_Click({
     $form.Refresh()
 
     # In einem Start-Job, da DNS/RPC/certutil bei nicht erreichbaren Zielen hängen können.
-    $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+    $modulePath = $script:ModulePath
     $job = Start-Job -ScriptBlock {
         param($ModulePath, $CAConfig, $Server, $Timeout)
         Import-Module $ModulePath -Force
@@ -2687,7 +2721,7 @@ function Show-SettingsDialog {
         $txtDiscoverResultCfg.Text = 'Prüfe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...'
         $dlg.Refresh()
 
-        $modulePath = Join-Path $PSScriptRoot 'modules\VscWizard.Core.psm1'
+        $modulePath = $script:ModulePath
         $domainHint = Get-TextBoxRealValue -TextBox $txtCfgDomain
         $job = Start-Job -ScriptBlock {
             param($ModulePath, $DomainHint, $Timeout)
