@@ -63,13 +63,30 @@
    `dsregcmd`/CKT-Status; oder schlicht Ja/Nein-Abfrage „reiner Cloud-Account
    (Entra-only)?". (Vorarbeit im AD ist bereits geleistet; Offline-Template
    vorhanden und erprobt.)
-2. **Szenario-02-Text geradeziehen:** „abgelaufen" ist **kein** harter Blocker
-   (Passwort/RDP-Weg funktioniert); RDP-**Ziel** = domänen-gebundener Einreich-Host
-   (DC/Member) als Zielkonto, **nicht** eine weitere EJ-Kiste.
+2. **Direkt-Weg für separates Konto ohne EA (Offline-Template).** Noch offen und der
+   eigentliche Grund für „trotz CA-Sicht nur Plan B": Für ein **separates** Konto
+   bietet das Tool nur EA→Plan A oder Plan B/RDP. Der **dritte** Weg — als
+   **beliebiger Enroll-berechtigter AD-Account** direkt bei der CA einreichen, mit
+   **Supply-in-request/Offline-Template** und der **Ziel-UPN im CSR** — fehlt noch als
+   geführter Zweig (genau das, was den Cloud-GA-Fall möglich gemacht hat). Sinnvoll
+   zu koppeln mit Backlog #1.
 3. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
    (aktuell reicht `-WindowStyle Hidden`).
 4. *(Optional)* **Echtes Renew** (RenewalCert, gleicher Schlüssel) als Experiment.
 5. *(Optional/zurückgestellt)* **Accordion-/aufklappbare Schritte** in der UI.
+
+## Zuletzt erledigt (Ergänzung)
+
+- **Startseite erkennt die Umgebung** (`Get-EnvironmentCapabilities`): Banner mit
+  Join/TPM/On-Prem-TGT/VSC-Anzahl/EA; **unpassende Szenarien werden ausgegraut**
+  (02 ohne VSC, 03 ohne TGT&ohne AD-Join, 06 ohne EA-Zert) — mit Klartext-Begründung,
+  „Weiter" dann blockiert. Entra-joined **mit** CKT hat ein TGT → 03 bleibt aktiv.
+- **Szenario-02-Text geradegezogen:** „Zertifikat erneuern (Neuausstellung auf
+  bestehende VSC)"; kein „VOR ABLAUF"/„kein Chain"-Blocker mehr — funktioniert auch
+  bei abgelaufenem Zertifikat (die VSC läuft nie ab, nur das Zertifikat darauf).
+- **Robuster Start** (PS2EXE): Basisverzeichnis über Prozesspfad-Fallback; klare
+  Fehlermeldung statt „Import-VscWizardConfig unbekannt"-Kaskade, wenn `modules\`/
+  `config.psd1` fehlen (z.B. EXE ohne Beiwerk / OneDrive-Platzhalter).
 
 ## Betriebs-Reminder
 
