@@ -507,6 +507,42 @@ certutil -ping      : $(if ($caConfigEffective) { if ($pingOk) { 'ok' } else { '
     }
 }
 
+function Get-EnvironmentCapabilities {
+    # Schnelle, rein LOKALE Momentaufnahme der Umgebung fuer die Startseite - bewusst
+    # OHNE langsame Netz-/CA-Pings (die misst 'Direkt-Einreichung pruefen' bzw. der
+    # Szenario-3-Ablauf selbst). Dient dazu, auf der Szenario-Auswahl die Punkte
+    # auszugrauen, die HIER definitiv nicht funktionieren koennen. Alles hier ist
+    # sub-sekunden schnell (dsregcmd/CIM, klist, Get-Tpm, PnP, Zertifikatsspeicher).
+    $join = Get-DomainJoinState
+    $tpm  = Test-TpmReadiness
+
+    # On-Prem-Kerberos-TGT? (Ground Truth einer authentifizierbaren AD-Identitaet -
+    # ein Entra-joined Client MIT Cloud Kerberos Trust hat eins, ein reiner
+    # Cloud-/Workgroup-Kontext nicht.)
+    $hasTgt = $false; $realm = $null
+    try {
+        $kl = (& klist 2>$null) -join "`n"
+        $m = [regex]::Match($kl, 'krbtgt/([A-Za-z0-9._-]+)')
+        if ($m.Success) { $hasTgt = $true; $realm = $m.Groups[1].Value }
+    } catch { }
+
+    $vscCount = 0
+    try { $vscCount = @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName }).Count } catch { }
+    $eaCount = 0
+    try { $eaCount = @(Get-EnrollmentAgentCertificates).Count } catch { }
+
+    return [pscustomobject]@{
+        JoinMode     = $join.Mode
+        Domain       = $join.Domain
+        TpmPresent   = $tpm.Present
+        TpmReady     = $tpm.Ready
+        HasOnPremTgt = $hasTgt
+        Realm        = $realm
+        VscCount     = $vscCount
+        EaCertCount  = $eaCount
+    }
+}
+
 #endregion
 
 #region Virtuelle Smartcard

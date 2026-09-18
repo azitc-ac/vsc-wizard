@@ -560,14 +560,14 @@ $script:Scenarios = @(
         Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Passwort ist einmaliger Bootstrap. VSC dort erstellen, wo sie genutzt wird.' }
     }
     [pscustomobject]@{
-        Id = 2; Title = 'Zertifikat verlängern'; Sub = 'GEFÜHRT - VOR ABLAUF   Erneuerung über eine noch gültige VSC, ohne Passwort.'; Stripe = 'blue'
+        Id = 2; Title = 'Zertifikat erneuern (Neuausstellung auf bestehende VSC)'; Sub = 'GEFÜHRT   Frisches Zertifikat auf eine vorhandene VSC - technisch eine Neuausstellung, KEIN echtes Renewal.'; Stripe = 'blue'
         Steps = @(
-            [pscustomobject]@{ T = 'Tool'; X = 'Vorhandene VSC + Zertifikat erkennen, Restlaufzeit anzeigen.' }
-            [pscustomobject]@{ T = 'Du';   X = 'Mit gültiger Karte anmelden (Smartcard-Redirect, kein Passwort).' }
-            [pscustomobject]@{ T = 'Tool'; X = 'Neuen CSR erzeugen und einreichen.' }
-            [pscustomobject]@{ T = 'Tool'; X = 'Neues Zertifikat auf die bestehende VSC übernehmen.' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Vorhandene VSC + Zertifikat erkennen, Restlaufzeit anzeigen. Konto wird aus dem Kartenzertifikat (SAN-UPN) abgeleitet.' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Neuen Schlüssel auf der Karte + CSR erzeugen (certreq -new).' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Einreichung als dieses Konto: eigenes Konto direkt/Smartcard, Fremdkonto per EOBO (EA-Cert) oder RDP.' }
+            [pscustomobject]@{ T = 'Tool'; X = 'Neues Zertifikat auf die bestehende VSC übernehmen; alte(s) danach optional entfernen.' }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'Bereits abgelaufen -> kein Chain möglich -> Szenario 01 (Bootstrap).' }
+        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Kein echtes Renewal (neuer Schlüssel/Cert). Funktioniert AUCH bei bereits abgelaufenem Zertifikat - die VSC selbst läuft nie ab, nur das Zertifikat darauf.' }
     }
     [pscustomobject]@{
         Id = 3; Title = 'VSC für dieses Konto direkt ausstellen'; Sub = 'AUTOMATISIERT   Geradliniger Weg, wenn die CA von hier erreichbar ist.'; Stripe = 'green'
@@ -606,6 +606,9 @@ $script:Scenarios = @(
     }
 )
 $script:SelectedScenario = $null
+$script:EnvCaps = $null
+$script:ScnAvailable = @{}   # Id -> [bool] ob HIER moeglich
+$script:ScnReason    = @{}   # Id -> Klartext, warum nicht
 
 $pnlScenario = New-Object System.Windows.Forms.Panel
 $pnlScenario.Dock = 'Fill'
@@ -614,7 +617,7 @@ $pnlContentArea.Controls.Add($pnlScenario)
 
 $scnRoot = New-Object System.Windows.Forms.TableLayoutPanel
 $scnRoot.Dock = 'Fill'; $scnRoot.ColumnCount = 1; $scnRoot.RowCount = 2
-[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 76)))
+[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 100)))
 [void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $pnlScenario.Controls.Add($scnRoot)
 
@@ -629,7 +632,10 @@ $lblScnSub.ForeColor = [System.Drawing.Color]::DimGray
 $lblScnValidation = New-WizardLabel -Text '' -X 16 -Y 42 -Width 760
 $lblScnValidation.ForeColor = [System.Drawing.Color]::Firebrick
 $lblScnValidation.Visible = $false
-$scnHeader.Controls.AddRange(@($lblScnTitle, $lblScnSub, $lblScnValidation))
+# Umgebungs-Banner: was der Wizard HIER erkannt hat (Join, TPM, On-Prem-TGT, VSCs, EA).
+$lblScnEnv = New-WizardLabel -Text '' -X 16 -Y 68 -Width 900 -Height 22
+$lblScnEnv.ForeColor = [System.Drawing.Color]::FromArgb(42, 128, 145)
+$scnHeader.Controls.AddRange(@($lblScnTitle, $lblScnSub, $lblScnValidation, $lblScnEnv))
 
 $scnSplit = New-Object System.Windows.Forms.TableLayoutPanel
 $scnSplit.Dock = 'Fill'; $scnSplit.ColumnCount = 2; $scnSplit.RowCount = 1
@@ -689,9 +695,34 @@ function Select-ScenarioById {
     foreach ($row in $scnList.Controls) {
         if ([int]$row.Tag -eq $Id) { $row.BackColor = $scnSelColor } else { $row.BackColor = [System.Drawing.SystemColors]::Window }
     }
+    # Ausgegraute (unpassende) Kacheln wieder in Control-Grau statt Window-Weiss.
+    Update-ScenarioRowColors
     Set-ScenarioDetails -Scenario ($script:Scenarios | Where-Object { $_.Id -eq $Id })
-    $lblScnValidation.Visible = $false
-    $lblScnSub.Visible = $true
+
+    $available = $true
+    if ($script:ScnAvailable.ContainsKey($Id)) { $available = [bool]$script:ScnAvailable[$Id] }
+    if ($available) {
+        $lblScnValidation.Visible = $false
+        $lblScnSub.Visible = $true
+        $btnNextShared.Enabled = $true
+    } else {
+        $lblScnSub.Visible = $false
+        $lblScnValidation.Text = "Hier nicht möglich: $($script:ScnReason[$Id])"
+        $lblScnValidation.Visible = $true
+        $btnNextShared.Enabled = $false   # Weiter blockiert, Begruendung steht oben
+    }
+}
+
+function Update-ScenarioRowColors {
+    # Nur die Hintergrundfarbe der NICHT ausgewaehlten Kacheln setzen: unpassende grau,
+    # passende weiss. Die ausgewaehlte Kachel behaelt ihre Auswahlfarbe.
+    foreach ($row in $scnList.Controls) {
+        $id = [int]$row.Tag
+        if ($id -eq $script:SelectedScenario) { continue }
+        $ok = $true
+        if ($script:ScnAvailable.ContainsKey($id)) { $ok = [bool]$script:ScnAvailable[$id] }
+        $row.BackColor = if ($ok) { [System.Drawing.SystemColors]::Window } else { [System.Drawing.SystemColors]::Control }
+    }
 }
 
 # Gemeinsamer Klick-Handler: liest die Szenario-Id aus .Tag des angeklickten Controls.
@@ -740,6 +771,69 @@ $scnResize = {
 }
 $scnList.Add_SizeChanged($scnResize)
 
+function Get-ScenarioAvailability {
+    # Entscheidet KAPAZITAETSBASIERT (nicht per Join-Heuristik), ob ein Szenario HIER
+    # ueberhaupt funktionieren kann. Nur SICHERE, lokal messbare Ausschluesse grauen aus -
+    # im Zweifel bleibt ein Szenario aktiv (die Feinpruefung passiert dann im Ablauf).
+    param($Caps, [int]$Id)
+    switch ($Id) {
+        2 {
+            if ($Caps.VscCount -lt 1) {
+                return [pscustomobject]@{ Available = $false; Reason = 'Auf diesem Gerät wurde keine virtuelle Smartcard gefunden - es gibt nichts zu verlängern. Für die Erstausstellung Szenario 01 (Bootstrap) oder 03 (direkt).' }
+            }
+        }
+        3 {
+            # Direkt-Einreichung braucht eine authentifizierbare On-Prem-AD-Identität:
+            # ein TGT (klist) ODER ein AD-Domain-Join (dort ist die Identität gesetzt,
+            # auch wenn klist gerade leer scheint). Reiner Entra-ohne-CKT / Workgroup: nein.
+            if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
+                return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - ohne authentifizierbare AD-Identität kann von hier NICHT direkt bei der CA eingereicht werden. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus. Ohne das: Bootstrap/RDP-Weg (Szenario 01).' }
+            }
+        }
+        6 {
+            if ($Caps.EaCertCount -lt 1) {
+                return [pscustomobject]@{ Available = $false; Reason = 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (Bootstrap, per RDP als Zielkonto).' }
+            }
+        }
+    }
+    return [pscustomobject]@{ Available = $true; Reason = $null }
+}
+
+function Update-ScenarioAvailability {
+    # Frische Umgebungs-Momentaufnahme holen, Banner setzen und die Kacheln entsprechend
+    # aktivieren/ausgrauen. Wird bei jedem Anzeigen der Startseite aufgerufen, damit z.B.
+    # eine neu erstellte VSC oder ein frisch geholtes TGT sofort beruecksichtigt wird.
+    $caps = Get-EnvironmentCapabilities
+    $script:EnvCaps = $caps
+
+    foreach ($scn in $script:Scenarios) {
+        $av = Get-ScenarioAvailability -Caps $caps -Id $scn.Id
+        $script:ScnAvailable[$scn.Id] = $av.Available
+        $script:ScnReason[$scn.Id]    = $av.Reason
+    }
+
+    foreach ($row in $scnList.Controls) {
+        $id = [int]$row.Tag
+        $ok = $true
+        if ($script:ScnAvailable.ContainsKey($id)) { $ok = [bool]$script:ScnAvailable[$id] }
+        foreach ($c in $row.Controls) {
+            if ($c -is [System.Windows.Forms.Label]) {
+                if ($ok) {
+                    $c.ForeColor = if ($c.Font.Bold) { [System.Drawing.SystemColors]::WindowText } else { [System.Drawing.Color]::DimGray }
+                } else {
+                    $c.ForeColor = [System.Drawing.Color]::FromArgb(170, 170, 170)
+                }
+            }
+        }
+        if (-not $ok -and $id -ne $script:SelectedScenario) { $row.BackColor = [System.Drawing.SystemColors]::Control }
+        elseif ($id -ne $script:SelectedScenario) { $row.BackColor = [System.Drawing.SystemColors]::Window }
+    }
+
+    $tpmText = if ($caps.TpmPresent) { if ($caps.TpmReady) { 'TPM bereit' } else { 'TPM vorhanden (nicht bereit)' } } else { 'kein TPM' }
+    $tgtText = if ($caps.HasOnPremTgt) { "On-Prem-TGT: ja$(if ($caps.Realm) { " ($($caps.Realm))" })" } else { 'On-Prem-TGT: nein' }
+    $lblScnEnv.Text = "Hier erkannt:  $($caps.JoinMode)  ·  $tpmText  ·  $tgtText  ·  VSCs: $($caps.VscCount)  ·  EA-Zert: $($caps.EaCertCount)  (ausgegraute Punkte sind hier nicht möglich)"
+}
+
 function Show-ScenarioStep {
     $script:ActivePlan = 'SCEN'
     $script:PlanA_RenewMode = $false
@@ -751,7 +845,14 @@ function Show-ScenarioStep {
     & $scnResize
     $lblGlobalStep.Text = 'Schritt 1: Szenario'
     $btnBackShared.Enabled = $false
-    $btnNextShared.Enabled = $true
+    Update-ScenarioAvailability   # Umgebung neu erkennen + unpassende Punkte ausgrauen
+    if ($script:SelectedScenario) {
+        # War ein (jetzt evtl. nicht mehr passendes) Szenario gewaehlt: Auswahlzustand
+        # inkl. Weiter-Button/Begruendung konsistent neu setzen.
+        Select-ScenarioById -Id $script:SelectedScenario
+    } else {
+        $btnNextShared.Enabled = $true
+    }
 }
 
 function Enter-Plan {
@@ -1027,6 +1128,13 @@ function Invoke-ScenarioNextClick {
     if (-not $script:SelectedScenario) {
         $lblScnSub.Visible = $false
         $lblScnValidation.Text = 'Bitte ein Szenario auswählen.'
+        $lblScnValidation.Visible = $true
+        return
+    }
+    # Sicherheitsnetz: ausgegraute (hier nicht mögliche) Szenarien nicht starten.
+    if ($script:ScnAvailable.ContainsKey($script:SelectedScenario) -and -not $script:ScnAvailable[$script:SelectedScenario]) {
+        $lblScnSub.Visible = $false
+        $lblScnValidation.Text = "Hier nicht möglich: $($script:ScnReason[$script:SelectedScenario])"
         $lblScnValidation.Visible = $true
         return
     }
