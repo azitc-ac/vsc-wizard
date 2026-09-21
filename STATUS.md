@@ -58,6 +58,17 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   Einreicher = beliebiger **Enroll-berechtigter AD-Account**.
   - Sicherheitsnuance (ESC1-Geschmack): wer enrollen darf, kann jede UPN prägen →
     Template **zusperren** (enge Enroll-ACL, ggf. Manager-Approval).
+- **WICHTIG — Offline-Template taugt NICHT für On-Prem-Smartcard-Logon.** Der KDC
+  (PKINIT) verlangt seit **KB5014754** (Full Enforcement default seit Feb 2025) eine
+  **starke** Zert-zu-Konto-Zuordnung. Die kommt aus der **SID-Erweiterung**
+  `szOID_NTDS_CA_SECURITY_EXT` (1.3.6.1.4.1.311.25.2), die die CA **nur bei
+  Build-from-AD** einbettet (Submit *als* Zielkonto, oder EOBO). Supply-in-request
+  bettet keine (bzw. die falsche = Einreicher-)SID ein → schwache/keine Zuordnung →
+  **Logon abgelehnt**. UPN-im-SAN allein reicht nicht mehr. → **On-Prem-Konten:
+  EOBO (06) oder Bootstrap/RDP (01).** **Entra CBA (Cloud):** braucht keine AD-SID,
+  mappt per UPN/Binding + vertraut der CA-Kette → Offline-Template ist DER Weg.
+  (Escape-Hatch für On-Prem-Offline-Certs: manuell **starke** `altSecurityIdentities`
+  am Zielkonto setzen — X509 Issuer+Serial / SKI / SHA1-PublicKey; noch nicht im Tool.)
 - **CBA-Stolperstein:** CRL/CDP muss für **Entra erreichbar** sein (On-Prem-CDP ist
   oft nur intern) → sonst kann der CBA-Login an der Sperrprüfung scheitern.
   Binding **UPN → userPrincipalName**, MFA-Stufe passend setzen.
@@ -72,11 +83,13 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
    `dsregcmd`/CKT-Status; oder schlicht Ja/Nein-Abfrage „reiner Cloud-Account
    (Entra-only)?". (Vorarbeit im AD ist bereits geleistet; Offline-Template
    vorhanden und erprobt.)
-2. **[ERLEDIGT] Direkt-Weg für separates Konto ohne EA (Offline-Template).** Umgesetzt
-   als **Szenario 07 „Direkt für ein anderes Konto (Offline-Template)"**: als DU direkt
-   einreichen, Ziel-Subject/UPN im CSR (Supply-in-request), kein EA/RDP, auch für
-   cloud-only Ziele (Entra CBA). Template kommt aus `config.OfflineTemplate` (leer →
-   im Ablauf tippbar). Offene Anschlusspunkte siehe #1 (cloud-only-Auto-Erkennung) und
+2. **[ERLEDIGT, korrigiert] Offline-Template-Direktzweig = NUR Entra CBA / Cloud.**
+   Szenario 07 (jetzt „Cloud-Konto: Zertifikat für Entra CBA (Offline-Template)"):
+   als DU direkt einreichen, Ziel-UPN im CSR (Supply-in-request), kein EA/RDP. **Nur
+   für Cloud/CBA** — NICHT für On-Prem-Logon (SID-Zuordnung/KB5014754, siehe oben).
+   Template aus `config.OfflineTemplate` (leer → im Ablauf tippbar).
+   *Offener Follow-up:* On-Prem-Offline via **altSecurityIdentities** (starke Bindung
+   am Zielkonto schreiben) als optionaler, expliziter Zweig. Siehe #1 (cloud-only-Auto-Erkennung) und
    Follow-ups unten.
 3. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
    (aktuell reicht `-WindowStyle Hidden`).

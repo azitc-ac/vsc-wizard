@@ -713,15 +713,16 @@ $script:Scenarios = @(
         Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-äquivalent. Für Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
     }
     [pscustomobject]@{
-        Id = 7; Title = 'Direkt für ein anderes Konto (Offline-Template)'; Sub = 'FORTGESCHRITTEN   Ohne EA, ohne RDP: du reichst als DU direkt ein, Ziel-UPN steht im CSR.'; Stripe = 'red'
+        Id = 7; Title = 'Cloud-Konto: Zertifikat für Entra CBA (Offline-Template)'; Sub = 'FORTGESCHRITTEN - NUR CLOUD   Für Entra CBA / cloud-only: als DU einreichen, Ziel-UPN im CSR. NICHT für On-Prem-Logon.'; Stripe = 'red'
         Steps = @(
-            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto/UPN angeben (on-prem ODER cloud-only, z.B. für Entra CBA).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'VSC erstellen (oder vorhandene nutzen), PIN vergeben.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-Subject + SAN-UPN erzeugen (Supply-in-request).' }
-            [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt bei der CA einreichen - als DU (brauchst Enroll-Recht auf dem Offline-Template).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'Ausgestelltes Zertifikat auf die VSC übernehmen.' }
+            [pscustomobject]@{ T = 'Du';       X = 'Cloud-Zielkonto/UPN angeben (Entra, z.B. gadmin@contoso.onmicrosoft.com).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'VSC (oder YubiKey/PIV) als Schlüsselträger, PIN vergeben.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-UPN im SAN erzeugen (Supply-in-request/Offline-Template).' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Als DU direkt bei der CA einreichen (Enroll-Recht auf dem Offline-Template).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'Zertifikat auf die VSC übernehmen.' }
+            [pscustomobject]@{ T = 'Du';       X = 'In Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe Szenario 04/RUNBOOK).' }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC1-Geschmack: Supply-in-request + SAN lässt JEDE UPN prägen. Nur mit zugesperrtem Template (enge Enroll-ACL, ggf. Manager-Approval) verwenden.' }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: EOBO (Szenario 06) oder Bootstrap/RDP (Szenario 01) - die bauen aus dem AD und betten die SID ein. Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).' }
     }
 )
 $script:SelectedScenario = $null
@@ -1308,11 +1309,11 @@ function Invoke-ScenarioNextClick {
             # Direkt für ein anderes Konto per Offline-Template: als DU einreichen, die
             # Ziel-UPN steht im CSR (Supply-in-request). KEIN EA, KEIN RDP. Funktioniert
             # auch für cloud-only Ziele (Entra CBA) - dann ist das "Konto" die Entra-UPN.
-            $acct = Show-AccountInputDialog -Prompt 'Zielkonto/UPN (on-prem oder cloud-only, z.B. gadmin@contoso.onmicrosoft.com):'
+            $acct = Show-AccountInputDialog -Prompt 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):'
             if (-not $acct) { return }
             $script:TargetAccount = $acct
             $script:PlanA_OfflineDirect = $true
-            [System.Windows.Forms.MessageBox]::Show("Direkt-Ausstellung für $acct über das Offline-Template:`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Offline-/Supply-in-request-Template).`r`n- Subject + SAN-UPN des Ziels stehen im CSR.`r`n- Funktioniert auch für cloud-only Ziele (Entra CBA).`r`n`r`nIn Schritt 3 das Offline-Template wählen/eintragen.", 'Offline-Template - Direktausstellung', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("Zertifikat für $acct über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID im Zertifikat (starke Zuordnung, KB5014754). Für On-Prem-Konten stattdessen Szenario 06 (EOBO) oder 01 (Bootstrap/RDP).`r`n`r`nIn Schritt 3 das Offline-Template wählen/eintragen.", 'Offline-Template - nur Entra CBA', 'OK', 'Information') | Out-Null
             Enter-Plan -Plan 'A'
         }
     }
