@@ -85,6 +85,14 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Zuletzt erledigt (Ergänzung)
 
+- **Start-Splash mit Fortschritt:** kleiner Splash beim Start (Modul laden →
+  Konfiguration → Oberfläche → Umgebung erkennen → Fertig), schließt sich, sobald das
+  Hauptfenster erscheint. Kein „Blackbox"-Start mehr.
+- **Plan-A-Status-Schritt entfernt** (Geschwister zur Join-Heuristik): die frühere
+  „Schritt: Status"-Seite prüfte redundant, was schon beim Start erkannt wird, und
+  zeigte die falsche „nicht domänen-gebunden → Plan B"-Warnung (auch bei EntraJoined+CKT).
+  Plan A startet jetzt direkt bei „VSC erstellen" (Verlängern bei „Zertifikat anfordern");
+  Schrittnummern angepasst. Plan-B-Status bleibt (zeigt RDP-Ziel, keine Fehlwarnung).
 - **Szenario 07 „Direkt für ein anderes Konto (Offline-Template)"**: als DU direkt bei
   der CA einreichen, Ziel-Subject/UPN im CSR (Supply-in-request), **kein EA, kein RDP**;
   funktioniert auch für **cloud-only** Ziele (Entra CBA). Nutzt `config.OfflineTemplate`

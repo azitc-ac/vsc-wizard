@@ -25,6 +25,76 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
+# --- Splash / Start-Fortschritt ---------------------------------------------------
+# Der Start dauert mehrere Sekunden (Modul laden, Fenster bauen, Umgebung erkennen via
+# TPM/Kerberos/PnP/Zertifikatsspeicher). Ohne Rueckmeldung wirkt das wie eine Blackbox.
+# Deshalb sofort einen kleinen Splash zeigen und an den Meilensteinen aktualisieren.
+function Show-SplashScreen {
+    $sp = New-Object System.Windows.Forms.Form
+    $sp.FormBorderStyle = 'None'
+    $sp.StartPosition = 'CenterScreen'
+    $sp.Size = New-Object System.Drawing.Size(440, 168)
+    $sp.BackColor = [System.Drawing.Color]::FromArgb(30, 40, 55)
+    $sp.TopMost = $true
+    $sp.ShowInTaskbar = $false
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = 'VSC-Wizard'
+    $title.ForeColor = [System.Drawing.Color]::White
+    $title.Font = New-Object System.Drawing.Font('Segoe UI', 18, [System.Drawing.FontStyle]::Bold)
+    $title.Location = New-Object System.Drawing.Point(24, 20)
+    $title.Size = New-Object System.Drawing.Size(392, 34)
+    $sp.Controls.Add($title)
+
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = 'Virtuelle Smartcards & Zertifikate'
+    $sub.ForeColor = [System.Drawing.Color]::FromArgb(150, 170, 190)
+    $sub.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $sub.Location = New-Object System.Drawing.Point(26, 58)
+    $sub.Size = New-Object System.Drawing.Size(392, 20)
+    $sp.Controls.Add($sub)
+
+    $status = New-Object System.Windows.Forms.Label
+    $status.Text = 'Starte...'
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(210, 220, 230)
+    $status.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $status.Location = New-Object System.Drawing.Point(26, 96)
+    $status.Size = New-Object System.Drawing.Size(392, 20)
+    $sp.Controls.Add($status)
+
+    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar.Location = New-Object System.Drawing.Point(26, 124)
+    $bar.Size = New-Object System.Drawing.Size(388, 14)
+    $bar.Minimum = 0; $bar.Maximum = 100; $bar.Value = 5
+    $sp.Controls.Add($bar)
+
+    $script:Splash = $sp
+    $script:SplashStatus = $status
+    $script:SplashBar = $bar
+    $sp.Show()
+    $sp.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+    return $sp
+}
+
+function Update-Splash {
+    param([string]$Text, [int]$Percent = -1)
+    if (-not $script:Splash -or $script:Splash.IsDisposed) { return }
+    if ($Text) { $script:SplashStatus.Text = $Text }
+    if ($Percent -ge 0) { $script:SplashBar.Value = [Math]::Min(100, [Math]::Max(0, $Percent)) }
+    $script:Splash.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Close-Splash {
+    if ($script:Splash -and -not $script:Splash.IsDisposed) {
+        $script:Splash.Close(); $script:Splash.Dispose()
+    }
+    $script:Splash = $null
+}
+
+$null = Show-SplashScreen
+
 # Basisverzeichnis robust bestimmen - MUSS sowohl als .ps1 (dann $PSScriptRoot) als
 # auch als PS2EXE-.exe funktionieren. In einer PS2EXE-Exe ist $PSScriptRoot je nach
 # Version LEER; dann liefert der Prozesspfad (die .exe selbst) das richtige Verzeichnis.
@@ -39,8 +109,10 @@ if (-not $script:BaseDir) {
 }
 if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
 
+Update-Splash -Text 'Kernmodul laden...' -Percent 25
 $script:ModulePath = Join-Path $script:BaseDir 'modules\VscWizard.Core.psm1'
 if (-not (Test-Path $script:ModulePath)) {
+    Close-Splash
     [System.Windows.Forms.MessageBox]::Show(
         "Das Kernmodul wurde nicht gefunden:`r`n$script:ModulePath`r`n`r`nDie Datei/EXE braucht den Ordner 'modules\' UND 'config.psd1' DIREKT DANEBEN.`r`n`r`nSo startest du richtig:`r`n - Aus dem geklonten Repo: VscWizard.bat doppelklicken (nicht eine einzelne .exe kopieren).`r`n - Als EXE: '.\build.ps1' ausführen und die EXE aus 'dist\' zusammen mit dem dort erzeugten Ordner 'modules\' und 'config.psd1' verwenden.",
         'VSC-Wizard - Start fehlgeschlagen', 'OK', 'Error') | Out-Null
@@ -49,12 +121,14 @@ if (-not (Test-Path $script:ModulePath)) {
 try {
     Import-Module $script:ModulePath -Force -ErrorAction Stop
 } catch {
+    Close-Splash
     [System.Windows.Forms.MessageBox]::Show(
         "Das Kernmodul konnte nicht geladen werden:`r`n$($_.Exception.Message)`r`n`r`nPfad: $script:ModulePath",
         'VSC-Wizard - Start fehlgeschlagen', 'OK', 'Error') | Out-Null
     exit 1
 }
 
+Update-Splash -Text 'Konfiguration lesen...' -Percent 40
 $script:ConfigPath = Join-Path $script:BaseDir 'config.psd1'
 # Fehlt config.psd1 (z.B. nur die EXE ohne Beiwerk kopiert), NICHT abstürzen: mit
 # leerer Konfiguration starten - der Wizard öffnet dann den Einstellungen-Tab.
@@ -63,6 +137,7 @@ try {
 } catch {
     $config = @{}
 }
+Update-Splash -Text 'Oberfläche wird aufgebaut...' -Percent 55
 
 function New-WizardLabel {
     param(
@@ -1019,7 +1094,7 @@ function Enter-PlanARenewal {
     $script:ActivePlan = 'A'
     $tabPlanA.Visible = $true
     Set-PlanATemplateForMode
-    Show-PlanAStep -Index 2
+    Show-PlanAStep -Index 1   # "Zertifikat anfordern" (Status/Erstellen übersprungen)
 }
 
 function Enter-PlanBRenewal {
@@ -1290,8 +1365,14 @@ $pnlStepsA.Dock = 'Fill'
 $tabPlanA.Controls.Add($pnlStepsA)
 
 # --- Schritt A1: Status ---
+# Frueherer "Status/Prüfung"-Schritt (pnlA1). Bewusst NICHT mehr im Ablauf: die
+# Umgebung wird bereits beim Start erkannt (Get-EnvironmentCapabilities), und dass das
+# Szenario auf der Startseite nicht ausgegraut ist, IST der Nachweis der Eignung - eine
+# zweite Prüfung hier waere redundant (und zeigte frueher sogar eine falsche
+# "Plan B"-Heuristikwarnung). Panel bleibt definiert, wird aber nie angezeigt.
 $pnlA1 = New-Object System.Windows.Forms.Panel
 $pnlA1.Dock = 'Fill'
+$pnlA1.Visible = $false
 $pnlStepsA.Controls.Add($pnlA1)
 
 $lblJoinStateA = New-WizardLabel -Text 'Domänen-Status: ...' -X 20 -Y 20
@@ -1580,7 +1661,7 @@ $btnResetA.Add_Click({
         $tabPlanA.Visible = $false
         Show-ScenarioStep
     } else {
-        Show-PlanAStep -Index 1
+        Show-PlanAStep -Index 0   # "VSC erstellen" (erster Schritt nach Entfall von Status)
     }
 })
 
@@ -1593,7 +1674,7 @@ $btnStartA.Add_Click({
 })
 
 # --- Navigation Plan A ---
-$planAStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'Zertifikat anfordern', 'Zusammenfassung')
+$planAStepTitles = @('Virtuelle Smartcard erstellen', 'Zertifikat anfordern', 'Zusammenfassung')
 
 function Update-PlanAStatus {
     $joinState = Get-DomainJoinState
@@ -1623,54 +1704,54 @@ function Update-PlanAStatus {
 }
 
 function Show-PlanAStep {
+    # Schritte (Status-/Prüfungsschritt entfernt - siehe Kommentar bei $pnlA1):
+    #   0 = VSC erstellen, 1 = Zertifikat anfordern, 2 = Zusammenfassung.
     param([int]$Index)
-    $panels = @($pnlA1, $pnlA2, $pnlA3, $pnlA4)
+    $panels = @($pnlA2, $pnlA3, $pnlA4)
     for ($i = 0; $i -lt $panels.Count; $i++) {
         $panels[$i].Visible = ($i -eq $Index)
     }
     $script:PlanACurrentStep = $Index
-    # Globale Schrittnummer: +1, da Schritt 1 (Moduswahl) davor liegt.
+    # Globale Schrittnummer: +2, da Schritt 1 (Szenario) davor liegt.
     $lblGlobalStep.Text = "Schritt $($Index + 2) von $($panels.Count + 1): $($planAStepTitles[$Index])"
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
 
     switch ($Index) {
-        0 { Update-PlanAStatus }
-        2 {
+        1 {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
             $lblCardHintA.Text = if ($script:PlanA_PcscName) {
                 "➜ Im Windows-Kartenauswahl-Dialog die Karte `"$($script:PlanA_PcscName)`" wählen  (= '$($script:PlanA_CardName)')."
             } else { '' }
         }
-        3 { Update-PlanASummary }
+        2 { Update-PlanASummary }
     }
 }
 
 function Invoke-PlanANextClick {
     switch ($script:PlanACurrentStep) {
-        0 { Show-PlanAStep -Index 1 }
-        1 {
+        0 {
             if (-not $script:PlanA_VscCreated) {
                 [System.Windows.Forms.MessageBox]::Show('Bitte zuerst die virtuelle Smartcard erstellen.', 'Hinweis', 'OK', 'Warning') | Out-Null
                 return
             }
-            Show-PlanAStep -Index 2
+            Show-PlanAStep -Index 1
         }
-        2 {
+        1 {
             if (-not $script:PlanA_CertIssued) {
                 [System.Windows.Forms.MessageBox]::Show('Bitte zuerst das Zertifikat erfolgreich anfordern.', 'Hinweis', 'OK', 'Warning') | Out-Null
                 return
             }
-            Show-PlanAStep -Index 3
+            Show-PlanAStep -Index 2
         }
     }
 }
 
 function Invoke-PlanABackClick {
-    # Im Verlängern-Modus wurde direkt bei "Anfordern" (Index 2) eingestiegen - "Zurück"
-    # führt dort zur Szenario-Auswahl, nicht zum (übersprungenen) Erstellen-Schritt.
-    if ($script:PlanA_RenewMode -and $script:PlanACurrentStep -eq 2) {
+    # Im Verlängern-Modus wurde direkt bei "Anfordern" (jetzt Index 1) eingestiegen -
+    # "Zurück" führt dort zur Szenario-Auswahl, nicht zum (übersprungenen) Erstellen.
+    if ($script:PlanA_RenewMode -and $script:PlanACurrentStep -eq 1) {
         $tabPlanA.Visible = $false
         Show-ScenarioStep
         return
@@ -2978,7 +3059,9 @@ function Show-SettingsDialog {
 #region STARTUP
 # ============================================================================
 
+Update-Splash -Text 'Umgebung erkennen (TPM, Kerberos, Karten)...' -Percent 80
 Show-ScenarioStep
+Update-Splash -Text 'Fertig.' -Percent 100
 
 function Invoke-WizardResume {
     # Begonnenen Antrag aus einer frueheren Sitzung wieder aufnehmen (siehe
@@ -3009,7 +3092,7 @@ function Invoke-WizardResume {
         $script:PlanA_EnrollDir = $state['EnrollDir']
         $script:PlanA_PendingRequestId = $state['RequestId']
         $tabPlanA.Visible = $true
-        Show-PlanAStep -Index 2
+        Show-PlanAStep -Index 1   # "Zertifikat anfordern" (Retrieve-Button dort)
         $btnRetrieveA.Visible = $true
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
         $lblCertResultA.Text = "Fortgesetzter Antrag (RequestId $($state['RequestId'])) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde."
@@ -3035,6 +3118,10 @@ function Invoke-WizardResume {
     }
     Write-WizardLog -Message "Begonnener Antrag fortgesetzt (Plan $($state['Plan']), Stand: $stageText)." -Level Info
 }
+
+# Splash schliessen, sobald das Hauptfenster tatsächlich sichtbar ist (erster
+# Shown-Handler, laeuft vor Settings/Resume) - so gibt es keinen Moment ohne Fenster.
+$form.Add_Shown({ Close-Splash })
 
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($configIncomplete) {
