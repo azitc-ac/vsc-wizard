@@ -81,7 +81,16 @@ function Update-Splash {
     param([string]$Text, [int]$Percent = -1)
     if (-not $script:Splash -or $script:Splash.IsDisposed) { return }
     if ($Text) { $script:SplashStatus.Text = $Text }
-    if ($Percent -ge 0) { $script:SplashBar.Value = [Math]::Min(100, [Math]::Max(0, $Percent)) }
+    if ($Percent -ge 0) {
+        $p = [Math]::Min(100, [Math]::Max(0, $Percent))
+        $b = $script:SplashBar
+        # Der Standard-Progressbar ANIMIERT das Hochzaehlen (die Fuellung kriecht dem
+        # Zielwert langsam hinterher) - dadurch wirkte es "haengt bei 40, dann zack 100".
+        # Trick: kurz auf p+1 (bzw. p) und dann exakt auf p; das VERRINGERN laeuft ohne
+        # Animation und snappt die Anzeige sofort auf den echten Wert.
+        if ($p -lt 100) { $b.Value = $p + 1 } else { $b.Value = $p }
+        $b.Value = $p
+    }
     $script:Splash.Refresh()
     [System.Windows.Forms.Application]::DoEvents()
 }
@@ -1359,6 +1368,7 @@ Write-WizardLog -Message 'VSC-Wizard gestartet.' -Level Info
 # ============================================================================
 #region PLAN A TAB
 # ============================================================================
+Update-Splash -Text 'Plan A vorbereiten...' -Percent 62
 
 $pnlStepsA = New-Object System.Windows.Forms.Panel
 $pnlStepsA.Dock = 'Fill'
@@ -1769,6 +1779,7 @@ function Invoke-PlanABackClick {
 # ============================================================================
 #region PLAN B TAB
 # ============================================================================
+Update-Splash -Text 'Plan B vorbereiten...' -Percent 70
 
 $pnlStepsB = New-Object System.Windows.Forms.Panel
 $pnlStepsB.Dock = 'Fill'
@@ -2430,6 +2441,7 @@ $btnBackShared.Add_Click({
 # ============================================================================
 #region EINSTELLUNGEN-DIALOG (schrittunabhängig über den Button in der Kopfleiste erreichbar)
 # ============================================================================
+Update-Splash -Text 'Dialoge vorbereiten...' -Percent 76
 
 function Show-VscInventoryDialog {
     param([System.Windows.Forms.Form]$Owner)
@@ -3119,10 +3131,6 @@ function Invoke-WizardResume {
     Write-WizardLog -Message "Begonnener Antrag fortgesetzt (Plan $($state['Plan']), Stand: $stageText)." -Level Info
 }
 
-# Splash schliessen, sobald das Hauptfenster tatsächlich sichtbar ist (erster
-# Shown-Handler, laeuft vor Settings/Resume) - so gibt es keinen Moment ohne Fenster.
-$form.Add_Shown({ Close-Splash })
-
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($configIncomplete) {
     # Erst öffnen, sobald das Hauptfenster tatsächlich angezeigt wird (Shown-Event) -
@@ -3134,6 +3142,12 @@ if ($configIncomplete) {
     # pflegen sind; ebenfalls erst nach dem Shown-Event (modaler Dialog).
     $form.Add_Shown({ Invoke-WizardResume })
 }
+
+# Splash SICHER schliessen, BEVOR das Hauptfenster modal geoeffnet wird. NICHT aus dem
+# Shown-Event heraus schliessen: ein noch offenes TopMost-Fenster, das man mitten im
+# Shown disposed, kann die Aktivierung des Hauptfensters/der Folgedialoge stoeren
+# ("kein Dialog danach"). Die Luecke bis ShowDialog ist minimal.
+Close-Splash
 
 [void]$form.ShowDialog()
 
