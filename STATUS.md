@@ -83,10 +83,12 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
    `dsregcmd`/CKT-Status; oder schlicht Ja/Nein-Abfrage „reiner Cloud-Account
    (Entra-only)?". (Vorarbeit im AD ist bereits geleistet; Offline-Template
    vorhanden und erprobt.)
-2. **[ERLEDIGT, korrigiert] Offline-Template-Direktzweig = NUR Entra CBA / Cloud.**
-   Szenario 07 (jetzt „Cloud-Konto: Zertifikat für Entra CBA (Offline-Template)"):
-   als DU direkt einreichen, Ziel-UPN im CSR (Supply-in-request), kein EA/RDP. **Nur
-   für Cloud/CBA** — NICHT für On-Prem-Logon (SID-Zuordnung/KB5014754, siehe oben).
+2. **[ERLEDIGT, korrigiert, konsolidiert] Offline-Template-Direktzweig = NUR Entra CBA.**
+   Jetzt **Szenario 04 „Cloud-Konto (Entra CBA): Zertifikat auf VSC/YubiKey"** — das
+   frühere separate Szenario 07 wurde in 04 verschmolzen (04 war nur ein „in
+   Arbeit"-Platzhalter; 07 war die echte Umsetzung → jetzt EIN Cloud-Szenario, sechs
+   Szenarien insgesamt). Als DU direkt einreichen, Ziel-UPN im CSR (Supply-in-request),
+   kein EA/RDP. **Nur für Cloud/CBA** — NICHT für On-Prem-Logon (SID/KB5014754, siehe oben).
    Template aus `config.OfflineTemplate` (leer → im Ablauf tippbar).
    *Offener Follow-up:* On-Prem-Offline via **altSecurityIdentities** (starke Bindung
    am Zielkonto schreiben) als optionaler, expliziter Zweig. Siehe #1 (cloud-only-Auto-Erkennung) und
@@ -106,9 +108,9 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   zeigte die falsche „nicht domänen-gebunden → Plan B"-Warnung (auch bei EntraJoined+CKT).
   Plan A startet jetzt direkt bei „VSC erstellen" (Verlängern bei „Zertifikat anfordern");
   Schrittnummern angepasst. Plan-B-Status bleibt (zeigt RDP-Ziel, keine Fehlwarnung).
-- **Szenario 07 „Direkt für ein anderes Konto (Offline-Template)"**: als DU direkt bei
-  der CA einreichen, Ziel-Subject/UPN im CSR (Supply-in-request), **kein EA, kein RDP**;
-  funktioniert auch für **cloud-only** Ziele (Entra CBA). Nutzt `config.OfflineTemplate`
+- **Szenario 04+07 konsolidiert** → ein Cloud-Szenario „Cloud-Konto (Entra CBA):
+  Zertifikat auf VSC/YubiKey": als DU direkt bei der CA einreichen, Ziel-UPN im CSR
+  (Supply-in-request), **kein EA, kein RDP**; **nur** für Entra CBA/Cloud. Nutzt `config.OfflineTemplate`
   (leer → Template im Ablauf tippbar; Combo dann editierbar). Guard warnt vor ESC1
   (Template zusperren). Verfügbarkeit wie 03 (TGT/AD-Join nötig).
   - *Follow-up:* `OfflineTemplate` noch nicht im Einstellungen-Tab (nur in `config.psd1`);

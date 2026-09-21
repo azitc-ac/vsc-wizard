@@ -301,7 +301,7 @@ function Set-TemplateComboItem {
 function Set-PlanATemplateForMode {
     # Bereitet die Template-Auswahl in Plan A auf den aktuellen Modus vor.
     #  - Normal/EOBO/Verlängern: fest vorausgewähltes Standard-Template ($config.Template).
-    #  - Offline-Direkt (Szenario 07): das OFFLINE-/Supply-in-request-Template. Ist in der
+    #  - Offline-Direkt (Szenario 04, Cloud/Entra CBA): das OFFLINE-/Supply-in-request-Template. Ist in der
     #    Konfiguration keins hinterlegt, wird die Combo editierbar, damit der Name getippt
     #    werden kann (das Standard-Template waere hier das falsche - Build-from-AD).
     if ($script:PlanA_OfflineDirect) {
@@ -412,8 +412,8 @@ $script:PlanEntryFrom = 'Scenario'
 # "Anfordern"- bzw. Plan-B-"CSR"-Schritt wird wiederverwendet, das Erstellen uebersprungen.
 $script:PlanA_RenewMode = $false
 $script:PlanB_RenewMode = $false
-# Szenario 07: Direkt-Ausstellung für ein anderes Konto über ein Offline-/Supply-in-
-# request-Template (als DU einreichen, Ziel-UPN im CSR, kein EA/RDP).
+# Szenario 04 (Cloud-Konto / Entra CBA): Direkt-Ausstellung über ein Offline-/Supply-in-
+# request-Template (als DU einreichen, Ziel-UPN im CSR, kein EA/RDP). NUR Cloud/CBA.
 $script:PlanA_OfflineDirect = $false
 
 $tabPlanA = New-Object System.Windows.Forms.Panel
@@ -687,14 +687,17 @@ $script:Scenarios = @(
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 4; Title = 'Cloud-Global-Admin: Smartcard + VSC'; Sub = 'GEFÜHRT - ENTRA   Phishing-resistente Anmeldung: YubiKey (portabel) und VSC.'; Stripe = 'blue'
+        Id = 4; Title = 'Cloud-Konto (Entra CBA): Zertifikat auf VSC/YubiKey'; Sub = 'GEFÜHRT - NUR CLOUD   Entra CBA: als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'; Stripe = 'blue'
         Steps = @(
-            [pscustomobject]@{ T = 'Tool'; X = 'Teil A (lokal): Zertifikat auf YubiKey (PIV) und/oder VSC provisionieren.' }
-            [pscustomobject]@{ T = 'Du';   X = 'Teil B (CBA): ausstellende CA in den Entra-Vertrauensspeicher importieren.' }
-            [pscustomobject]@{ T = 'Du';   X = 'CBA aktivieren; Username-Binding; CRL öffentlich erreichbar.' }
-            [pscustomobject]@{ T = 'Du';   X = 'Alternative: FIDO2/Passkey auf demselben YubiKey (ohne PKI-in-Entra).' }
+            [pscustomobject]@{ T = 'Du';       X = 'Cloud-Zielkonto/UPN angeben (Entra, z.B. gadmin@contoso.onmicrosoft.com).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'VSC (oder YubiKey/PIV) als Schlüsselträger, PIN vergeben.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-UPN im SAN erzeugen (Supply-in-request/Offline-Template).' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Als DU direkt bei der CA einreichen (Enroll-Recht auf dem Offline-Template).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'Ausgestelltes Zertifikat auf die VSC übernehmen.' }
+            [pscustomobject]@{ T = 'Du';       X = 'In Entra: ausstellende CA importieren + CBA-Binding auf UPN, CRL öffentlich erreichbar (RUNBOOK).' }
+            [pscustomobject]@{ T = 'Du';       X = 'Alternative ganz ohne PKI: FIDO2/Passkey auf demselben YubiKey.' }
         )
-        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Geführter Ablauf folgt (in Arbeit) - Details im RUNBOOK.md.' }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: EOBO (Szenario 06) oder Bootstrap/RDP (Szenario 01). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).' }
     }
     [pscustomobject]@{
         Id = 5; Title = 'VSCs verwalten'; Sub = 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und löschen.'; Stripe = 'teal'
@@ -711,18 +714,6 @@ $script:Scenarios = @(
             [pscustomobject]@{ T = 'Tool'; X = 'Antrag co-signieren, einreichen, auf VSC übernehmen.' }
         )
         Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-äquivalent. Für Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
-    }
-    [pscustomobject]@{
-        Id = 7; Title = 'Cloud-Konto: Zertifikat für Entra CBA (Offline-Template)'; Sub = 'FORTGESCHRITTEN - NUR CLOUD   Für Entra CBA / cloud-only: als DU einreichen, Ziel-UPN im CSR. NICHT für On-Prem-Logon.'; Stripe = 'red'
-        Steps = @(
-            [pscustomobject]@{ T = 'Du';       X = 'Cloud-Zielkonto/UPN angeben (Entra, z.B. gadmin@contoso.onmicrosoft.com).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'VSC (oder YubiKey/PIV) als Schlüsselträger, PIN vergeben.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-UPN im SAN erzeugen (Supply-in-request/Offline-Template).' }
-            [pscustomobject]@{ T = 'Prüfung'; X = 'Als DU direkt bei der CA einreichen (Enroll-Recht auf dem Offline-Template).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'Zertifikat auf die VSC übernehmen.' }
-            [pscustomobject]@{ T = 'Du';       X = 'In Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe Szenario 04/RUNBOOK).' }
-        )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: EOBO (Szenario 06) oder Bootstrap/RDP (Szenario 01) - die bauen aus dem AD und betten die SID ein. Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).' }
     }
 )
 $script:SelectedScenario = $null
@@ -910,16 +901,18 @@ function Get-ScenarioAvailability {
                 return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - ohne authentifizierbare AD-Identität kann von hier NICHT direkt bei der CA eingereicht werden. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus. Ohne das: Bootstrap/RDP-Weg (Szenario 01).' }
             }
         }
+        4 {
+            # Cloud-Konto/Entra CBA: DU reichst direkt bei der On-Prem-CA ein - dafür
+            # braucht DEIN Konto eine authentifizierbare On-Prem-AD-Identität (wie 03).
+            # (Das ZIEL ist ein Cloud-Konto; der EINREICHER bist du und musst die CA
+            # erreichen.)
+            if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
+                return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - du musst als du selbst bei der On-Prem-CA einreichen können. Entra-joined mit Cloud Kerberos Trust hat ein TGT. Ohne das: von einem Rechner mit CA-Sicht ausstellen.' }
+            }
+        }
         6 {
             if ($Caps.EaCertCount -lt 1) {
                 return [pscustomobject]@{ Available = $false; Reason = 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (Bootstrap, per RDP als Zielkonto).' }
-            }
-        }
-        7 {
-            # Wie 03: die DIREKTE Einreichung erfolgt als DU - dafür braucht dein Konto
-            # eine authentifizierbare On-Prem-AD-Identität (TGT oder AD-Domain-Join).
-            if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
-                return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - für die direkte Einreichung als du selbst fehlt eine authentifizierbare AD-Identität. Entra-joined mit Cloud Kerberos Trust hat ein TGT. Ohne das: Bootstrap/RDP (Szenario 01).' }
             }
         }
     }
@@ -1294,7 +1287,15 @@ function Invoke-ScenarioNextClick {
             Enter-Plan -Plan 'A'
         }
         4 {
-            [System.Windows.Forms.MessageBox]::Show('Der geführte Cloud-GA-Ablauf (Entra CBA / FIDO2) ist noch in Arbeit. Die Schritte stehen als Checkliste im RUNBOOK.md. Für die lokale Zertifikats-/VSC-Ausstellung können vorerst die Szenarien 01-03 genutzt werden.', 'Cloud-Global-Admin (in Arbeit)', 'OK', 'Information') | Out-Null
+            # Cloud-Konto (Entra CBA): Zertifikat über das Offline-/Supply-in-request-
+            # Template ausstellen - als DU einreichen, Ziel-UPN im CSR. KEIN EA, KEIN RDP.
+            # NUR für Entra CBA/Cloud (kein On-Prem-Logon - SID/KB5014754, siehe Guard).
+            $acct = Show-AccountInputDialog -Prompt 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):'
+            if (-not $acct) { return }
+            $script:TargetAccount = $acct
+            $script:PlanA_OfflineDirect = $true
+            [System.Windows.Forms.MessageBox]::Show("Zertifikat für $acct über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n- Danach in Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe RUNBOOK). Alternative ganz ohne PKI: FIDO2/Passkey auf dem YubiKey.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID (starke Zuordnung, KB5014754). Für On-Prem-Konten stattdessen Szenario 06 (EOBO) oder 01 (Bootstrap/RDP).`r`n`r`nIn Schritt 3 das Offline-Template wählen/eintragen.", 'Cloud-Konto / Entra CBA', 'OK', 'Information') | Out-Null
+            Enter-Plan -Plan 'A'
         }
         5 { Show-VscInventoryDialog -Owner $form }
         6 {
@@ -1304,17 +1305,6 @@ function Invoke-ScenarioNextClick {
             $script:TargetAccount = $acct
             $script:PlanA_OfflineDirect = $false
             Enter-Plan -Plan (Get-ScenarioPlanForSeparateAccount)
-        }
-        7 {
-            # Direkt für ein anderes Konto per Offline-Template: als DU einreichen, die
-            # Ziel-UPN steht im CSR (Supply-in-request). KEIN EA, KEIN RDP. Funktioniert
-            # auch für cloud-only Ziele (Entra CBA) - dann ist das "Konto" die Entra-UPN.
-            $acct = Show-AccountInputDialog -Prompt 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):'
-            if (-not $acct) { return }
-            $script:TargetAccount = $acct
-            $script:PlanA_OfflineDirect = $true
-            [System.Windows.Forms.MessageBox]::Show("Zertifikat für $acct über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID im Zertifikat (starke Zuordnung, KB5014754). Für On-Prem-Konten stattdessen Szenario 06 (EOBO) oder 01 (Bootstrap/RDP).`r`n`r`nIn Schritt 3 das Offline-Template wählen/eintragen.", 'Offline-Template - nur Entra CBA', 'OK', 'Information') | Out-Null
-            Enter-Plan -Plan 'A'
         }
     }
 }
@@ -1482,13 +1472,13 @@ $pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequ
 $btnRequestCertA.Add_Click({
     # Fuer ein separates Zielkonto gibt es zwei direkte Wege:
     #  - EOBO (Enroll on Behalf Of): braucht ein EA-Zertifikat, Build-from-AD.
-    #  - Offline-Direkt (Szenario 07): KEIN EA - du reichst als DU ein, Subject/SAN des
-    #    Ziels stehen im CSR (Supply-in-request/Offline-Template). Kein EOBO.
+    #  - Offline-Direkt (Szenario 04, Cloud/Entra CBA): KEIN EA - du reichst als DU ein,
+    #    Subject/SAN des Ziels stehen im CSR (Supply-in-request). NUR Cloud, kein On-Prem.
     $eoboThumbprint = $null
     if ($script:TargetAccount -and -not $script:PlanA_OfflineDirect) {
         $eaCerts = @(Get-EnrollmentAgentCertificates)
         if ($eaCerts.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show('Für ein separates Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder Szenario 07 (Offline-Template, direkt als du) bzw. Plan B (RDP) verwenden.', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Für ein separates On-Prem-Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder Plan B (RDP als Zielkonto) verwenden. (Der Offline-Template-Weg aus Szenario 04 taugt nur für Cloud/Entra CBA, NICHT für On-Prem-Logon.)', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
             return
         }
         $eoboThumbprint = $eaCerts[0].Thumbprint
