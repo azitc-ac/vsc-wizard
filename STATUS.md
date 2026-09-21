@@ -63,13 +63,12 @@
    `dsregcmd`/CKT-Status; oder schlicht Ja/Nein-Abfrage „reiner Cloud-Account
    (Entra-only)?". (Vorarbeit im AD ist bereits geleistet; Offline-Template
    vorhanden und erprobt.)
-2. **Direkt-Weg für separates Konto ohne EA (Offline-Template).** Noch offen und der
-   eigentliche Grund für „trotz CA-Sicht nur Plan B": Für ein **separates** Konto
-   bietet das Tool nur EA→Plan A oder Plan B/RDP. Der **dritte** Weg — als
-   **beliebiger Enroll-berechtigter AD-Account** direkt bei der CA einreichen, mit
-   **Supply-in-request/Offline-Template** und der **Ziel-UPN im CSR** — fehlt noch als
-   geführter Zweig (genau das, was den Cloud-GA-Fall möglich gemacht hat). Sinnvoll
-   zu koppeln mit Backlog #1.
+2. **[ERLEDIGT] Direkt-Weg für separates Konto ohne EA (Offline-Template).** Umgesetzt
+   als **Szenario 07 „Direkt für ein anderes Konto (Offline-Template)"**: als DU direkt
+   einreichen, Ziel-Subject/UPN im CSR (Supply-in-request), kein EA/RDP, auch für
+   cloud-only Ziele (Entra CBA). Template kommt aus `config.OfflineTemplate` (leer →
+   im Ablauf tippbar). Offene Anschlusspunkte siehe #1 (cloud-only-Auto-Erkennung) und
+   Follow-ups unten.
 3. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
    (aktuell reicht `-WindowStyle Hidden`).
 4. *(Optional)* **Echtes Renew** (RenewalCert, gleicher Schlüssel) als Experiment.
@@ -77,6 +76,17 @@
 
 ## Zuletzt erledigt (Ergänzung)
 
+- **Szenario 07 „Direkt für ein anderes Konto (Offline-Template)"**: als DU direkt bei
+  der CA einreichen, Ziel-Subject/UPN im CSR (Supply-in-request), **kein EA, kein RDP**;
+  funktioniert auch für **cloud-only** Ziele (Entra CBA). Nutzt `config.OfflineTemplate`
+  (leer → Template im Ablauf tippbar; Combo dann editierbar). Guard warnt vor ESC1
+  (Template zusperren). Verfügbarkeit wie 03 (TGT/AD-Join nötig).
+  - *Follow-up:* `OfflineTemplate` noch nicht im Einstellungen-Tab (nur in `config.psd1`);
+    cloud-only-Auto-Erkennung (Backlog #1) könnte direkt in 07 abzweigen.
+- **TPM-Fehlanzeige behoben:** `Test-TpmReadiness` hat jetzt einen **WMI-Fallback**
+  (`Win32_Tpm`), und `Get-EnvironmentCapabilities` schließt aus einer **vorhandenen VSC**
+  auf „TPM vorhanden" (eine VSC kann ohne TPM nicht existieren). Kein falsches
+  „kein TPM" mehr (z.B. wenn `Get-Tpm` auf ARM64 versagt).
 - **Startseite erkennt die Umgebung** (`Get-EnvironmentCapabilities`): Banner mit
   Join/TPM/On-Prem-TGT/VSC-Anzahl/EA; **unpassende Szenarien werden ausgegraut**
   (02 ohne VSC, 03 ohne TGT&ohne AD-Join, 06 ohne EA-Zert) — mit Klartext-Begründung,

@@ -214,6 +214,27 @@ function Set-TemplateComboItem {
     if ($ComboBox.Items.Count -gt 0) { $ComboBox.SelectedIndex = 0 }
 }
 
+function Set-PlanATemplateForMode {
+    # Bereitet die Template-Auswahl in Plan A auf den aktuellen Modus vor.
+    #  - Normal/EOBO/Verlängern: fest vorausgewähltes Standard-Template ($config.Template).
+    #  - Offline-Direkt (Szenario 07): das OFFLINE-/Supply-in-request-Template. Ist in der
+    #    Konfiguration keins hinterlegt, wird die Combo editierbar, damit der Name getippt
+    #    werden kann (das Standard-Template waere hier das falsche - Build-from-AD).
+    if ($script:PlanA_OfflineDirect) {
+        $cboTemplateA.DropDownStyle = 'DropDown'   # editierbar
+        $cboTemplateA.Items.Clear()
+        if ($config.OfflineTemplate) {
+            [void]$cboTemplateA.Items.Add($config.OfflineTemplate)
+            $cboTemplateA.SelectedIndex = 0
+        } else {
+            $cboTemplateA.Text = ''
+        }
+    } else {
+        $cboTemplateA.DropDownStyle = 'DropDownList'
+        Set-TemplateComboItem -ComboBox $cboTemplateA -Template $config.Template
+    }
+}
+
 #region MAIN FORM
 
 $form = New-Object System.Windows.Forms.Form
@@ -307,6 +328,9 @@ $script:PlanEntryFrom = 'Scenario'
 # "Anfordern"- bzw. Plan-B-"CSR"-Schritt wird wiederverwendet, das Erstellen uebersprungen.
 $script:PlanA_RenewMode = $false
 $script:PlanB_RenewMode = $false
+# Szenario 07: Direkt-Ausstellung für ein anderes Konto über ein Offline-/Supply-in-
+# request-Template (als DU einreichen, Ziel-UPN im CSR, kein EA/RDP).
+$script:PlanA_OfflineDirect = $false
 
 $tabPlanA = New-Object System.Windows.Forms.Panel
 $tabPlanA.Dock = 'Fill'
@@ -604,6 +628,17 @@ $script:Scenarios = @(
         )
         Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-äquivalent. Für Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
     }
+    [pscustomobject]@{
+        Id = 7; Title = 'Direkt für ein anderes Konto (Offline-Template)'; Sub = 'FORTGESCHRITTEN   Ohne EA, ohne RDP: du reichst als DU direkt ein, Ziel-UPN steht im CSR.'; Stripe = 'red'
+        Steps = @(
+            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto/UPN angeben (on-prem ODER cloud-only, z.B. für Entra CBA).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'VSC erstellen (oder vorhandene nutzen), PIN vergeben.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-Subject + SAN-UPN erzeugen (Supply-in-request).' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt bei der CA einreichen - als DU (brauchst Enroll-Recht auf dem Offline-Template).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'Ausgestelltes Zertifikat auf die VSC übernehmen.' }
+        )
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC1-Geschmack: Supply-in-request + SAN lässt JEDE UPN prägen. Nur mit zugesperrtem Template (enge Enroll-ACL, ggf. Manager-Approval) verwenden.' }
+    }
 )
 $script:SelectedScenario = $null
 $script:EnvCaps = $null
@@ -795,6 +830,13 @@ function Get-ScenarioAvailability {
                 return [pscustomobject]@{ Available = $false; Reason = 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (Bootstrap, per RDP als Zielkonto).' }
             }
         }
+        7 {
+            # Wie 03: die DIREKTE Einreichung erfolgt als DU - dafür braucht dein Konto
+            # eine authentifizierbare On-Prem-AD-Identität (TGT oder AD-Domain-Join).
+            if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
+                return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - für die direkte Einreichung als du selbst fehlt eine authentifizierbare AD-Identität. Entra-joined mit Cloud Kerberos Trust hat ein TGT. Ohne das: Bootstrap/RDP (Szenario 01).' }
+            }
+        }
     }
     return [pscustomobject]@{ Available = $true; Reason = $null }
 }
@@ -838,6 +880,7 @@ function Show-ScenarioStep {
     $script:ActivePlan = 'SCEN'
     $script:PlanA_RenewMode = $false
     $script:PlanB_RenewMode = $false
+    $script:PlanA_OfflineDirect = $false
     $tabPlanA.Visible = $false
     $tabPlanB.Visible = $false
     $pnlModeSelect.Visible = $false
@@ -865,7 +908,7 @@ function Enter-Plan {
     $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
     if ($Plan -eq 'A') {
-        $script:ActivePlan = 'A'; $tabPlanA.Visible = $true; Show-PlanAStep -Index 0
+        $script:ActivePlan = 'A'; $tabPlanA.Visible = $true; Set-PlanATemplateForMode; Show-PlanAStep -Index 0
     } else {
         $script:ActivePlan = 'B'; $tabPlanB.Visible = $true; Show-PlanBStep -Index 0
     }
@@ -879,7 +922,7 @@ function Get-ScenarioPlanForSeparateAccount {
 
 function Show-AccountInputDialog {
     # Schlanke Abfrage NUR des Zielkontos (statt der kompletten Moduswahl).
-    param([string]$Prefill)
+    param([string]$Prefill, [string]$Prompt)
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = 'Zielkonto'
     $dlg.FormBorderStyle = 'FixedDialog'
@@ -888,7 +931,7 @@ function Show-AccountInputDialog {
     $dlg.ClientSize = New-Object System.Drawing.Size(440, 120)
 
     $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text = 'Zielkonto (z.B. CONTOSO\adm.mustermann - DOMAIN\Konto bevorzugt):'
+    $lbl.Text = if ($Prompt) { $Prompt } else { 'Zielkonto (z.B. CONTOSO\adm.mustermann - DOMAIN\Konto bevorzugt):' }
     $lbl.Location = New-Object System.Drawing.Point(12, 14)
     $lbl.Size = New-Object System.Drawing.Size(416, 20)
 
@@ -969,11 +1012,13 @@ function Enter-PlanARenewal {
     $script:PlanA_CertIssued = $false
     $script:PlanA_PendingRequestId = $null
     $script:PlanA_RenewMode = $true
+    $script:PlanA_OfflineDirect = $false
     $script:PlanEntryFrom = 'Scenario'
     $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
     $script:ActivePlan = 'A'
     $tabPlanA.Visible = $true
+    Set-PlanATemplateForMode
     Show-PlanAStep -Index 2
 }
 
@@ -1172,7 +1217,19 @@ function Invoke-ScenarioNextClick {
             $acct = Show-AccountInputDialog
             if (-not $acct) { return }
             $script:TargetAccount = $acct
+            $script:PlanA_OfflineDirect = $false
             Enter-Plan -Plan (Get-ScenarioPlanForSeparateAccount)
+        }
+        7 {
+            # Direkt für ein anderes Konto per Offline-Template: als DU einreichen, die
+            # Ziel-UPN steht im CSR (Supply-in-request). KEIN EA, KEIN RDP. Funktioniert
+            # auch für cloud-only Ziele (Entra CBA) - dann ist das "Konto" die Entra-UPN.
+            $acct = Show-AccountInputDialog -Prompt 'Zielkonto/UPN (on-prem oder cloud-only, z.B. gadmin@contoso.onmicrosoft.com):'
+            if (-not $acct) { return }
+            $script:TargetAccount = $acct
+            $script:PlanA_OfflineDirect = $true
+            [System.Windows.Forms.MessageBox]::Show("Direkt-Ausstellung für $acct über das Offline-Template:`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Offline-/Supply-in-request-Template).`r`n- Subject + SAN-UPN des Ziels stehen im CSR.`r`n- Funktioniert auch für cloud-only Ziele (Entra CBA).`r`n`r`nIn Schritt 3 das Offline-Template wählen/eintragen.", 'Offline-Template - Direktausstellung', 'OK', 'Information') | Out-Null
+            Enter-Plan -Plan 'A'
         }
     }
 }
@@ -1331,21 +1388,24 @@ $btnRetrieveA.Visible = $false
 $pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
-    # Für ein separates Zielkonto ist die Direkt-Ausstellung nur über Enroll on
-    # Behalf Of möglich (die CA prüft die Enroll-Berechtigung sonst gegen die
-    # EIGENE Identität). Dafür braucht es ein Enrollment-Agent-Zertifikat im
-    # eigenen Speicher; fehlt es, bleibt der Plan-B/RDP-Weg.
+    # Fuer ein separates Zielkonto gibt es zwei direkte Wege:
+    #  - EOBO (Enroll on Behalf Of): braucht ein EA-Zertifikat, Build-from-AD.
+    #  - Offline-Direkt (Szenario 07): KEIN EA - du reichst als DU ein, Subject/SAN des
+    #    Ziels stehen im CSR (Supply-in-request/Offline-Template). Kein EOBO.
     $eoboThumbprint = $null
-    if ($script:TargetAccount) {
+    if ($script:TargetAccount -and -not $script:PlanA_OfflineDirect) {
         $eaCerts = @(Get-EnrollmentAgentCertificates)
         if ($eaCerts.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show('Für ein separates Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder stattdessen Plan B (RDP) verwenden.', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Für ein separates Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder Szenario 07 (Offline-Template, direkt als du) bzw. Plan B (RDP) verwenden.', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
             return
         }
         $eoboThumbprint = $eaCerts[0].Thumbprint
     }
-    if (-not $cboTemplateA.SelectedItem) {
-        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswählen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+    # Template: im Offline-Direkt-Modus ist die Combo editierbar (SelectedItem kann leer
+    # sein, wenn getippt) - deshalb .Text als Rueckfall.
+    $selectedTemplate = if ($cboTemplateA.SelectedItem) { "$($cboTemplateA.SelectedItem)" } else { $cboTemplateA.Text.Trim() }
+    if (-not $selectedTemplate) {
+        [System.Windows.Forms.MessageBox]::Show('Bitte ein Zertifikatstemplate auswählen bzw. eintragen (im Offline-Modus das Supply-in-request-Template).', 'Hinweis', 'OK', 'Warning') | Out-Null
         return
     }
     $btnRequestCertA.Enabled = $false
@@ -1364,8 +1424,11 @@ $btnRequestCertA.Add_Click({
         # EOBO: Zielkonto + Template gehören in den PKCS7-Antrag, der mit dem
         # EA-Zertifikat co-signiert wird. Das Template wird beim Submit dann NICHT
         # nochmal per -attrib gesetzt.
-        $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir -RequesterName $identity.DisplayName -TemplateName $cboTemplateA.SelectedItem -SigningCertThumbprint $eoboThumbprint
+        $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir -RequesterName $identity.DisplayName -TemplateName $selectedTemplate -SigningCertThumbprint $eoboThumbprint
     } else {
+        # Normale PKCS10-Anforderung: Subject + SAN-UPN kommen aus der Identität. Im
+        # Offline-Direkt-Modus ist das die ZIEL-Identität (Supply-in-request) - der
+        # Submit als DU liefert das passende Zertifikat, ohne EA und ohne RDP.
         $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $config.CspName -OutputDirectory $script:PlanA_EnrollDir
     }
     if (-not $csr.Success) {
@@ -1375,7 +1438,7 @@ $btnRequestCertA.Add_Click({
         return
     }
 
-    $submitTemplate = if ($eoboThumbprint) { $null } else { $cboTemplateA.SelectedItem }
+    $submitTemplate = if ($eoboThumbprint) { $null } else { $selectedTemplate }
     $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $submitTemplate -OutputDirectory $script:PlanA_EnrollDir
     if ($submit.Pending) {
         $script:PlanA_PendingRequestId = $submit.RequestId
@@ -1512,6 +1575,7 @@ $btnResetA.Add_Click({
     $lblCertResultA.Text = ''
     $btnRetrieveA.Visible = $false
     $script:PlanA_RenewMode = $false
+    $script:PlanA_OfflineDirect = $false
     if ($script:PlanEntryFrom -eq 'Scenario') {
         $tabPlanA.Visible = $false
         Show-ScenarioStep
@@ -1523,6 +1587,7 @@ $btnResetA.Add_Click({
 # Immer zurück zum Startbildschirm - unabhängig vom Einstieg (Szenario oder Verlängerung).
 $btnStartA.Add_Click({
     $script:PlanA_RenewMode = $false
+    $script:PlanA_OfflineDirect = $false
     $tabPlanA.Visible = $false
     Show-ScenarioStep
 })
@@ -1539,7 +1604,10 @@ function Update-PlanAStatus {
     $lblUserA.Text = "Angemeldeter Benutzer: $env:USERDOMAIN\$env:USERNAME" + $(if ($upn) { " (UPN: $upn)" } else { '' })
     $lblTpmA.Text = "TPM: vorhanden=$($tpm.Present), bereit=$($tpm.Ready)"
 
-    if ($script:TargetAccount) {
+    if ($script:TargetAccount -and $script:PlanA_OfflineDirect) {
+        $lblWarnA.ForeColor = [System.Drawing.Color]::SteelBlue
+        $lblWarnA.Text = "Direkt-Ausstellung für ein separates Konto ($($script:TargetAccount)) über das Offline-Template: du reichst als DU ein (Enroll-Recht auf dem Supply-in-request-Template nötig), Ziel-Subject/UPN stehen im CSR. Kein EA, kein RDP. In Schritt 3 das Offline-Template wählen/eintragen."
+    } elseif ($script:TargetAccount) {
         $lblWarnA.ForeColor = [System.Drawing.Color]::SteelBlue
         $lblWarnA.Text = "Smartcard wird für ein separates Konto beantragt ($($script:TargetAccount)) - die Ausstellung in Schritt 3 erfolgt bruchfrei per Enroll on Behalf Of (Enrollment-Agent-Zertifikat), ohne RDP."
     } elseif ($joinState.Mode -ne 'ADDomain') {

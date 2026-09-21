@@ -244,16 +244,30 @@ function Invoke-ExternalCommand {
 #region Umgebungserkennung
 
 function Test-TpmReadiness {
+    # 1) Get-Tpm (Modul TrustedPlatformModule). Kann auf manchen Systemen werfen oder
+    #    Teilwerte liefern - u.a. auf ARM64, bei fehlendem Modul oder ohne Elevation.
     try {
         $tpm = Get-Tpm -ErrorAction Stop
-        return [pscustomobject]@{
-            Present = [bool]$tpm.TpmPresent
-            Ready   = [bool]$tpm.TpmReady
-            Enabled = [bool]$tpm.TpmEnabled
+        if ($null -ne $tpm.TpmPresent) {
+            return [pscustomobject]@{
+                Present = [bool]$tpm.TpmPresent
+                Ready   = [bool]$tpm.TpmReady
+                Enabled = [bool]$tpm.TpmEnabled
+            }
         }
-    } catch {
-        return [pscustomobject]@{ Present = $false; Ready = $false; Enabled = $false }
-    }
+    } catch { }
+    # 2) Fallback: WMI-Klasse Win32_Tpm im Security-Namespace. Existiert ein Objekt,
+    #    ist ein TPM physisch vorhanden (Get-Tpm kann trotzdem versagt haben). Damit
+    #    verschwindet die falsche "kein TPM"-Anzeige auf Systemen wie ARM64.
+    try {
+        $w = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1
+        if ($w) {
+            $enabled   = [bool]$w.IsEnabled_InitialValue
+            $activated = [bool]$w.IsActivated_InitialValue
+            return [pscustomobject]@{ Present = $true; Ready = ($enabled -and $activated); Enabled = $enabled }
+        }
+    } catch { }
+    return [pscustomobject]@{ Present = $false; Ready = $false; Enabled = $false }
 }
 
 function Get-DomainJoinState {
@@ -531,11 +545,18 @@ function Get-EnvironmentCapabilities {
     $eaCount = 0
     try { $eaCount = @(Get-EnrollmentAgentCertificates).Count } catch { }
 
+    # Existiert bereits eine VSC, MUSS ein TPM vorhanden (und nutzbar) sein - eine
+    # TPM Virtual Smart Card kann ohne TPM gar nicht angelegt werden. Das korrigiert
+    # eine falsch-negative TPM-Erkennung (z.B. wenn Get-Tpm auf ARM64 versagt).
+    $tpmPresent = [bool]$tpm.Present
+    $tpmReady   = [bool]$tpm.Ready
+    if ($vscCount -gt 0) { $tpmPresent = $true; $tpmReady = $true }
+
     return [pscustomobject]@{
         JoinMode     = $join.Mode
         Domain       = $join.Domain
-        TpmPresent   = $tpm.Present
-        TpmReady     = $tpm.Ready
+        TpmPresent   = $tpmPresent
+        TpmReady     = $tpmReady
         HasOnPremTgt = $hasTgt
         Realm        = $realm
         VscCount     = $vscCount

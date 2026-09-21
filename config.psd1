@@ -1,5 +1,9 @@
 ﻿@{
     Template = 'ContosoSmartCardLogonKSP'
+    # Offline-/Supply-in-request-Template (Subject/SAN kommen aus dem CSR, NICHT aus dem
+    # AD). Für Szenario 07 (Direkt für ein anderes Konto): du reichst als DU ein, die
+    # Ziel-UPN steht im Antrag. Leer lassen, wenn du den Namen im Ablauf tippen willst.
+    OfflineTemplate = ''
     WorkingDir = ''
     CAConfig = 'ca01.contoso.local\Contoso Issuing CA'
     CspName = 'Microsoft Smart Card Key Storage Provider'
