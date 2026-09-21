@@ -3,6 +3,15 @@
 > Kurzes „wo stehen wir"-Dokument, damit der Faden zwischen Testrunden nicht reißt.
 > Ergänzt das RUNBOOK.md (das die Szenarien/Abläufe beschreibt).
 
+## Arbeitsweise: „Geschwister-Suchlauf" (verbindlich)
+
+Vor JEDEM Fix: erst per Suche ALLE Stellen finden, die dasselbe Symptom/dieselbe
+Logik teilen, und **gemeinsam** beheben — nicht nur die eine aufgefallene Stelle.
+Bevorzugt die Logik an **einer** Stelle zentralisieren (eine Funktion als „Quelle der
+Wahrheit"), damit Aufrufer nicht auseinanderdriften. Beispiel-Lehrgeld: der
+TPM-Check war zuerst nur im Startseiten-Banner korrigiert, nicht im Plan-A-Status —
+jetzt beides über `Test-TpmReadiness` zentralisiert.
+
 ## Erledigt / funktioniert (Stand zuletzt getestet)
 
 - **Einreicher-Helfer, doppeltes BEGIN/END behoben** (Commit `197d622`).

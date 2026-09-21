@@ -244,30 +244,48 @@ function Invoke-ExternalCommand {
 #region Umgebungserkennung
 
 function Test-TpmReadiness {
+    # EINZIGE Quelle der TPM-Wahrheit fuer den ganzen Wizard (Startseiten-Banner UND
+    # Plan-A-Status greifen hierauf zu) - damit die Erkennung NICHT nur an einer Stelle
+    # korrekt ist. Drei Signale, in Reihenfolge:
+    $present = $false; $ready = $false; $enabled = $false
+
     # 1) Get-Tpm (Modul TrustedPlatformModule). Kann auf manchen Systemen werfen oder
     #    Teilwerte liefern - u.a. auf ARM64, bei fehlendem Modul oder ohne Elevation.
     try {
         $tpm = Get-Tpm -ErrorAction Stop
         if ($null -ne $tpm.TpmPresent) {
-            return [pscustomobject]@{
-                Present = [bool]$tpm.TpmPresent
-                Ready   = [bool]$tpm.TpmReady
-                Enabled = [bool]$tpm.TpmEnabled
-            }
+            $present = [bool]$tpm.TpmPresent
+            $ready   = [bool]$tpm.TpmReady
+            $enabled = [bool]$tpm.TpmEnabled
         }
     } catch { }
+
     # 2) Fallback: WMI-Klasse Win32_Tpm im Security-Namespace. Existiert ein Objekt,
     #    ist ein TPM physisch vorhanden (Get-Tpm kann trotzdem versagt haben). Damit
     #    verschwindet die falsche "kein TPM"-Anzeige auf Systemen wie ARM64.
-    try {
-        $w = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1
-        if ($w) {
-            $enabled   = [bool]$w.IsEnabled_InitialValue
-            $activated = [bool]$w.IsActivated_InitialValue
-            return [pscustomobject]@{ Present = $true; Ready = ($enabled -and $activated); Enabled = $enabled }
-        }
-    } catch { }
-    return [pscustomobject]@{ Present = $false; Ready = $false; Enabled = $false }
+    if (-not $present) {
+        try {
+            $w = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1
+            if ($w) {
+                $enabled = [bool]$w.IsEnabled_InitialValue
+                $ready   = ($enabled -and [bool]$w.IsActivated_InitialValue)
+                $present = $true
+            }
+        } catch { }
+    }
+
+    # 3) Ground Truth: existiert bereits eine VSC, MUSS ein nutzbares TPM vorhanden sein
+    #    (eine TPM Virtual Smart Card kann sonst gar nicht angelegt worden sein). Das
+    #    ueberschreibt jede falsch-negative Erkennung aus 1)/2) - egal welcher Aufrufer.
+    if (-not $present -or -not $ready) {
+        try {
+            if (@(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName }).Count -gt 0) {
+                $present = $true; $ready = $true; $enabled = $true
+            }
+        } catch { }
+    }
+
+    return [pscustomobject]@{ Present = [bool]$present; Ready = [bool]$ready; Enabled = [bool]$enabled }
 }
 
 function Get-DomainJoinState {
@@ -545,18 +563,14 @@ function Get-EnvironmentCapabilities {
     $eaCount = 0
     try { $eaCount = @(Get-EnrollmentAgentCertificates).Count } catch { }
 
-    # Existiert bereits eine VSC, MUSS ein TPM vorhanden (und nutzbar) sein - eine
-    # TPM Virtual Smart Card kann ohne TPM gar nicht angelegt werden. Das korrigiert
-    # eine falsch-negative TPM-Erkennung (z.B. wenn Get-Tpm auf ARM64 versagt).
-    $tpmPresent = [bool]$tpm.Present
-    $tpmReady   = [bool]$tpm.Ready
-    if ($vscCount -gt 0) { $tpmPresent = $true; $tpmReady = $true }
-
+    # TPM-Werte kommen direkt aus Test-TpmReadiness - dort steckt die Ground-Truth-Logik
+    # (inkl. "VSC vorhanden -> TPM vorhanden"), sodass Banner und Plan-A-Status identisch
+    # und korrekt sind (keine doppelte, driftende Logik mehr).
     return [pscustomobject]@{
         JoinMode     = $join.Mode
         Domain       = $join.Domain
-        TpmPresent   = $tpmPresent
-        TpmReady     = $tpmReady
+        TpmPresent   = [bool]$tpm.Present
+        TpmReady     = [bool]$tpm.Ready
         HasOnPremTgt = $hasTgt
         Realm        = $realm
         VscCount     = $vscCount
