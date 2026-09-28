@@ -100,6 +100,18 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Zuletzt erledigt (Ergänzung)
 
+- **Titelleiste** trägt jetzt „… - blog.zarenko.net". **„Über"-Knopf** in der
+  Kopfleiste zeigt Version, Release-Datum und einen klickbaren Link zum Blog.
+- **Versionierung reist mit dem Repo (kein Hook):** `Get-AppVersion` leitet die
+  Version aus der **git-Historie** ab — Build-Nummer = Commit-Anzahl (`rev-list
+  --count HEAD`), wächst also mit **jedem Commit** automatisch; dazu Release-Datum
+  (letztes Commit-Datum) und Kurz-Hash. Läuft der Wizard als `.ps1` im Checkout →
+  live aus git; als gebaute `.exe` → aus `version.txt`, das **build.ps1** beim Build
+  aus git erzeugt und neben die EXE legt. Damit funktioniert das identisch in der
+  Windows-Claude-Session, ohne lokale Hook-Einrichtung.
+- **Fix:** frischer Plan-A/B-Start setzt den Zustand zurück (der „VSC erstellen →
+  Weiter"-Check war überspringbar, weil `VscCreated` vom vorherigen Durchlauf true blieb).
+
 - **Busy-/Warte-Anzeige** bei blockierenden Aktionen: App-weiter OS-Wartecursor
   (`Application.UseWaitCursor` — vom Betriebssystem animiert, auch wenn der UI-Thread
   synchron blockiert) + gelbes „⏳ läuft…"-Banner. Helfer `Set-Busy`/`Clear-Busy`/

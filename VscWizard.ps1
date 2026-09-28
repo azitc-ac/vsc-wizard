@@ -322,7 +322,7 @@ function Set-PlanATemplateForMode {
 #region MAIN FORM
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen'
+$form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen - blog.zarenko.net'
 $form.Size = New-Object System.Drawing.Size(1000, 900)
 $form.StartPosition = 'CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(900, 780)
@@ -382,15 +382,101 @@ function Invoke-Busy {
     try { & $Action } finally { Clear-Busy }
 }
 
+function Get-AppVersion {
+    # Die Version REIST MIT DEM REPO: sie wird aus der GIT-Historie abgeleitet
+    # (Anzahl Commits = hochzaehlende Build-Nummer). KEIN lokaler Hook noetig - das
+    # funktioniert in jedem Checkout und auf jedem Rechner gleich (auch in der
+    # Windows-Claude-Session). Reihenfolge:
+    #   1) live aus git, wenn das Skript in einem Checkout laeuft (Dev via VscWizard.ps1)
+    #   2) version.txt neben Skript/EXE (von build.ps1 aus git erzeugt - fuer die EXE)
+    #   3) Fallback
+    $ver = $null; $date = $null; $commit = $null
+    try {
+        if (Test-Path (Join-Path $script:BaseDir '.git')) {
+            $count = (& git -C "$script:BaseDir" rev-list --count HEAD 2>$null | Select-Object -First 1)
+            if ($count) {
+                $ver    = "1.0.$($count.ToString().Trim())"
+                $date   = (& git -C "$script:BaseDir" log -1 --format=%cd --date=short 2>$null | Select-Object -First 1)
+                $commit = (& git -C "$script:BaseDir" rev-parse --short HEAD 2>$null | Select-Object -First 1)
+            }
+        }
+    } catch { }
+    if (-not $ver) {
+        $vfile = Join-Path $script:BaseDir 'version.txt'
+        if (Test-Path $vfile) {
+            try {
+                foreach ($line in (Get-Content $vfile -ErrorAction Stop)) {
+                    if     ($line -match '^\s*Version\s*=\s*(.+?)\s*$') { $ver = $Matches[1] }
+                    elseif ($line -match '^\s*Date\s*=\s*(.+?)\s*$')    { $date = $Matches[1] }
+                    elseif ($line -match '^\s*Commit\s*=\s*(.+?)\s*$')  { $commit = $Matches[1] }
+                }
+            } catch { }
+        }
+    }
+    if (-not $ver)  { $ver = '1.0.0-dev' }
+    if (-not $date) { $date = 'unbekannt' }
+    return [pscustomobject]@{ Version = "$ver"; Date = "$date"; Commit = "$commit" }
+}
+
+function Show-AboutDialog {
+    $v = Get-AppVersion
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Über VSC-Wizard'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
+    $dlg.ClientSize = New-Object System.Drawing.Size(430, 214)
+
+    $lblApp = New-Object System.Windows.Forms.Label
+    $lblApp.Text = 'VSC-Wizard'
+    $lblApp.Font = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.FontStyle]::Bold)
+    $lblApp.Location = New-Object System.Drawing.Point(20, 18); $lblApp.Size = New-Object System.Drawing.Size(390, 30)
+    $dlg.Controls.Add($lblApp)
+
+    $lblSub = New-Object System.Windows.Forms.Label
+    $lblSub.Text = 'Virtuelle Smartcards & Zertifikate für AD-Administratoren'
+    $lblSub.ForeColor = [System.Drawing.Color]::DimGray
+    $lblSub.Location = New-Object System.Drawing.Point(22, 50); $lblSub.Size = New-Object System.Drawing.Size(390, 20)
+    $dlg.Controls.Add($lblSub)
+
+    $lblVer = New-Object System.Windows.Forms.Label
+    $verText = "Version $($v.Version)"
+    if ($v.Commit) { $verText += "  ($($v.Commit))" }
+    $lblVer.Text = $verText
+    $lblVer.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+    $lblVer.Location = New-Object System.Drawing.Point(22, 86); $lblVer.Size = New-Object System.Drawing.Size(390, 20)
+    $dlg.Controls.Add($lblVer)
+
+    $lblDate = New-Object System.Windows.Forms.Label
+    $lblDate.Text = "Release-Datum: $($v.Date)"
+    $lblDate.Location = New-Object System.Drawing.Point(22, 108); $lblDate.Size = New-Object System.Drawing.Size(390, 20)
+    $dlg.Controls.Add($lblDate)
+
+    $link = New-Object System.Windows.Forms.LinkLabel
+    $link.Text = 'https://blog.zarenko.net'
+    $link.Location = New-Object System.Drawing.Point(22, 138); $link.Size = New-Object System.Drawing.Size(390, 20)
+    $link.Add_LinkClicked({ try { Start-Process 'https://blog.zarenko.net' } catch { } })
+    $dlg.Controls.Add($link)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Schließen'; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $ok.Location = New-Object System.Drawing.Point(316, 172); $ok.Size = New-Object System.Drawing.Size(94, 28)
+    $dlg.Controls.Add($ok)
+    $dlg.AcceptButton = $ok
+
+    [void]$dlg.ShowDialog($form)
+}
+
 #endregion
 
 #region TOP BAR (schrittunabhängig - auf jedem Schritt sichtbar, u.a. für Einstellungen)
 
 $topBar = New-Object System.Windows.Forms.TableLayoutPanel
 $topBar.Dock = 'Fill'
-$topBar.ColumnCount = 2
+$topBar.ColumnCount = 3
 $topBar.BackColor = [System.Drawing.SystemColors]::ControlLight
 [void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 80)))
 [void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 160)))
 $mainLayout.Controls.Add($topBar, 0, 0)
 
@@ -401,11 +487,18 @@ $lblGlobalStep.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Dra
 $lblGlobalStep.Margin = New-Object System.Windows.Forms.Padding(14, 0, 0, 0)
 $topBar.Controls.Add($lblGlobalStep, 0, 0)
 
+$btnAbout = New-Object System.Windows.Forms.Button
+$btnAbout.Text = 'Über'
+$btnAbout.Dock = 'Fill'
+$btnAbout.Margin = New-Object System.Windows.Forms.Padding(6, 6, 0, 6)
+$topBar.Controls.Add($btnAbout, 1, 0)
+$btnAbout.Add_Click({ Show-AboutDialog })
+
 $btnOpenSettings = New-Object System.Windows.Forms.Button
 $btnOpenSettings.Text = 'Einstellungen'
 $btnOpenSettings.Dock = 'Fill'
 $btnOpenSettings.Margin = New-Object System.Windows.Forms.Padding(6, 6, 10, 6)
-$topBar.Controls.Add($btnOpenSettings, 1, 0)
+$topBar.Controls.Add($btnOpenSettings, 2, 0)
 $btnOpenSettings.Add_Click({ Show-SettingsDialog -Owner $form })
 
 #endregion
@@ -1016,10 +1109,36 @@ function Enter-Plan {
     $script:PlanEntryFrom = 'Scenario'
     $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
+    # NEUER Ablauf -> sauberer Zustand. Sonst bleibt z.B. $PlanA_VscCreated von einem
+    # vorherigen Durchlauf (oder vom "bestehende VSC verwenden"-Weg) auf $true, und der
+    # "Weiter"-Check im Erstellen-Schritt greift nicht (man käme ohne Karte weiter).
+    # $PlanA_OfflineDirect wird bewusst NICHT angefasst - das setzt das Szenario davor.
     if ($Plan -eq 'A') {
-        $script:ActivePlan = 'A'; $tabPlanA.Visible = $true; Set-PlanATemplateForMode; Show-PlanAStep -Index 0
+        $script:ActivePlan = 'A'
+        $script:PlanA_VscCreated = $false
+        $script:PlanA_CertIssued = $false
+        $script:PlanA_PendingRequestId = $null
+        $script:PlanA_RenewMode = $false
+        $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
+        $lblVscResultA.Text = ''
+        $lblCertResultA.Text = ''
+        $btnRetrieveA.Visible = $false
+        $tabPlanA.Visible = $true
+        Set-PlanATemplateForMode
+        Show-PlanAStep -Index 0
     } else {
-        $script:ActivePlan = 'B'; $tabPlanB.Visible = $true; Show-PlanBStep -Index 0
+        $script:ActivePlan = 'B'
+        $script:PlanB_VscCreated = $false
+        $script:PlanB_CertIssued = $false
+        $script:PlanB_PendingRequestId = $null
+        $script:PlanB_RenewMode = $false
+        $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
+        $lblVscResultB.Text = ''
+        $lblSubmitResultB.Text = ''
+        $lblCompleteResultB.Text = ''
+        $btnRetrieveB.Visible = $false
+        $tabPlanB.Visible = $true
+        Show-PlanBStep -Index 0
     }
 }
 

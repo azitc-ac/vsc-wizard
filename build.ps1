@@ -76,6 +76,25 @@ Copy-Item -Path (Join-Path $PSScriptRoot 'modules\*') -Destination $modulesTarge
 $configSrc = Join-Path $PSScriptRoot 'config.psd1'
 if (Test-Path $configSrc) { Copy-Item -Path $configSrc -Destination (Join-Path $OutputDir 'config.psd1') -Force }
 
+# --- version.txt aus der GIT-Historie erzeugen (fuer die EXE, die kein git sieht) ---
+# Die Version "reist mit dem Repo": Build-Nummer = Anzahl Commits (waechst mit jedem
+# Commit, ohne lokalen Hook). Wird neben die EXE gelegt; der Wizard liest sie, wenn
+# kein .git danebenliegt (also im ausgelieferten EXE-Fall).
+try {
+    $verCount  = (& git -C $PSScriptRoot rev-list --count HEAD 2>$null | Select-Object -First 1)
+    $verDate   = (& git -C $PSScriptRoot log -1 --format=%cd --date=short 2>$null | Select-Object -First 1)
+    $verCommit = (& git -C $PSScriptRoot rev-parse --short HEAD 2>$null | Select-Object -First 1)
+    if ($verCount) {
+        $verText = "Version=1.0.$($verCount.ToString().Trim())`r`nDate=$verDate`r`nCommit=$verCommit`r`n"
+        Set-Content -Path (Join-Path $OutputDir 'version.txt') -Value $verText -Encoding UTF8
+        Write-Host "version.txt: 1.0.$($verCount.ToString().Trim()) ($verCommit, $verDate)"
+    } else {
+        Write-Host 'WARN: git nicht verfuegbar - version.txt nicht erzeugt (Wizard zeigt Fallback-Version).'
+    }
+} catch {
+    Write-Host "WARN: version.txt konnte nicht erzeugt werden: $($_.Exception.Message)"
+}
+
 # --- 3) Optional signieren ---
 if ($CertThumbprint) {
     $cert = Get-Item "Cert:\CurrentUser\My\$CertThumbprint" -ErrorAction SilentlyContinue
