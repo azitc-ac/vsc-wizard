@@ -161,7 +161,9 @@ function New-WizardLabel {
     $lbl.Text = $Text
     $lbl.Location = New-Object System.Drawing.Point($X, $Y)
     $lbl.Size = New-Object System.Drawing.Size($Width, $Height)
-    $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 9, $Style)
+    $lbl.Font = if ($Style -eq [System.Drawing.FontStyle]::Bold) { New-UiFont 9.5 -Semibold } else { New-UiFont 9.5 }
+    $lbl.ForeColor = $script:UI.Text
+    $lbl.UseMnemonic = $false
     return $lbl
 }
 
@@ -420,20 +422,118 @@ function Set-PlanATemplateForMode {
 
 #region MAIN FORM
 
+# --- Gestaltung (Redesign 2026-09): eine Palette, wenige Helfer -------------------
+# Alle Farben/Schriften an EINER Stelle - Controls greifen nur über $script:UI bzw.
+# die Helfer darauf zu, damit das Erscheinungsbild konsistent bleibt.
+function New-UiColor([int]$R, [int]$G, [int]$B) { [System.Drawing.Color]::FromArgb($R, $G, $B) }
+$script:UI = @{
+    Ground      = New-UiColor 245 246 248   # Fensterhintergrund
+    Surface     = [System.Drawing.Color]::White
+    Sidebar     = New-UiColor 236 239 243
+    Border      = New-UiColor 216 221 227
+    Control     = New-UiColor 174 182 191   # Rahmen von Buttons/Eingaben
+    Text        = New-UiColor 27 31 36
+    Muted       = New-UiColor 87 96 106
+    Accent      = New-UiColor 11 92 173
+    AccentHover = New-UiColor 8 70 127
+    AccentWeak  = New-UiColor 232 241 251
+    AccentText  = New-UiColor 11 58 107
+    Success     = New-UiColor 30 107 58
+    SuccessWeak = New-UiColor 230 244 234
+    Warn        = New-UiColor 122 75 0
+    WarnWeak    = New-UiColor 255 243 214
+    Danger      = New-UiColor 165 38 27
+    DangerWeak  = New-UiColor 253 236 234
+    Disabled    = New-UiColor 201 214 228
+}
+function New-UiFont {
+    param([float]$Size = 9, [switch]$Semibold, [switch]$Mono)
+    $family = if ($Mono) { 'Consolas' } elseif ($Semibold) { 'Segoe UI Semibold' } else { 'Segoe UI' }
+    New-Object System.Drawing.Font($family, $Size)
+}
+function Set-ButtonStyle {
+    # Primary = gefüllte Akzentfarbe (Hauptaktion), Secondary = weiß mit Rahmen,
+    # Link = randlos/transparent (z.B. "Protokoll anzeigen").
+    param([Parameter(Mandatory)][System.Windows.Forms.Button]$Button, [ValidateSet('Primary', 'Secondary', 'Link')][string]$Kind = 'Secondary')
+    $Button.FlatStyle = 'Flat'
+    $Button.UseVisualStyleBackColor = $false
+    $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $Button.Tag = if ($Button.Tag -is [hashtable]) { $Button.Tag } else { @{} }
+    $Button.Tag['Kind'] = $Kind
+    switch ($Kind) {
+        'Primary' {
+            $Button.BackColor = $script:UI.Accent; $Button.ForeColor = [System.Drawing.Color]::White
+            $Button.FlatAppearance.BorderSize = 0
+            $Button.FlatAppearance.MouseOverBackColor = $script:UI.AccentHover
+            $Button.Font = New-UiFont 9.5 -Semibold
+        }
+        'Secondary' {
+            $Button.BackColor = $script:UI.Surface; $Button.ForeColor = $script:UI.Text
+            $Button.FlatAppearance.BorderSize = 1; $Button.FlatAppearance.BorderColor = $script:UI.Control
+            $Button.FlatAppearance.MouseOverBackColor = $script:UI.Ground
+            $Button.Font = New-UiFont 9.5
+        }
+        'Link' {
+            $Button.BackColor = [System.Drawing.Color]::Transparent; $Button.ForeColor = $script:UI.Muted
+            $Button.FlatAppearance.BorderSize = 0
+            $Button.FlatAppearance.MouseOverBackColor = $script:UI.Ground
+            $Button.Font = New-UiFont 9
+        }
+    }
+}
+# Deaktivierte Flat-Buttons zeichnet WinForms grau auf grau - Primärbuttons bekommen
+# deshalb beim Deaktivieren eine eigene, lesbare Farbe.
+function Update-PrimaryEnabledLook([System.Windows.Forms.Button]$Button) {
+    if ($Button.Tag -is [hashtable] -and $Button.Tag['Kind'] -eq 'Primary') {
+        $Button.BackColor = if ($Button.Enabled) { $script:UI.Accent } else { $script:UI.Disabled }
+    }
+}
+function Add-BorderPaint {
+    # 1-px-Rahmen in Palettenfarbe (BorderStyle kann keine Farbe) - für "Karten".
+    param([Parameter(Mandatory)][System.Windows.Forms.Control]$Control, [System.Drawing.Color]$Color = $script:UI.Border, [switch]$TopOnly)
+    $Control.Tag = if ($Control.Tag -is [hashtable]) { $Control.Tag } else { @{ Value = $Control.Tag } }
+    $Control.Tag['BorderColor'] = $Color
+    $Control.Tag['BorderTopOnly'] = [bool]$TopOnly
+    $Control.Add_Paint({
+        param($s, $e)
+        $pen = New-Object System.Drawing.Pen($s.Tag['BorderColor'])
+        if ($s.Tag['BorderTopOnly']) { $e.Graphics.DrawLine($pen, 0, 0, $s.Width, 0) }
+        else { $e.Graphics.DrawRectangle($pen, 0, 0, $s.Width - 1, $s.Height - 1) }
+        $pen.Dispose()
+    })
+}
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen - https://blog.zarenko.net'
-$form.Size = New-Object System.Drawing.Size(1000, 900)
+$form.Size = New-Object System.Drawing.Size(1120, 820)
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize = New-Object System.Drawing.Size(900, 780)
+$form.MinimumSize = New-Object System.Drawing.Size(980, 720)
+$form.BackColor = $script:UI.Ground
+$form.Font = New-UiFont 9
 
-$mainLayout = New-Object System.Windows.Forms.TableLayoutPanel
-$mainLayout.Dock = 'Fill'
-$mainLayout.RowCount = 3
-$mainLayout.ColumnCount = 1
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 44)))
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 76)))
-[void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 24)))
-$form.Controls.Add($mainLayout)
+# Grundaufteilung: Seitenleiste links (Schritte, Gerät, Einstellungen, Sprache) und
+# rechts der Arbeitsbereich: Kopf (Seitentitel), Inhalt, einklappbares Protokoll,
+# Fußleiste (Protokoll-Schalter, Zurück/Weiter). Die Dock-Reihenfolge wird am Ende
+# des LOG-Bereichs festgezogen (siehe dort).
+$sidebar = New-Object System.Windows.Forms.Panel
+$sidebar.Dock = 'Left'
+$sidebar.Width = 240
+$sidebar.BackColor = $script:UI.Sidebar
+$sidebar.Padding = New-Object System.Windows.Forms.Padding(18, 22, 18, 18)
+$form.Controls.Add($sidebar)
+# Trennlinie am rechten Rand (gezeichnet - ein Dock-Panel läge innerhalb des Paddings).
+$sidebar.Add_Paint({
+    param($s, $e)
+    $pen = New-Object System.Drawing.Pen($script:UI.Border)
+    $e.Graphics.DrawLine($pen, $s.Width - 1, 0, $s.Width - 1, $s.Height)
+    $pen.Dispose()
+})
+
+$mainArea = New-Object System.Windows.Forms.Panel
+$mainArea.Dock = 'Fill'
+$mainArea.BackColor = $script:UI.Ground
+$form.Controls.Add($mainArea)
+$mainArea.BringToFront()
 
 # --- Busy-/Warte-Anzeige -----------------------------------------------------------
 # Viele Aktionen (VSCs auslesen, Umgebung erkennen, certreq/certutil) laufen SYNCHRON
@@ -467,9 +567,10 @@ function Set-Busy {
     [System.Windows.Forms.Application]::UseWaitCursor = $true
     if ($script:BusyLabel -and $form) {
         $script:BusyLabel.Text = "$([char]0x231B)  $Text"   # Sanduhr-Symbol + Text
-        $x = [int](($form.ClientSize.Width - $script:BusyLabel.Width) / 2)
+        # Mittig über dem Arbeitsbereich (rechts der Seitenleiste), unter dem Seitentitel.
+        $x = [int]($sidebar.Width + ($form.ClientSize.Width - $sidebar.Width - $script:BusyLabel.Width) / 2)
         if ($x -lt 0) { $x = 0 }
-        $script:BusyLabel.Location = New-Object System.Drawing.Point($x, 52)
+        $script:BusyLabel.Location = New-Object System.Drawing.Point($x, 64)
         $script:BusyLabel.Visible = $true
         $script:BusyLabel.BringToFront()
     }
@@ -594,74 +695,190 @@ function Show-AboutDialog {
 
 #region TOP BAR (schrittunabhängig - auf jedem Schritt sichtbar, u.a. für Einstellungen)
 
-$topBar = New-Object System.Windows.Forms.TableLayoutPanel
-$topBar.Dock = 'Fill'
-$topBar.ColumnCount = 3
-$topBar.BackColor = [System.Drawing.SystemColors]::ControlLight
-[void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 80)))
-[void]$topBar.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 160)))
-$mainLayout.Controls.Add($topBar, 0, 0)
+# Seitenleiste (von oben): App-Name, Schrittanzeige, "Dieses Gerät", unten Links +
+# Sprachumschalter. Dock-Reihenfolge: zuletzt hinzugefügte Top-Controls liegen oben -
+# daher werden die Blöcke unten per SendToBack/BringToFront sortiert.
+$pnlBrand = New-Object System.Windows.Forms.Panel
+$pnlBrand.Dock = 'Top'; $pnlBrand.Height = 58
+$lblBrand = New-Object System.Windows.Forms.Label
+$lblBrand.Text = 'VSC-Wizard'; $lblBrand.Font = New-UiFont 13 -Semibold; $lblBrand.ForeColor = $script:UI.Text
+$lblBrand.AutoSize = $true; $lblBrand.Location = New-Object System.Drawing.Point(2, 0)
+$lblBrandSub = New-Object System.Windows.Forms.Label
+$lblBrandSub.UseMnemonic = $false   # sonst verschluckt WinForms das "&"
+$lblBrandSub.Text = 'Smartcards & Anmeldezertifikate'; $lblBrandSub.Font = New-UiFont 8.5; $lblBrandSub.ForeColor = $script:UI.Muted
+$lblBrandSub.AutoSize = $false; $lblBrandSub.AutoEllipsis = $true; $lblBrandSub.Size = New-Object System.Drawing.Size(200, 18); $lblBrandSub.Location = New-Object System.Drawing.Point(3, 28)
+$pnlBrand.Controls.AddRange(@($lblBrand, $lblBrandSub))
 
+# Schrittanzeige: wird per Update-Stepper je Seite neu aufgebaut.
+$pnlStepper = New-Object System.Windows.Forms.FlowLayoutPanel
+$pnlStepper.Dock = 'Top'; $pnlStepper.FlowDirection = 'TopDown'; $pnlStepper.WrapContents = $false
+$pnlStepper.AutoSize = $true; $pnlStepper.AutoSizeMode = 'GrowAndShrink'
+$pnlStepper.Padding = New-Object System.Windows.Forms.Padding(0, 0, 0, 18)
+
+# "Dieses Gerät": Schlüssel/Wert-Zeilen aus der Umgebungserkennung (Update-DeviceInfo).
+$pnlDevice = New-Object System.Windows.Forms.TableLayoutPanel
+$pnlDevice.Dock = 'Top'; $pnlDevice.ColumnCount = 2; $pnlDevice.AutoSize = $true; $pnlDevice.AutoSizeMode = 'GrowAndShrink'
+[void]$pnlDevice.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$pnlDevice.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+
+# Unten: Links (Einstellungen, Über).
+$pnlSideBottom = New-Object System.Windows.Forms.FlowLayoutPanel
+$pnlSideBottom.Dock = 'Bottom'; $pnlSideBottom.Height = 34; $pnlSideBottom.FlowDirection = 'LeftToRight'; $pnlSideBottom.WrapContents = $false
+function New-SideLink([string]$Text) {
+    $l = New-Object System.Windows.Forms.LinkLabel
+    $l.Text = $Text; $l.AutoSize = $true; $l.Font = New-UiFont 9
+    $l.LinkColor = $script:UI.Accent; $l.ActiveLinkColor = $script:UI.AccentHover; $l.LinkBehavior = 'HoverUnderline'
+    $l.Margin = New-Object System.Windows.Forms.Padding(0, 6, 18, 0)
+    return $l
+}
+$btnOpenSettings = New-SideLink 'Einstellungen'
+$btnOpenSettings.Add_LinkClicked({ Show-SettingsDialog -Owner $form })
+$btnAbout = New-SideLink 'Über'
+$btnAbout.Add_LinkClicked({ Show-AboutDialog })
+$pnlSideBottom.Controls.AddRange(@($btnOpenSettings, $btnAbout))
+
+$sidebar.Controls.Add($pnlSideBottom)
+$sidebar.Controls.Add($pnlDevice)
+$sidebar.Controls.Add($pnlStepper)
+$sidebar.Controls.Add($pnlBrand)
+# Top-Dock: zuletzt hinzugefügt = zuoberst -> Brand, Stepper, Gerät.
+$pnlDevice.SendToBack(); $pnlStepper.SendToBack(); $pnlBrand.SendToBack()
+
+function Update-Stepper {
+    # Schrittanzeige neu aufbauen. $Current = Index des aktiven Schritts; davor liegende
+    # gelten als erledigt (Haken), danach als offen. $Subs: optionale zweite Zeile je
+    # erledigtem Schritt (z.B. Konto, Kartenname).
+    param([Parameter(Mandatory)][string[]]$Labels, [int]$Current = 0, [hashtable]$Subs = @{})
+    $pnlStepper.SuspendLayout()
+    foreach ($old in @($pnlStepper.Controls)) { $pnlStepper.Controls.Remove($old); $old.Dispose() }
+    for ($i = 0; $i -lt $Labels.Count; $i++) {
+        $state = if ($i -lt $Current) { 'done' } elseif ($i -eq $Current) { 'current' } else { 'todo' }
+        $sub = if ($state -eq 'done' -and $Subs.ContainsKey($i)) { "$($Subs[$i])" } else { '' }
+        $row = New-Object System.Windows.Forms.Panel
+        $row.Size = New-Object System.Drawing.Size(202, $(if ($sub) { 46 } else { 38 }))
+        $row.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
+        $row.BackColor = if ($state -eq 'current') { $script:UI.Surface } else { $script:UI.Sidebar }
+        $dot = New-Object System.Windows.Forms.Label
+        $dot.Size = New-Object System.Drawing.Size(24, 24)
+        $dot.Location = New-Object System.Drawing.Point(10, [int](($row.Height - 24) / 2))
+        $dot.Tag = @{ State = $state; N = "$($i + 1)" }
+        $dot.Add_Paint({
+            param($s, $e)
+            $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'
+            $st = $s.Tag['State']; $r = New-Object System.Drawing.Rectangle(0, 0, 23, 23)
+            if ($st -eq 'done') {
+                $b = New-Object System.Drawing.SolidBrush($script:UI.Success); $g.FillEllipse($b, $r); $b.Dispose()
+                $p = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 2.2)
+                $g.DrawLines($p, [System.Drawing.Point[]]@((New-Object System.Drawing.Point(7, 12)), (New-Object System.Drawing.Point(10, 15)), (New-Object System.Drawing.Point(16, 8))))
+                $p.Dispose()
+            } else {
+                if ($st -eq 'current') { $b = New-Object System.Drawing.SolidBrush($script:UI.Accent); $g.FillEllipse($b, $r); $b.Dispose(); $fg = [System.Drawing.Color]::White }
+                else { $p = New-Object System.Drawing.Pen($script:UI.Control); $g.DrawEllipse($p, $r); $p.Dispose(); $fg = $script:UI.Muted }
+                $f = New-UiFont 8 -Semibold
+                $sf = New-Object System.Drawing.StringFormat; $sf.Alignment = 'Center'; $sf.LineAlignment = 'Center'
+                $b2 = New-Object System.Drawing.SolidBrush($fg)
+                $g.DrawString($s.Tag['N'], $f, $b2, (New-Object System.Drawing.RectangleF(0, 0, 24, 24)), $sf)
+                $b2.Dispose(); $f.Dispose()
+            }
+        })
+        $lbl = New-Object System.Windows.Forms.Label
+        $lbl.UseMnemonic = $false
+        $lbl.Text = $Labels[$i]; $lbl.AutoSize = $false; $lbl.AutoEllipsis = $true
+        $lbl.Font = if ($state -eq 'current') { New-UiFont 9.5 -Semibold } else { New-UiFont 9.5 }
+        $lbl.ForeColor = if ($state -eq 'current') { $script:UI.Text } else { $script:UI.Muted }
+        $lbl.Location = New-Object System.Drawing.Point(44, $(if ($sub) { 5 } else { 9 })); $lbl.Size = New-Object System.Drawing.Size(154, 20)
+        $row.Controls.AddRange(@($dot, $lbl))
+        if ($sub) {
+            $lblSub = New-Object System.Windows.Forms.Label
+            $lblSub.Text = $sub; $lblSub.AutoSize = $false; $lblSub.AutoEllipsis = $true; $lblSub.Font = New-UiFont 8.5
+            $lblSub.ForeColor = $script:UI.Muted; $lblSub.Location = New-Object System.Drawing.Point(44, 24); $lblSub.Size = New-Object System.Drawing.Size(154, 18)
+            $row.Controls.Add($lblSub)
+        }
+        $pnlStepper.Controls.Add($row)
+    }
+    $pnlStepper.ResumeLayout()
+}
+
+function Update-DeviceInfo {
+    # "Dieses Gerät" in der Seitenleiste: Liste aus [pscustomobject]@{ K; V }.
+    param([object[]]$Pairs)
+    $pnlDevice.SuspendLayout()
+    foreach ($old in @($pnlDevice.Controls)) { $pnlDevice.Controls.Remove($old); $old.Dispose() }
+    $pnlDevice.RowStyles.Clear(); $pnlDevice.RowCount = 0
+    $head = New-Object System.Windows.Forms.Label
+    $head.Text = 'DIESES GERÄT'; $head.AutoSize = $true; $head.Font = New-UiFont 7.5 -Semibold; $head.ForeColor = $script:UI.Muted
+    $head.Margin = New-Object System.Windows.Forms.Padding(2, 0, 0, 6)
+    $pnlDevice.Controls.Add($head, 0, 0); $pnlDevice.SetColumnSpan($head, 2)
+    $r = 1
+    foreach ($p in @($Pairs)) {
+        $k = New-Object System.Windows.Forms.Label; $k.Text = $p.K; $k.AutoSize = $true; $k.ForeColor = $script:UI.Muted; $k.Font = New-UiFont 9
+        $k.Margin = New-Object System.Windows.Forms.Padding(2, 2, 6, 2)
+        $v = New-Object System.Windows.Forms.Label; $v.Text = $p.V; $v.AutoSize = $true; $v.ForeColor = $script:UI.Text; $v.Font = New-UiFont 9 -Semibold
+        $v.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 2); $v.Anchor = 'Right'
+        $pnlDevice.Controls.Add($k, 0, $r); $pnlDevice.Controls.Add($v, 1, $r); $r++
+    }
+    $pnlDevice.ResumeLayout()
+}
+
+# Seitentitel oben im Arbeitsbereich (vorher: "Schritt n von m: ..." in der Kopfleiste -
+# die Schrittposition zeigt jetzt die Seitenleiste).
+$pnlHeader = New-Object System.Windows.Forms.Panel
+$pnlHeader.Dock = 'Top'; $pnlHeader.Height = 70
+$pnlHeader.Padding = New-Object System.Windows.Forms.Padding(40, 26, 40, 0)
 $lblGlobalStep = New-Object System.Windows.Forms.Label
 $lblGlobalStep.Dock = 'Fill'
-$lblGlobalStep.TextAlign = 'MiddleLeft'
-$lblGlobalStep.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-$lblGlobalStep.Margin = New-Object System.Windows.Forms.Padding(14, 0, 0, 0)
-$topBar.Controls.Add($lblGlobalStep, 0, 0)
-
-$btnAbout = New-Object System.Windows.Forms.Button
-$btnAbout.Text = 'Über'
-$btnAbout.Dock = 'Fill'
-$btnAbout.Margin = New-Object System.Windows.Forms.Padding(6, 6, 0, 6)
-$topBar.Controls.Add($btnAbout, 1, 0)
-$btnAbout.Add_Click({ Show-AboutDialog })
-
-$btnOpenSettings = New-Object System.Windows.Forms.Button
-$btnOpenSettings.Text = 'Einstellungen'
-$btnOpenSettings.Dock = 'Fill'
-$btnOpenSettings.Margin = New-Object System.Windows.Forms.Padding(6, 6, 10, 6)
-$topBar.Controls.Add($btnOpenSettings, 2, 0)
-$btnOpenSettings.Add_Click({ Show-SettingsDialog -Owner $form })
+$lblGlobalStep.Font = New-UiFont 17 -Semibold
+$lblGlobalStep.ForeColor = $script:UI.Text
+$lblGlobalStep.AutoEllipsis = $true
+$lblGlobalStep.UseMnemonic = $false
+$pnlHeader.Controls.Add($lblGlobalStep)
+$mainArea.Controls.Add($pnlHeader)
 
 #endregion
 
 #region STEP HOST (Inhaltsbereich + gemeinsame Weiter/Zurück-Navigation)
 
-$pnlStepHost = New-Object System.Windows.Forms.TableLayoutPanel
-$pnlStepHost.Dock = 'Fill'
-$pnlStepHost.RowCount = 2
-$pnlStepHost.ColumnCount = 1
-[void]$pnlStepHost.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$pnlStepHost.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 54)))
-$mainLayout.Controls.Add($pnlStepHost, 0, 1)
-
 $pnlContentArea = New-Object System.Windows.Forms.Panel
 $pnlContentArea.Dock = 'Fill'
-$pnlStepHost.Controls.Add($pnlContentArea, 0, 0)
+$pnlContentArea.Padding = New-Object System.Windows.Forms.Padding(24, 0, 24, 8)
+$mainArea.Controls.Add($pnlContentArea)
 
-$navShared = New-Object System.Windows.Forms.TableLayoutPanel
-$navShared.Dock = 'Fill'
-$navShared.ColumnCount = 3
-[void]$navShared.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-[void]$navShared.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
-[void]$navShared.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 120)))
-$pnlStepHost.Controls.Add($navShared, 0, 1)
+# Fußleiste: links der Protokoll-Schalter, rechts Zurück/Weiter - immer an derselben Stelle.
+$pnlFooter = New-Object System.Windows.Forms.Panel
+$pnlFooter.Dock = 'Bottom'; $pnlFooter.Height = 64
+$pnlFooter.BackColor = $script:UI.Surface
+Add-BorderPaint -Control $pnlFooter -TopOnly
+$mainArea.Controls.Add($pnlFooter)
 
-$lblStepShared = New-Object System.Windows.Forms.Label
-$lblStepShared.Dock = 'Fill'
-$lblStepShared.TextAlign = 'MiddleLeft'
-$navShared.Controls.Add($lblStepShared, 0, 0)
-
-$btnBackShared = New-Object System.Windows.Forms.Button
-$btnBackShared.Text = '< Zurück'
-$btnBackShared.Dock = 'Fill'
-$navShared.Controls.Add($btnBackShared, 1, 0)
+$btnLogToggle = New-Object System.Windows.Forms.Button
+$btnLogToggle.Text = 'Protokoll anzeigen'
+$btnLogToggle.Size = New-Object System.Drawing.Size(190, 34)
+$btnLogToggle.Location = New-Object System.Drawing.Point(28, 15)
+$btnLogToggle.TextAlign = 'MiddleLeft'
+Set-ButtonStyle -Button $btnLogToggle -Kind Link
+$pnlFooter.Controls.Add($btnLogToggle)
 
 $btnNextShared = New-Object System.Windows.Forms.Button
-$btnNextShared.Text = 'Weiter >'
-$btnNextShared.Dock = 'Fill'
-$navShared.Controls.Add($btnNextShared, 2, 0)
+$btnNextShared.Text = 'Weiter'
+$btnNextShared.Size = New-Object System.Drawing.Size(128, 38)
+Set-ButtonStyle -Button $btnNextShared -Kind Primary
+$btnNextShared.Add_EnabledChanged({ Update-PrimaryEnabledLook $this })
+$pnlFooter.Controls.Add($btnNextShared)
+
+$btnBackShared = New-Object System.Windows.Forms.Button
+$btnBackShared.Text = 'Zurück'
+$btnBackShared.Size = New-Object System.Drawing.Size(112, 38)
+Set-ButtonStyle -Button $btnBackShared -Kind Secondary
+$pnlFooter.Controls.Add($btnBackShared)
+# Ein deaktiviertes "Zurück" (Startseite) ist nur Rauschen - dann ausblenden.
+$btnBackShared.Add_EnabledChanged({ $btnBackShared.Visible = $btnBackShared.Enabled })
+
+# Rechtsbündig bei jedem Layout positionieren (kein Anchor: der merkt sich die
+# Startbreite des noch nicht angezeigten Panels - siehe $scnHeader).
+$pnlFooter.Add_Layout({
+    $btnNextShared.Location = New-Object System.Drawing.Point(($pnlFooter.ClientSize.Width - 40 - $btnNextShared.Width), 13)
+    $btnBackShared.Location = New-Object System.Drawing.Point(($btnNextShared.Left - 10 - $btnBackShared.Width), 13)
+})
 
 # $script:ActivePlan: $null = Schritt 1 (Moduswahl) ist aktiv, 'A'/'B' = der jeweilige
 # Schritt-Satz ist aktiv. Weiter/Zurück werten dies aus, um an die richtige Stelle zu
@@ -866,7 +1083,8 @@ function Show-ModeSelectStep {
     if ($pnlScenario) { $pnlScenario.Visible = $false }
     $pnlModeSelect.Visible = $true
     Update-ModeSelectPlanChoice
-    $lblGlobalStep.Text = 'Schritt 2: Konto & Weg'
+    $lblGlobalStep.Text = 'Konto & Weg'
+    Update-Stepper -Labels @('Szenario', 'Konto & Weg') -Current 1
     # Zurück führt jetzt auf die Szenario-Auswahl (Schritt 1).
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = $true
@@ -902,18 +1120,6 @@ function Invoke-ModeSelectNextClick {
 #region SCHRITT 1: SZENARIO-AUSWAHL (neue Startseite, routet in die bestehenden Abläufe)
 # ============================================================================
 
-# Farbpalette (klassisch, passend zum WinForms-Look aus dem Design-Mockup).
-$scnStripe = @{
-    blue  = [System.Drawing.Color]::FromArgb(47, 111, 176)
-    green = [System.Drawing.Color]::FromArgb(46, 125, 82)
-    teal  = [System.Drawing.Color]::FromArgb(42, 128, 145)
-    red   = [System.Drawing.Color]::FromArgb(181, 52, 42)
-}
-$scnSelColor  = [System.Drawing.Color]::FromArgb(229, 241, 251)
-$scnTagTool   = [System.Drawing.Color]::FromArgb(46, 125, 82)
-$scnTagYou    = [System.Drawing.Color]::FromArgb(176, 110, 20)
-$scnTagGate   = [System.Drawing.Color]::FromArgb(42, 128, 145)
-$scnTagDanger = [System.Drawing.Color]::FromArgb(181, 52, 42)
 
 # Szenario-Definitionen (Reihenfolge wie im Runbook). Steps: T = Tag, X = Text.
 $script:Scenarios = @(
@@ -976,182 +1182,239 @@ $pnlScenario.Dock = 'Fill'
 $pnlScenario.Visible = $false
 $pnlContentArea.Controls.Add($pnlScenario)
 
-$scnRoot = New-Object System.Windows.Forms.TableLayoutPanel
-$scnRoot.Dock = 'Fill'; $scnRoot.ColumnCount = 1; $scnRoot.RowCount = 2
-# 122 px: Platz für eine bis zu dreizeilige "Hier nicht möglich"-Begründung.
-[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 122)))
-[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-$pnlScenario.Controls.Add($scnRoot)
+# Startseite (Redesign): EINE Spalte mit Karten statt Liste + Detailbereich. Die
+# gewählte Karte klappt auf (Ablauf + Warnhinweis); nicht mögliche Szenarien zeigen
+# ihre Begründung direkt in der Karte. Gruppen: "Smartcard ausstellen" und "Werkzeuge".
+$scnScroll = New-Object System.Windows.Forms.Panel
+$scnScroll.Dock = 'Fill'; $scnScroll.AutoScroll = $true
+$scnScroll.Padding = New-Object System.Windows.Forms.Padding(16, 0, 16, 12)
+$pnlScenario.Controls.Add($scnScroll)
 
-$scnHeader = New-Object System.Windows.Forms.Panel
-$scnHeader.Dock = 'Fill'
-$scnRoot.Controls.Add($scnHeader, 0, 0)
-$lblScnTitle = New-WizardLabel -Text 'Was möchtest du tun?' -X 16 -Y 12 -Width 760 -Style Bold
-$lblScnTitle.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
-$lblScnTitle.Height = 26
-$lblScnSub = New-WizardLabel -Text 'Szenario wählen - der Wizard richtet Karte, Antrag und Einreichungsweg passend ein.' -X 16 -Y 42 -Width 760
-$lblScnSub.ForeColor = [System.Drawing.Color]::DimGray
-# Begründungen sind bis ~300 Zeichen lang -> mehrzeilig (vorher einzeilig, abgeschnitten).
-$lblScnValidation = New-WizardLabel -Text '' -X 16 -Y 42 -Width 840 -Height 50
-$lblScnValidation.ForeColor = [System.Drawing.Color]::Firebrick
-$lblScnValidation.Visible = $false
-# Umgebungs-Banner: was der Wizard HIER erkannt hat (Join, TPM, On-Prem-TGT, VSCs, EA).
-$lblScnEnv = New-WizardLabel -Text '' -X 16 -Y 94 -Width 840 -Height 22
-$lblScnEnv.AutoEllipsis = $true
-# Breite der Kopfzeilen an die Fensterbreite koppeln. Bewusst per SizeChanged statt
-# Anchor: Anchor merkt sich den Abstand zur (beim Hinzufügen noch winzigen) Panelbreite
-# und liess die Labels dann weit über den rechten Rand wachsen.
-$scnHeader.Add_SizeChanged({
-    $w = [Math]::Max(200, $scnHeader.ClientSize.Width - 32)
-    foreach ($l in @($lblScnValidation, $lblScnEnv)) { $l.Width = $w }
-})
-$lblScnEnv.ForeColor = [System.Drawing.Color]::FromArgb(42, 128, 145)
-$scnHeader.Controls.AddRange(@($lblScnTitle, $lblScnSub, $lblScnValidation, $lblScnEnv))
+$scnStack = New-Object System.Windows.Forms.FlowLayoutPanel
+$scnStack.FlowDirection = 'TopDown'; $scnStack.WrapContents = $false
+$scnStack.AutoSize = $true; $scnStack.AutoSizeMode = 'GrowAndShrink'
+$scnStack.Location = New-Object System.Drawing.Point(16, 0)
+$scnScroll.Controls.Add($scnStack)
 
-$scnSplit = New-Object System.Windows.Forms.TableLayoutPanel
-$scnSplit.Dock = 'Fill'; $scnSplit.ColumnCount = 2; $scnSplit.RowCount = 1
-[void]$scnSplit.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 56)))
-[void]$scnSplit.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 44)))
-$scnRoot.Controls.Add($scnSplit, 0, 1)
+$lblScnSub = New-Object System.Windows.Forms.Label
+$lblScnSub.Text = 'Wähle, für wen die Smartcard ist - der Wizard richtet Karte, Antrag und Einreichungsweg passend ein.'
+$lblScnSub.AutoSize = $true; $lblScnSub.Font = New-UiFont 10; $lblScnSub.ForeColor = $script:UI.Muted
+$lblScnSub.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+# Nur noch für "Bitte ein Szenario auswählen." (Begründungen stehen in den Karten).
+$lblScnValidation = New-Object System.Windows.Forms.Label
+$lblScnValidation.AutoSize = $true; $lblScnValidation.Font = New-UiFont 9.5; $lblScnValidation.ForeColor = $script:UI.Danger
+$lblScnValidation.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14); $lblScnValidation.Visible = $false
+# Frühere lange Umgebungszeile: Inhalt steht jetzt in der Seitenleiste; das Label bleibt
+# (unsichtbar) als Text-Quelle für Tests/Log.
+$lblScnEnv = New-Object System.Windows.Forms.Label
+$lblScnEnv.Visible = $false
 
-$scnList = New-Object System.Windows.Forms.FlowLayoutPanel
-$scnList.Dock = 'Fill'; $scnList.FlowDirection = 'TopDown'; $scnList.WrapContents = $false; $scnList.AutoScroll = $true
-$scnList.Padding = New-Object System.Windows.Forms.Padding(10, 6, 10, 6)
-$scnSplit.Controls.Add($scnList, 0, 0)
-
-$scnDetailsGroup = New-Object System.Windows.Forms.GroupBox
-$scnDetailsGroup.Text = 'Ablauf'; $scnDetailsGroup.Dock = 'Fill'
-$scnDetailsGroup.Margin = New-Object System.Windows.Forms.Padding(6, 6, 10, 10)
-$scnSplit.Controls.Add($scnDetailsGroup, 1, 0)
-
-$scnDetails = New-Object System.Windows.Forms.RichTextBox
-$scnDetails.Dock = 'Fill'; $scnDetails.ReadOnly = $true; $scnDetails.BorderStyle = 'None'
-$scnDetails.BackColor = [System.Drawing.SystemColors]::Window
-$scnDetails.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-$scnDetailsGroup.Controls.Add($scnDetails)
-
-function Add-ScnColoredText {
-    param($Rtb, [string]$Text, [System.Drawing.Color]$Color, [switch]$Bold)
-    $Rtb.SelectionStart = $Rtb.TextLength
-    $Rtb.SelectionLength = 0
-    $Rtb.SelectionColor = $Color
-    $style = if ($Bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }
-    $Rtb.SelectionFont = New-Object System.Drawing.Font('Segoe UI', 9, $style)
-    $Rtb.AppendText($Text)
+function New-ScnSection([string]$Text) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $Text.ToUpper(); $l.AutoSize = $true; $l.Font = New-UiFont 8 -Semibold; $l.ForeColor = $script:UI.Muted
+    $l.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 8)
+    return $l
 }
 
-function Set-ScenarioDetails {
+# Farben der Kategorie-Chips und der Ablauf-Rollen.
+$scnTagColors = @{
+    1 = @((New-UiColor 232 241 251), (New-UiColor 11 74 139))
+    2 = @((New-UiColor 230 244 234), (New-UiColor 30 107 58))
+    3 = @((New-UiColor 241 236 251), (New-UiColor 90 58 154))
+    4 = @((New-UiColor 227 244 244), (New-UiColor 29 99 99))
+    5 = @((New-UiColor 236 239 243), (New-UiColor 58 66 75))
+}
+$scnWhoColors = @{
+    'Tool'    = @($script:UI.AccentWeak, $script:UI.AccentText)
+    'Prüfung' = @($script:UI.WarnWeak, $script:UI.Warn)
+    'Du'      = @($script:UI.Sidebar, (New-UiColor 58 66 75))
+}
+$script:ScnCards = @{}   # Id -> Karten-Panel
+
+# Klick auf Karte oder eines ihrer Elemente: Id aus dem Tag (Karte: Hashtable, Kinder: int).
+$scnRowClick = {
+    param($s, $e)
+    $id = if ($s.Tag -is [hashtable]) { $s.Tag['Id'] } else { $s.Tag }
+    if ($null -ne $id) { Select-ScenarioById -Id ([int]$id) }
+}
+
+function New-ScenarioCard {
     param($Scenario)
-    $scnDetails.Clear()
-    if (-not $Scenario) { return }
-    $ink = [System.Drawing.SystemColors]::WindowText
-    Add-ScnColoredText -Rtb $scnDetails -Text ("{0:D2}  {1}`r`n`r`n" -f $Scenario.Id, $Scenario.Title) -Color $ink -Bold
-    foreach ($s in $Scenario.Steps) {
-        $tagColor = switch ($s.T) { 'Tool' { $scnTagTool } 'Du' { $scnTagYou } 'Prüfung' { $scnTagGate } default { $ink } }
-        Add-ScnColoredText -Rtb $scnDetails -Text ("[{0}] " -f $s.T) -Color $tagColor -Bold
-        Add-ScnColoredText -Rtb $scnDetails -Text ("{0}`r`n" -f $s.X) -Color $ink
+    $parts = "$($Scenario.Sub)" -split '\s{3,}', 2
+    $tagText = if ($parts.Count -gt 1) { (Get-Culture).TextInfo.ToTitleCase($parts[0].ToLower()) } else { '' }
+    $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
+
+    $card = New-Object System.Windows.Forms.Panel
+    $card.BackColor = $script:UI.Surface
+    $card.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
+    $card.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $card.Tag = @{ Id = $Scenario.Id; Selected = $false; Available = $true }
+    $card.Add_Paint({
+        param($s, $e)
+        $sel = $s.Tag['Selected']
+        $pen = New-Object System.Drawing.Pen($(if ($sel) { $script:UI.Accent } else { $script:UI.Border }), $(if ($sel) { 2 } else { 1 }))
+        $o = if ($sel) { 1 } else { 0 }
+        $e.Graphics.DrawRectangle($pen, $o, $o, $s.Width - 1 - $o, $s.Height - 1 - $o)
+        $pen.Dispose()
+    })
+
+    $num = New-Object System.Windows.Forms.Label
+    $num.Text = ('{0:D2}' -f $Scenario.Id); $num.AutoSize = $true; $num.Font = New-UiFont 9.5 -Semibold; $num.ForeColor = $script:UI.Muted
+    $num.Location = New-Object System.Drawing.Point(18, 16)
+    $title = New-Object System.Windows.Forms.Label
+    $title.UseMnemonic = $false; $title.Text = $Scenario.Title; $title.AutoSize = $true; $title.Font = New-UiFont 11 -Semibold; $title.ForeColor = $script:UI.Text
+    $title.Location = New-Object System.Drawing.Point(54, 12)
+    $chip = New-Object System.Windows.Forms.Label
+    $chip.Text = $tagText; $chip.AutoSize = $true; $chip.Font = New-UiFont 7.5 -Semibold
+    $chip.Padding = New-Object System.Windows.Forms.Padding(6, 1, 6, 1)
+    $tc = $scnTagColors[[int]$Scenario.Id]; if ($tc) { $chip.BackColor = $tc[0]; $chip.ForeColor = $tc[1] }
+    $chip.Visible = [bool]$tagText
+    $descLbl = New-Object System.Windows.Forms.Label
+    $descLbl.UseMnemonic = $false; $descLbl.Text = $desc; $descLbl.AutoSize = $false; $descLbl.AutoEllipsis = $true
+    $descLbl.Font = New-UiFont 9.5; $descLbl.ForeColor = $script:UI.Muted
+    $descLbl.Location = New-Object System.Drawing.Point(54, 38); $descLbl.Height = 20
+    $chev = New-Object System.Windows.Forms.Label
+    $chev.Text = [char]0xE76C; $chev.Font = New-Object System.Drawing.Font('Segoe MDL2 Assets', 10); $chev.ForeColor = $script:UI.Muted
+    $chev.AutoSize = $true
+
+    # Begründung (nicht möglich) - mehrzeilig.
+    $reason = New-Object System.Windows.Forms.Label
+    $reason.UseMnemonic = $false; $reason.AutoSize = $true; $reason.Font = New-UiFont 9.5; $reason.ForeColor = $script:UI.Danger
+    $reason.Visible = $false
+
+    # Aufgeklappter Teil: Ablauf-Schritte + Warnhinweis.
+    $details = New-Object System.Windows.Forms.Panel
+    $details.BackColor = $script:UI.Surface; $details.Visible = $false
+    $y = 0
+    $stepRows = New-Object System.Collections.ArrayList
+    foreach ($st in $Scenario.Steps) {
+        $who = New-Object System.Windows.Forms.Label
+        $who.Text = $st.T; $who.AutoSize = $false; $who.Size = New-Object System.Drawing.Size(64, 20); $who.TextAlign = 'MiddleCenter'
+        $who.Font = New-UiFont 8 -Semibold
+        $wc = $scnWhoColors[$st.T]; if ($wc) { $who.BackColor = $wc[0]; $who.ForeColor = $wc[1] }
+        $txt = New-Object System.Windows.Forms.Label
+        $txt.UseMnemonic = $false; $txt.Text = $st.X; $txt.AutoSize = $true; $txt.Font = New-UiFont 9.5; $txt.ForeColor = $script:UI.Text
+        $details.Controls.AddRange(@($who, $txt))
+        [void]$stepRows.Add(@($who, $txt))
     }
+    $guard = $null
     if ($Scenario.Guard) {
-        $gColor = if ($Scenario.Guard.Kind -eq 'danger') { $scnTagDanger } else { $scnTagYou }
-        Add-ScnColoredText -Rtb $scnDetails -Text "`r`n! " -Color $gColor -Bold
-        Add-ScnColoredText -Rtb $scnDetails -Text $Scenario.Guard.Text -Color $gColor
+        $guard = New-Object System.Windows.Forms.Label
+        $guard.UseMnemonic = $false; $guard.Text = $Scenario.Guard.Text; $guard.AutoSize = $true; $guard.Font = New-UiFont 9
+        $danger = $Scenario.Guard.Kind -eq 'danger'
+        $guard.BackColor = if ($danger) { $script:UI.DangerWeak } else { $script:UI.WarnWeak }
+        $guard.ForeColor = if ($danger) { New-UiColor 125 28 20 } else { $script:UI.Warn }
+        $guard.Padding = New-Object System.Windows.Forms.Padding(12, 9, 12, 9)
+        $details.Controls.Add($guard)
     }
-    $scnDetails.SelectionStart = 0
-    $scnDetails.ScrollToCaret()
+
+    $card.Controls.AddRange(@($num, $title, $chip, $descLbl, $chev, $reason, $details))
+    $card.Tag['Parts'] = @{ Title = $title; Chip = $chip; Desc = $descLbl; Chev = $chev; Reason = $reason; Details = $details; Steps = $stepRows; Guard = $guard; Num = $num }
+    foreach ($c in @($num, $title, $chip, $descLbl, $chev, $reason, $details)) { $c.Tag = if ($c.Tag) { $c.Tag } else { $Scenario.Id }; $c.Add_Click($scnRowClick) }
+    $card.Add_Click($scnRowClick)
+    return $card
 }
+
+function Update-ScenarioCardLayout {
+    # Positionen/Höhe einer Karte aus Breite + Zustand (ausgewählt/verfügbar) berechnen.
+    param([System.Windows.Forms.Panel]$Card)
+    $p = $Card.Tag['Parts']; $w = $Card.Width
+    $p.Chip.Location = New-Object System.Drawing.Point(($p.Title.Right + 10), 16)
+    $p.Chev.Location = New-Object System.Drawing.Point(($w - 34), 22)
+    $p.Desc.Width = [Math]::Max(60, $w - 54 - 48)
+    $y = 64
+    # Eigene Zustands-Flags statt .Visible: .Visible liefert bei (noch) nicht angezeigtem
+    # Fenster immer $false - dann liefe dieses Layout nie.
+    if ($Card.Tag['ShowReason']) {
+        $p.Reason.MaximumSize = New-Object System.Drawing.Size(($w - 54 - 24), 0)
+        $p.Reason.Location = New-Object System.Drawing.Point(54, ($y - 2)); $y = $p.Reason.Bottom + 12
+    }
+    if ($Card.Tag['Selected']) {
+        $dw = $w - 54 - 24
+        $p.Details.Location = New-Object System.Drawing.Point(54, ($y - 2)); $p.Details.Width = $dw
+        $dy = 2
+        foreach ($row in $p.Steps) {
+            $row[0].Location = New-Object System.Drawing.Point(0, $dy)
+            $row[1].MaximumSize = New-Object System.Drawing.Size(($dw - 76), 0)
+            $row[1].Location = New-Object System.Drawing.Point(76, ($dy + 1))
+            $dy = [Math]::Max($row[0].Bottom, $row[1].Bottom) + 8
+        }
+        if ($p.Guard) {
+            $p.Guard.MaximumSize = New-Object System.Drawing.Size($dw, 0)
+            $p.Guard.MinimumSize = New-Object System.Drawing.Size($dw, 0)
+            $p.Guard.Location = New-Object System.Drawing.Point(0, ($dy + 4)); $dy = $p.Guard.Bottom + 4
+        }
+        $p.Details.Height = $dy
+        $y = $p.Details.Bottom + 14
+    }
+    $Card.Height = [Math]::Max(66, $y)
+    $Card.Invalidate()
+}
+
+function Update-ScenarioCard {
+    # Zustand (Auswahl/Verfügbarkeit) einer Karte auf ihre Darstellung übertragen.
+    param([System.Windows.Forms.Panel]$Card)
+    $id = [int]$Card.Tag['Id']; $p = $Card.Tag['Parts']
+    $ok = $true; if ($script:ScnAvailable.ContainsKey($id)) { $ok = [bool]$script:ScnAvailable[$id] }
+    $sel = $ok -and ($id -eq $script:SelectedScenario)
+    $Card.Tag['Selected'] = $sel; $Card.Tag['Available'] = $ok; $Card.Tag['ShowReason'] = -not $ok
+    $Card.BackColor = if ($ok) { $script:UI.Surface } else { New-UiColor 240 242 244 }
+    $Card.Cursor = if ($ok) { [System.Windows.Forms.Cursors]::Hand } else { [System.Windows.Forms.Cursors]::Default }
+    $p.Title.ForeColor = if ($ok) { $script:UI.Text } else { $script:UI.Muted }
+    $p.Reason.Visible = -not $ok
+    $p.Reason.Text = if ($ok) { '' } else { "Hier nicht möglich: $($script:ScnReason[$id])" }
+    $p.Details.Visible = $sel
+    $p.Chev.Text = if ($sel) { [char]0xE70D } else { [char]0xE76C }
+    $p.Chev.Visible = $ok
+    Update-ScenarioCardLayout -Card $Card
+}
+
+$scnStack.Controls.AddRange(@($lblScnSub, $lblScnValidation))
+$scnStack.Controls.Add((New-ScnSection 'Smartcard ausstellen'))
+foreach ($scn in @($script:Scenarios | Where-Object { $_.Id -ne 4 })) {
+    $card = New-ScenarioCard -Scenario $scn
+    $script:ScnCards[[int]$scn.Id] = $card
+    $scnStack.Controls.Add($card)
+}
+$scnStack.Controls.Add((New-ScnSection 'Werkzeuge'))
+foreach ($scn in @($script:Scenarios | Where-Object { $_.Id -eq 4 })) {
+    $card = New-ScenarioCard -Scenario $scn
+    $script:ScnCards[[int]$scn.Id] = $card
+    $scnStack.Controls.Add($card)
+}
+
+# Kartenbreite an die Fensterbreite koppeln (Layout-Ereignis, kein Anchor - siehe Fußleiste).
+$scnScroll.Add_Layout({
+    # Breite der senkrechten Scrollleiste immer abziehen - sonst erscheint, sobald sie
+    # auftaucht, zusätzlich eine waagrechte.
+    $w = [Math]::Max(420, [Math]::Min(900, $scnScroll.ClientSize.Width - 32 - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth))
+    $lblScnSub.MaximumSize = New-Object System.Drawing.Size($w, 0)
+    $lblScnValidation.MaximumSize = New-Object System.Drawing.Size($w, 0)
+    foreach ($c in $script:ScnCards.Values) {
+        if ($c.Width -ne $w) { $c.Width = $w; Update-ScenarioCardLayout -Card $c }
+    }
+})
 
 function Select-ScenarioById {
     param([int]$Id)
-    $script:SelectedScenario = $Id
-    foreach ($row in $scnList.Controls) {
-        if ([int]$row.Tag -eq $Id) { $row.BackColor = $scnSelColor } else { $row.BackColor = [System.Drawing.SystemColors]::Window }
-    }
-    # Ausgegraute (unpassende) Kacheln wieder in Control-Grau statt Window-Weiss.
-    Update-ScenarioRowColors
-    Set-ScenarioDetails -Scenario ($script:Scenarios | Where-Object { $_.Id -eq $Id })
-
     $available = $true
     if ($script:ScnAvailable.ContainsKey($Id)) { $available = [bool]$script:ScnAvailable[$Id] }
-    if ($available) {
-        $lblScnValidation.Visible = $false
-        $lblScnSub.Visible = $true
-        $btnNextShared.Enabled = $true
-    } else {
-        $lblScnSub.Visible = $false
-        $lblScnValidation.Text = "Hier nicht möglich: $($script:ScnReason[$Id])"
-        $lblScnValidation.Visible = $true
-        $btnNextShared.Enabled = $false   # Weiter blockiert, Begruendung steht oben
-    }
+    # Nicht mögliche Szenarien sind nicht wählbar - die Begründung steht in der Karte.
+    if (-not $available) { return }
+    $script:SelectedScenario = $Id
+    $lblScnValidation.Visible = $false
+    $scnStack.SuspendLayout()
+    foreach ($c in $script:ScnCards.Values) { Update-ScenarioCard -Card $c }
+    $scnStack.ResumeLayout()
+    $btnNextShared.Enabled = $true
 }
 
 function Update-ScenarioRowColors {
-    # Nur die Hintergrundfarbe der NICHT ausgewaehlten Kacheln setzen: unpassende grau,
-    # passende weiss. Die ausgewaehlte Kachel behaelt ihre Auswahlfarbe.
-    foreach ($row in $scnList.Controls) {
-        $id = [int]$row.Tag
-        if ($id -eq $script:SelectedScenario) { continue }
-        $ok = $true
-        if ($script:ScnAvailable.ContainsKey($id)) { $ok = [bool]$script:ScnAvailable[$id] }
-        $row.BackColor = if ($ok) { [System.Drawing.SystemColors]::Window } else { [System.Drawing.SystemColors]::Control }
-    }
+    # Name historisch (früher Zeilenfarben): alle Karten an Auswahl/Verfügbarkeit angleichen.
+    $scnStack.SuspendLayout()
+    foreach ($c in $script:ScnCards.Values) { Update-ScenarioCard -Card $c }
+    $scnStack.ResumeLayout()
 }
-
-# Gemeinsamer Klick-Handler: liest die Szenario-Id aus .Tag des angeklickten Controls.
-$scnRowClick = { param($s, $e) $id = $s.Tag; if ($null -ne $id) { Select-ScenarioById -Id ([int]$id) } }
-
-$scnToolTip = New-Object System.Windows.Forms.ToolTip
-foreach ($scn in $script:Scenarios) {
-    $row = New-Object System.Windows.Forms.Panel
-    $row.Height = 62; $row.Width = 380
-    $row.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
-    $row.BackColor = [System.Drawing.SystemColors]::Window
-    $row.BorderStyle = 'FixedSingle'
-    $row.Tag = $scn.Id
-    $row.Cursor = [System.Windows.Forms.Cursors]::Hand
-
-    $stripe = New-Object System.Windows.Forms.Panel
-    $stripe.Dock = 'Left'; $stripe.Width = 5; $stripe.BackColor = $scnStripe[$scn.Stripe]
-    $row.Controls.Add($stripe)
-
-    $lblT = New-Object System.Windows.Forms.Label
-    $lblT.Text = ("{0:D2}   {1}" -f $scn.Id, $scn.Title)
-    $lblT.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-    $lblT.Location = New-Object System.Drawing.Point(14, 8); $lblT.AutoSize = $true
-    $lblT.Tag = $scn.Id
-    $row.Controls.Add($lblT)
-
-    # Untertitel wächst mit der (fensterabhängigen) Zeilenbreite und endet bei Platzmangel
-    # mit "..." statt hart abgeschnitten zu werden; voller Text als Tooltip (und ohnehin
-    # im Detailbereich rechts).
-    $lblS = New-Object System.Windows.Forms.Label
-    $lblS.Text = $scn.Sub
-    $lblS.ForeColor = [System.Drawing.Color]::DimGray
-    $lblS.Location = New-Object System.Drawing.Point(14, 32)
-    $lblS.Size = New-Object System.Drawing.Size(($row.Width - 20), 18)
-    $lblS.AutoEllipsis = $true
-    $lblS.Tag = $scn.Id
-    $scnToolTip.SetToolTip($lblS, $scn.Sub)
-    $row.Controls.Add($lblS)
-
-    $row.Add_Click($scnRowClick)
-    $lblT.Add_Click($scnRowClick)
-    $lblS.Add_Click($scnRowClick)
-    $stripe.Add_Click($scnRowClick)
-
-    [void]$scnList.Controls.Add($row)
-}
-
-# Zeilenbreite an die (variable) Listenbreite anpassen.
-$scnResize = {
-    $w = $scnList.ClientSize.Width - 24
-    if ($w -lt 200) { $w = 200 }
-    foreach ($row in $scnList.Controls) {
-        $row.Width = $w
-        # Untertitel (AutoEllipsis) mitziehen - kein Anchor, siehe Kommentar bei $scnHeader.
-        foreach ($c in $row.Controls) { if ($c -is [System.Windows.Forms.Label] -and $c.AutoEllipsis) { $c.Width = [Math]::Max(50, $w - 20) } }
-    }
-}
-$scnList.Add_SizeChanged($scnResize)
 
 function Get-ScenarioAvailability {
     # Entscheidet KAPAZITAETSBASIERT (nicht per Join-Heuristik), ob ein Szenario HIER
@@ -1200,26 +1463,23 @@ function Update-ScenarioAvailability {
         $script:ScnReason[$scn.Id]    = $av.Reason
     }
 
-    foreach ($row in $scnList.Controls) {
-        $id = [int]$row.Tag
-        $ok = $true
-        if ($script:ScnAvailable.ContainsKey($id)) { $ok = [bool]$script:ScnAvailable[$id] }
-        foreach ($c in $row.Controls) {
-            if ($c -is [System.Windows.Forms.Label]) {
-                if ($ok) {
-                    $c.ForeColor = if ($c.Font.Bold) { [System.Drawing.SystemColors]::WindowText } else { [System.Drawing.Color]::DimGray }
-                } else {
-                    $c.ForeColor = [System.Drawing.Color]::FromArgb(170, 170, 170)
-                }
-            }
-        }
-        if (-not $ok -and $id -ne $script:SelectedScenario) { $row.BackColor = [System.Drawing.SystemColors]::Control }
-        elseif ($id -ne $script:SelectedScenario) { $row.BackColor = [System.Drawing.SystemColors]::Window }
+    # Gewähltes, aber hier nicht (mehr) mögliches Szenario abwählen.
+    if ($script:SelectedScenario -and $script:ScnAvailable.ContainsKey([int]$script:SelectedScenario) -and -not $script:ScnAvailable[[int]$script:SelectedScenario]) {
+        $script:SelectedScenario = $null
     }
+    Update-ScenarioRowColors
 
     $tpmText = if ($caps.TpmPresent) { if ($caps.TpmReady) { 'TPM bereit' } else { 'TPM vorhanden (nicht bereit)' } } else { 'kein TPM' }
     $tgtText = if ($caps.HasOnPremTgt) { "On-Prem-TGT: ja$(if ($caps.Realm) { " ($($caps.Realm))" })" } else { 'On-Prem-TGT: nein' }
     $lblScnEnv.Text = "Hier erkannt:  $($caps.JoinMode)  ·  $tpmText  ·  $tgtText  ·  VSCs: $($caps.VscCount)  ·  EA-Zert: $($caps.EaCertCount)  (ausgegraute Punkte sind hier nicht möglich)"
+    # Seitenleiste "Dieses Gerät" (kompakt, statt der langen Zeile oben).
+    Update-DeviceInfo -Pairs @(
+        [pscustomobject]@{ K = 'Anmeldung'; V = "$($caps.JoinMode)" }
+        [pscustomobject]@{ K = 'TPM'; V = $(if ($caps.TpmPresent) { if ($caps.TpmReady) { 'bereit' } else { 'nicht bereit' } } else { 'keins' }) }
+        [pscustomobject]@{ K = 'Kerberos'; V = $(if ($caps.HasOnPremTgt) { if ($caps.Realm) { "$($caps.Realm)" } else { 'ja' } } else { 'kein Ticket' }) }
+        [pscustomobject]@{ K = 'Smartcards'; V = "$($caps.VscCount)" }
+        [pscustomobject]@{ K = 'EA-Zertifikat'; V = $(if ($caps.EaCertCount -gt 0) { "$($caps.EaCertCount)" } else { 'keins' }) }
+    )
 }
 
 function Show-ScenarioStep {
@@ -1231,8 +1491,8 @@ function Show-ScenarioStep {
     $tabPlanB.Visible = $false
     $pnlModeSelect.Visible = $false
     $pnlScenario.Visible = $true
-    & $scnResize
-    $lblGlobalStep.Text = 'Schritt 1: Szenario'
+    $lblGlobalStep.Text = 'Was möchtest du tun?'
+    Update-Stepper -Labels @('Szenario', 'Smartcard', 'Zertifikat', 'Fertig') -Current 0
     $btnBackShared.Enabled = $false
     Update-ScenarioAvailability   # Umgebung neu erkennen + unpassende Punkte ausgrauen
     if ($script:SelectedScenario) {
@@ -1616,36 +1876,50 @@ function Invoke-ScenarioNextClick {
 
 #region LOG PANEL
 
-$logGroup = New-Object System.Windows.Forms.GroupBox
-$logGroup.Text = 'Log / Diagnose'
-$logGroup.Dock = 'Fill'
-$mainLayout.Controls.Add($logGroup, 0, 2)
+# Einklappbares Protokoll über der Fußleiste (vorher dauerhaft ~1/5 des Fensters).
+$logDrawer = New-Object System.Windows.Forms.Panel
+$logDrawer.Dock = 'Bottom'; $logDrawer.Height = 200
+$logDrawer.BackColor = $script:UI.Surface
+$logDrawer.Visible = $false
+Add-BorderPaint -Control $logDrawer -TopOnly
+$mainArea.Controls.Add($logDrawer)
 
-$logLayout = New-Object System.Windows.Forms.TableLayoutPanel
-$logLayout.Dock = 'Fill'
-$logLayout.RowCount = 2
-$logLayout.ColumnCount = 1
-[void]$logLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 34)))
-[void]$logLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-$logGroup.Controls.Add($logLayout)
-
-$logToolbar = New-Object System.Windows.Forms.FlowLayoutPanel
-$logToolbar.Dock = 'Fill'
-$logToolbar.FlowDirection = 'RightToLeft'
-$logLayout.Controls.Add($logToolbar, 0, 0)
-
-$btnExportLog = New-Object System.Windows.Forms.Button
-$btnExportLog.Text = 'Log exportieren...'
-$btnExportLog.Size = New-Object System.Drawing.Size(140, 26)
-$logToolbar.Controls.Add($btnExportLog)
+$logToolbar = New-Object System.Windows.Forms.Panel
+$logToolbar.Dock = 'Top'; $logToolbar.Height = 36
+$lblLogTitle = New-Object System.Windows.Forms.Label
+$lblLogTitle.Text = 'Protokoll'; $lblLogTitle.Font = New-UiFont 9 -Semibold; $lblLogTitle.ForeColor = $script:UI.Text
+$lblLogTitle.AutoSize = $true; $lblLogTitle.Location = New-Object System.Drawing.Point(40, 10)
+$btnExportLog = New-Object System.Windows.Forms.LinkLabel
+$btnExportLog.Text = 'Protokoll exportieren...'; $btnExportLog.AutoSize = $true; $btnExportLog.Font = New-UiFont 9
+$btnExportLog.LinkColor = $script:UI.Accent; $btnExportLog.LinkBehavior = 'HoverUnderline'
+$logToolbar.Controls.AddRange(@($lblLogTitle, $btnExportLog))
+$logToolbar.Add_Layout({ $btnExportLog.Location = New-Object System.Drawing.Point(($logToolbar.ClientSize.Width - 40 - $btnExportLog.Width), 10) })
 
 $rtbLog = New-Object System.Windows.Forms.RichTextBox
 $rtbLog.Dock = 'Fill'
 $rtbLog.ReadOnly = $true
-$rtbLog.Font = New-Object System.Drawing.Font('Consolas', 9)
-$logLayout.Controls.Add($rtbLog, 0, 1)
+$rtbLog.BorderStyle = 'None'
+$rtbLog.BackColor = $script:UI.Surface
+$rtbLog.Font = New-UiFont 9 -Mono
+$logInner = New-Object System.Windows.Forms.Panel
+$logInner.Dock = 'Fill'; $logInner.Padding = New-Object System.Windows.Forms.Padding(40, 0, 24, 8)
+$logInner.Controls.Add($rtbLog)
+$logDrawer.Controls.Add($logInner)
+$logDrawer.Controls.Add($logToolbar)
+$logInner.BringToFront()
 
-$btnExportLog.Add_Click({
+$btnLogToggle.Add_Click({
+    $logDrawer.Visible = -not $logDrawer.Visible
+    $btnLogToggle.Text = if ($logDrawer.Visible) { 'Protokoll ausblenden' } else { 'Protokoll anzeigen' }
+    if ($logDrawer.Visible) { $rtbLog.SelectionStart = $rtbLog.TextLength; $rtbLog.ScrollToCaret() }
+})
+
+# Dock-Reihenfolge im Arbeitsbereich festziehen: zuerst (außen) Kopf und Fußleiste,
+# dann das Protokoll über der Fußleiste, zuletzt der Inhalt als Füllung.
+$pnlHeader.SendToBack(); $pnlFooter.SendToBack()
+$logDrawer.BringToFront(); $pnlContentArea.BringToFront()
+
+$btnExportLog.Add_LinkClicked({
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = 'Textdatei (*.txt)|*.txt'
     $dlg.FileName = "vscwizard-log-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
@@ -2016,6 +2290,7 @@ $btnStartA.Add_Click({
 
 # --- Navigation Plan A ---
 $planAStepTitles = @('Virtuelle Smartcard erstellen', 'Zertifikat anfordern', 'Zusammenfassung')
+$planAStepperLabels = @('Smartcard', 'Zertifikat', 'Fertig')   # kurz, für die Seitenleiste
 
 function Update-PlanAStatus {
     $joinState = Get-DomainJoinState
@@ -2054,7 +2329,8 @@ function Show-PlanAStep {
     }
     $script:PlanACurrentStep = $Index
     # Globale Schrittnummer: +2, da Schritt 1 (Szenario) davor liegt.
-    $lblGlobalStep.Text = "Schritt $($Index + 2) von $($panels.Count + 1): $($planAStepTitles[$Index])"
+    $lblGlobalStep.Text = $planAStepTitles[$Index]
+    Update-Stepper -Labels (@('Szenario') + $planAStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 1 = "$($script:PlanA_CardName)" }
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
 
@@ -2646,6 +2922,7 @@ $btnStartB.Add_Click({
     ForEach-Object { $_.AutoScroll = $true }
 
 $planBStepTitles = @('Status', 'Virtuelle Smartcard erstellen', 'CSR erstellen', 'Übergabe per RDP', 'Antrag einreichen (auf dem Server)', 'Zertifikat abschließen (lokal)')
+$planBStepperLabels = @('Status', 'Smartcard', 'Antrag (CSR)', 'Übergabe RDP', 'Einreichen', 'Abschluss')
 
 function Update-PlanBStatus {
     $joinState = Get-DomainJoinState
@@ -2669,7 +2946,8 @@ function Show-PlanBStep {
     }
     $script:PlanBCurrentStep = $Index
     # Globale Schrittnummer: +1, da Schritt 1 (Moduswahl) davor liegt.
-    $lblGlobalStep.Text = "Schritt $($Index + 2) von $($panels.Count + 1): $($planBStepTitles[$Index])"
+    $lblGlobalStep.Text = $planBStepTitles[$Index]
+    Update-Stepper -Labels (@('Szenario') + $planBStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 2 = "$($script:PlanB_CardName)" }
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
 
@@ -3461,6 +3739,142 @@ function Show-SettingsDialog {
 
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
 }
+
+#endregion
+
+# ============================================================================
+#region GESTALTUNG DER SCHRITT-SEITEN (Redesign: Karten, Hinweisboxen, Buttons)
+# ============================================================================
+# Zentral statt in jeder Seite: läuft einmal, nachdem alle Seiten gebaut sind.
+
+# Farbige Ergebnismeldungen -> getönte Hinweisboxen. Der bestehende Code setzt weiterhin
+# nur ForeColor (ForestGreen/Firebrick/DarkOrange/Black) + Text; hier wird daraus die
+# passende Box (Hintergrund, Textfarbe, Innenabstand). Leerer Text = keine Box.
+function Update-StatusLook {
+    param([System.Windows.Forms.Label]$Label)
+    if (-not $Label.Text) { $Label.BackColor = [System.Drawing.Color]::Transparent; $Label.Padding = New-Object System.Windows.Forms.Padding(0); return }
+    $argb = $Label.ForeColor.ToArgb()
+    $map = @{
+        ([System.Drawing.Color]::ForestGreen.ToArgb()) = @($script:UI.SuccessWeak, $script:UI.Success)
+        ($script:UI.Success.ToArgb())                  = @($script:UI.SuccessWeak, $script:UI.Success)
+        ([System.Drawing.Color]::Firebrick.ToArgb())   = @($script:UI.DangerWeak, $script:UI.Danger)
+        ($script:UI.Danger.ToArgb())                   = @($script:UI.DangerWeak, $script:UI.Danger)
+        ([System.Drawing.Color]::DarkOrange.ToArgb())  = @($script:UI.WarnWeak, $script:UI.Warn)
+        ($script:UI.Warn.ToArgb())                     = @($script:UI.WarnWeak, $script:UI.Warn)
+    }
+    $look = $map[$argb]
+    if (-not $look) { $look = @($script:UI.Ground, $script:UI.Text) }   # neutral (z.B. "läuft..."/Abgebrochen)
+    $Label.BackColor = $look[0]
+    if ($Label.ForeColor.ToArgb() -ne $look[1].ToArgb()) { $Label.ForeColor = $look[1] }   # löst das Ereignis erneut aus, dann stabil
+    $Label.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5)
+}
+function Register-StatusLabel {
+    param([System.Windows.Forms.Label]$Label)
+    $Label.Add_TextChanged({ Update-StatusLook $this })
+    $Label.Add_ForeColorChanged({ Update-StatusLook $this })
+    Update-StatusLook $Label
+}
+foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB)) { Register-StatusLabel $l }
+
+# Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" als blaue Info-Box.
+$lblCardHintA.Font = New-UiFont 9.5 -Semibold
+$lblCardHintA.ForeColor = $script:UI.AccentText
+$lblCardHintA.Add_TextChanged({
+    $lblCardHintA.BackColor = if ($lblCardHintA.Text) { $script:UI.AccentWeak } else { [System.Drawing.Color]::Transparent }
+    $lblCardHintA.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5)
+})
+
+# Jede Schritt-Seite wird eine weiße Karte in Inhaltsgröße mit FLIESSLAYOUT:
+# Die Seiten sind historisch mit festen Pixel-Positionen gebaut (Breite 780 usw.) - das
+# schnitt bei schmalerem Fenster Text ab und liess große Leerflächen. Statt jede Seite
+# neu zu bauen, liest Initialize-PageReflow aus den ursprünglichen Positionen die ZEILEN
+# (was nebeneinander steht, bleibt nebeneinander; Abstände zwischen Zeilen bleiben) und
+# Invoke-PageReflow ordnet sie bei jeder Größen-/Text-/Sichtbarkeitsänderung neu an:
+# Texte brechen in der verfügbaren Breite um und wachsen in die Höhe, breite Felder
+# passen sich an, ausgeblendete/leere Elemente hinterlassen keine Lücke.
+$script:StateMethod = [System.Windows.Forms.Control].GetMethod('GetState', [Reflection.BindingFlags]'NonPublic,Instance')
+function Test-OwnVisible([System.Windows.Forms.Control]$Control) {
+    # Eigener Sichtbarkeits-Zustand (Visible liefert bei verborgenem Elternteil immer $false).
+    return [bool]$script:StateMethod.Invoke($Control, @(2))
+}
+$script:Reflow = @{}   # Seite -> @{ Rows; Orig; Busy }
+function Initialize-PageReflow {
+    param([System.Windows.Forms.Panel]$Page)
+    $orig = @{}
+    $rows = New-Object System.Collections.ArrayList
+    foreach ($c in @($Page.Controls | Sort-Object Top, Left)) {
+        $orig[$c] = @{ Left = $c.Left; Top = $c.Top; Width = $c.Width; Height = $c.Height }
+        $row = if ($rows.Count) { $rows[$rows.Count - 1] } else { $null }
+        if (-not $row -or $c.Top -ge ($row.Bottom - 4)) {
+            $row = @{ Top = $c.Top; Bottom = $c.Bottom; Items = (New-Object System.Collections.ArrayList); Gap = 0 }
+            if ($rows.Count) { $row.Gap = [Math]::Max(6, $c.Top - $rows[$rows.Count - 1].Bottom) }
+            [void]$rows.Add($row)
+        }
+        [void]$row.Items.Add($c)
+        if ($c.Bottom -gt $row.Bottom) { $row.Bottom = $c.Bottom }
+        if ($c -is [System.Windows.Forms.Label]) { $c.AutoSize = $true }
+    }
+    $script:Reflow[$Page] = @{ Rows = $rows; Orig = $orig; Busy = $false }
+    $Page.Add_Layout({ Invoke-PageReflow -Page $this })
+}
+function Invoke-PageReflow {
+    param([System.Windows.Forms.Panel]$Page)
+    $info = $script:Reflow[$Page]
+    if (-not $info -or $info.Busy) { return }
+    $info.Busy = $true
+    try {
+        $W = $Page.ClientSize.Width - 24
+        if ($W -lt 200) { return }
+        $prevBottom = $null
+        foreach ($row in $info.Rows) {
+            $items = @($row.Items | Where-Object { (Test-OwnVisible $_) -and -not ($_ -is [System.Windows.Forms.Label] -and -not $_.Text) })
+            if (-not $items) { continue }
+            $top = if ($null -eq $prevBottom) { $row.Top } else { $prevBottom + $row.Gap }
+            $bottom = $top
+            foreach ($c in $items) {
+                $o = $info.Orig[$c]
+                if ($c -is [System.Windows.Forms.Label]) {
+                    $c.MaximumSize = New-Object System.Drawing.Size([Math]::Max(80, $W - $o.Left), 0)
+                } elseif ($o.Width -ge 480 -and $c -isnot [System.Windows.Forms.ButtonBase]) {
+                    # Nur strecken, wenn rechts daneben nichts steht (z.B. "Pfad kopieren").
+                    $rightOf = @($items | Where-Object { $_ -ne $c -and $info.Orig[$_].Left -gt $o.Left })
+                    if (-not $rightOf) { $c.Width = [Math]::Max(120, $W - $o.Left) }
+                }
+                $c.Top = $top + ($o.Top - $row.Top)
+                if ($c.Bottom -gt $bottom) { $bottom = $c.Bottom }
+            }
+            $prevBottom = $bottom
+        }
+        $h = if ($null -eq $prevBottom) { 40 } else { $prevBottom + 20 }
+        if ($Page.Height -ne $h) { $Page.Height = $h }
+    } finally { $info.Busy = $false }
+}
+foreach ($stepHost in @($pnlStepsA, $pnlStepsB)) {
+    $stepHost.AutoScroll = $true
+    $stepHost.Padding = New-Object System.Windows.Forms.Padding(16, 0, 16, 12)
+    foreach ($page in @($stepHost.Controls)) {
+        if ($page -isnot [System.Windows.Forms.Panel]) { continue }
+        $page.Dock = 'Top'
+        $page.BackColor = $script:UI.Surface
+        Add-BorderPaint -Control $page
+        Initialize-PageReflow -Page $page
+    }
+}
+
+# Buttons: Hauptaktionen gefüllt (Primary), alle übrigen mit Rahmen (Secondary).
+$primaryButtons = @($btnCreateVscA, $btnRequestCertA, $btnRetrieveA, $btnCreateVscB, $btnCreateCsrB, $btnSubmitB, $btnRetrieveB, $btnCompleteB, $btnCompleteFromTextB)
+function Set-ButtonStyleTree {
+    param([System.Windows.Forms.Control]$Root)
+    foreach ($c in $Root.Controls) {
+        if ($c -is [System.Windows.Forms.Button] -and -not ($c.Tag -is [hashtable] -and $c.Tag['Kind'])) {
+            $kind = if ($primaryButtons -contains $c) { 'Primary' } else { 'Secondary' }
+            Set-ButtonStyle -Button $c -Kind $kind
+            if ($kind -eq 'Primary') { $c.Add_EnabledChanged({ Update-PrimaryEnabledLook $this }); Update-PrimaryEnabledLook $c }
+        }
+        if ($c.HasChildren) { Set-ButtonStyleTree -Root $c }
+    }
+}
+Set-ButtonStyleTree -Root $pnlContentArea
 
 #endregion
 

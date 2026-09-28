@@ -53,12 +53,14 @@ function Test-Layout($root, [string]$Context) {
             # 1) Abgeschnittener Text (Label/Button/CheckBox/RadioButton ohne AutoSize)
             if ($txt -and -not $c.AutoSize -and -not ($c -is [System.Windows.Forms.Label] -and $c.AutoEllipsis) -and ($c -is [System.Windows.Forms.Label] -or $c -is [System.Windows.Forms.ButtonBase])) {
                 $isBtn = $c -is [System.Windows.Forms.Button]
-                $avail = $c.ClientSize.Width - $(if ($isBtn) { 8 } elseif ($c -is [System.Windows.Forms.CheckBox] -or $c -is [System.Windows.Forms.RadioButton]) { 20 } else { 0 })
+                # Innenabstand (Hinweisboxen) abziehen - der Text hat nur die Innenfläche.
+                $avail = $c.ClientSize.Width - $c.Padding.Horizontal - $(if ($isBtn) { 8 } elseif ($c -is [System.Windows.Forms.CheckBox] -or $c -is [System.Windows.Forms.RadioButton]) { 20 } else { 0 })
+                $availH = $c.ClientSize.Height - $c.Padding.Vertical
                 if ($avail -gt 0) {
                     $flags = if ($isBtn) { [System.Windows.Forms.TextFormatFlags]::SingleLine } else { [System.Windows.Forms.TextFormatFlags]::WordBreak }
                     $sz = [System.Windows.Forms.TextRenderer]::MeasureText($txt, $c.Font, (New-Object System.Drawing.Size($avail, 10000)), $flags)
-                    if ($sz.Height -gt $c.ClientSize.Height + 1 -or ($isBtn -and $sz.Width -gt $avail + 1)) {
-                        $global:Findings.Add("[$Context] TEXT ABGESCHNITTEN: $name  (Platz ${avail}x$($c.ClientSize.Height), braucht $($sz.Width)x$($sz.Height))  Text: '$($txt.Substring(0,[Math]::Min(90,$txt.Length)))...'")
+                    if ($sz.Height -gt $availH + 1 -or ($isBtn -and $sz.Width -gt $avail + 1)) {
+                        $global:Findings.Add("[$Context] TEXT ABGESCHNITTEN: $name  (Platz ${avail}x$availH, braucht $($sz.Width)x$($sz.Height))  Text: '$($txt.Substring(0,[Math]::Min(90,$txt.Length)))...'")
                     }
                 }
             }
