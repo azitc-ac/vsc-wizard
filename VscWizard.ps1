@@ -322,7 +322,7 @@ function Set-PlanATemplateForMode {
 #region MAIN FORM
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen - blog.zarenko.net'
+$form.Text = 'VSC-Wizard - Virtuelle Smartcard beantragen - https://blog.zarenko.net'
 $form.Size = New-Object System.Drawing.Size(1000, 900)
 $form.StartPosition = 'CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(900, 780)
