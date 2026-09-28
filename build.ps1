@@ -20,13 +20,16 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputDir = (Join-Path $PSScriptRoot 'dist'),
+    # Default <Repo>\dist - wird unten gesetzt, da $PSScriptRoot in Windows PowerShell
+    # 5.1 im param()-Default leer sein kann.
+    [string]$OutputDir,
     # Optional: Thumbprint eines Code-Signing-Zertifikats (Cert:\CurrentUser\My)
     # zum Signieren der erzeugten .exe (vermeidet SmartScreen/AV-Warnungen).
     [string]$CertThumbprint
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $OutputDir) { $OutputDir = Join-Path $PSScriptRoot 'dist' }
 
 # --- PS2EXE sicherstellen ---
 if (-not (Get-Module -ListAvailable -Name ps2exe)) {
@@ -76,6 +79,22 @@ Copy-Item -Path (Join-Path $PSScriptRoot 'modules\*') -Destination $modulesTarge
 $configSrc = Join-Path $PSScriptRoot 'config.psd1'
 if (Test-Path $configSrc) { Copy-Item -Path $configSrc -Destination (Join-Path $OutputDir 'config.psd1') -Force }
 
+# --- 2b) Nativer ARM64-COM-Helfer (optional, benoetigt das .NET SDK nur zur BUILD-Zeit) ---
+# Derselbe Quelltext wie modules\VscWizard.CreateHelper.cs, als self-contained
+# .NET-win-arm64-Einzeldatei (siehe helper\VscCreateHelper.csproj und
+# docs\ARM64-native-vsc.md). New-VirtualSmartCard nutzt ihn auf ARM64 automatisch,
+# sonst faellt es dort auf tpmvscmgr.exe zurueck. Beim Endnutzer keine Laufzeit noetig.
+$helperArm64Exe = $null
+if (Get-Command dotnet -ErrorAction SilentlyContinue) {
+    $helperArm64Dir = Join-Path $OutputDir 'helper-arm64'
+    Write-Host "Baue nativen ARM64-Helfer nach $helperArm64Dir ..."
+    & dotnet publish (Join-Path $PSScriptRoot 'helper\VscCreateHelper.csproj') -c Release -r win-arm64 -o $helperArm64Dir --nologo
+    $helperArm64Exe = Join-Path $helperArm64Dir 'VscCreateHelper.exe'
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $helperArm64Exe)) { throw 'dotnet publish des ARM64-Helfers fehlgeschlagen.' }
+} else {
+    Write-Host 'WARN: dotnet (SDK) nicht gefunden - nativer ARM64-Helfer wird nicht gebaut (ARM64 nutzt dann tpmvscmgr.exe).'
+}
+
 # --- version.txt aus der GIT-Historie erzeugen (fuer die EXE, die kein git sieht) ---
 # Die Version "reist mit dem Repo": Build-Nummer = Anzahl Commits (waechst mit jedem
 # Commit, ohne lokalen Hook). Wird neben die EXE gelegt; der Wizard liest sie, wenn
@@ -99,7 +118,7 @@ try {
 if ($CertThumbprint) {
     $cert = Get-Item "Cert:\CurrentUser\My\$CertThumbprint" -ErrorAction SilentlyContinue
     if (-not $cert) { throw "Signaturzertifikat $CertThumbprint nicht in Cert:\CurrentUser\My gefunden." }
-    foreach ($exe in @($submitExe, $mainExe)) {
+    foreach ($exe in @($submitExe, $mainExe, $helperArm64Exe | Where-Object { $_ })) {
         Write-Host "Signiere $exe ..."
         $sig = Set-AuthenticodeSignature -FilePath $exe -Certificate $cert -HashAlgorithm SHA256
         Write-Host "  -> $($sig.Status)"
@@ -110,3 +129,6 @@ Write-Host ''
 Write-Host "Fertig. Ausgabe in: $OutputDir"
 Write-Host '  VscWizard.Submit.exe  - eigenstaendig (auf den RDP-/Einreich-Host kopieren).'
 Write-Host '  VscWizard.exe         - zusammen mit dem Ordner modules\ und config.psd1 verteilen.'
+if ($helperArm64Exe) {
+    Write-Host '  helper-arm64\         - mitverteilen (nativer PIN-Dialog/COM-Weg auf ARM64-Geraeten).'
+}

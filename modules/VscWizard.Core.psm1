@@ -138,7 +138,7 @@ function Initialize-WizardLog {
 function Write-WizardLog {
     param(
         [Parameter(Mandatory)][string]$Message,
-        [ValidateSet('Info', 'Command', 'Output', 'Error', 'Success')][string]$Level = 'Info'
+        [ValidateSet('Info', 'Command', 'Output', 'Error', 'Success', 'Warn')][string]$Level = 'Info'
     )
 
     $timestamp = Get-Date -Format 'HH:mm:ss'
@@ -152,6 +152,7 @@ function Write-WizardLog {
             'Error' { [System.Drawing.Color]::Firebrick }
             'Success' { [System.Drawing.Color]::ForestGreen }
             'Command' { [System.Drawing.Color]::SteelBlue }
+            'Warn' { [System.Drawing.Color]::DarkOrange }
             default { [System.Drawing.Color]::Black }
         }
         $script:LogBox.SelectionStart = $script:LogBox.TextLength
@@ -161,6 +162,31 @@ function Write-WizardLog {
         $script:LogBox.SelectionStart = $script:LogBox.TextLength
         $script:LogBox.ScrollToCaret()
     }
+}
+
+#endregion
+
+#region Busy-Anzeige (GUI-Hook)
+
+# Alle potenziell langsamen Kernfunktionen (PnP/WMI, Zertifikate, LDAP, externe
+# Prozesse) melden sich hier selbst als "beschäftigt". Die GUI registriert einmalig
+# ihre Banner-Funktionen (Register-WizardBusyHook) - dadurch erscheint Wartecursor +
+# Banner AUTOMATISCH, egal von welcher GUI-Stelle aus eine langsame Funktion aufgerufen
+# wird (vorher musste jede Aufrufstelle selbst daran denken, und einige fehlten). In
+# Hintergrund-Jobs ist kein Hook registriert -> reine No-ops.
+function Register-WizardBusyHook {
+    param([scriptblock]$Enter, [scriptblock]$Exit)
+    $script:BusyEnterHook = $Enter
+    $script:BusyExitHook = $Exit
+}
+
+function Enter-WizardBusy {
+    param([Parameter(Mandatory)][string]$Text)
+    if ($script:BusyEnterHook) { try { & $script:BusyEnterHook $Text } catch { } }
+}
+
+function Exit-WizardBusy {
+    if ($script:BusyExitHook) { try { & $script:BusyExitHook } catch { } }
 }
 
 #endregion
@@ -205,26 +231,34 @@ function Invoke-ExternalCommand {
 
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
-    [void]$proc.Start()
 
-    if ($TimeoutSeconds -gt 0) {
-        # Asynchrones Lesen startet VOR WaitForExit, damit die Pipes laufend geleert werden
-        # und ein volles Output-Puffer nicht zum Deadlock mit dem Kindprozess führt.
-        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-        $stderrTask = $proc.StandardError.ReadToEndAsync()
-        $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
-        if (-not $exited) {
-            try { $proc.Kill() } catch { }
-            if (-not $Silent) { Write-WizardLog -Message "$FilePath $quotedArgs (Zeitüberschreitung nach $TimeoutSeconds s)" -Level Error }
-            return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false }
+    Enter-WizardBusy -Text "$([System.IO.Path]::GetFileNameWithoutExtension($FilePath)) läuft..."
+    try {
+        [void]$proc.Start()
+
+        if ($TimeoutSeconds -gt 0) {
+            # Asynchrones Lesen startet VOR WaitForExit, damit die Pipes laufend geleert werden
+            # und ein volles Output-Puffer nicht zum Deadlock mit dem Kindprozess führt.
+            $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+            $stderrTask = $proc.StandardError.ReadToEndAsync()
+            $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
+            if (-not $exited) {
+                try { $proc.Kill() } catch { }
+                if (-not $Silent) { Write-WizardLog -Message "$FilePath $quotedArgs (Zeitüberschreitung nach $TimeoutSeconds s)" -Level Error }
+                # Bis zum Kill bereits geschriebene Ausgabe separat mitgeben (StdOut bleibt
+                # leer wie bisher) - z.B. für Sammel-Lookups, die abgeschlossene Teile nutzen.
+                $partial = ''
+                try { if ($stdoutTask.Wait(2000)) { $partial = $stdoutTask.Result } } catch { }
+                return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false; PartialStdOut = $partial }
+            }
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+        } else {
+            $stdout = $proc.StandardOutput.ReadToEnd()
+            $stderr = $proc.StandardError.ReadToEnd()
+            $proc.WaitForExit()
         }
-        $stdout = $stdoutTask.Result
-        $stderr = $stderrTask.Result
-    } else {
-        $stdout = $proc.StandardOutput.ReadToEnd()
-        $stderr = $proc.StandardError.ReadToEnd()
-        $proc.WaitForExit()
-    }
+    } finally { Exit-WizardBusy }
 
     if (-not $Silent) {
         if ($stdout.Trim()) { Write-WizardLog -Message $stdout.Trim() -Level Output }
@@ -246,7 +280,17 @@ function Invoke-ExternalCommand {
 function Test-TpmReadiness {
     # EINZIGE Quelle der TPM-Wahrheit fuer den ganzen Wizard (Startseiten-Banner UND
     # Plan-A-Status greifen hierauf zu) - damit die Erkennung NICHT nur an einer Stelle
-    # korrekt ist. Drei Signale, in Reihenfolge:
+    # korrekt ist. Ergebnis pro Sitzung gecacht (das TPM ändert sich zur Laufzeit nicht;
+    # die Erkennung kostete ohne Elevation bis zu ~10 s).
+    if (-not $script:TpmReadinessCache) {
+        Enter-WizardBusy -Text 'Prüfe TPM...'
+        try { $script:TpmReadinessCache = Get-TpmReadinessUncached } finally { Exit-WizardBusy }
+    }
+    return $script:TpmReadinessCache
+}
+
+function Get-TpmReadinessUncached {
+    # Die eigentliche Erkennung (nur über Test-TpmReadiness aufrufen). Signale, in Reihenfolge:
     $present = $false; $ready = $false; $enabled = $false
 
     # 1) Get-Tpm (Modul TrustedPlatformModule). Kann auf manchen Systemen werfen oder
@@ -263,13 +307,27 @@ function Test-TpmReadiness {
     # 2) Fallback: WMI-Klasse Win32_Tpm im Security-Namespace. Existiert ein Objekt,
     #    ist ein TPM physisch vorhanden (Get-Tpm kann trotzdem versagt haben). Damit
     #    verschwindet die falsche "kein TPM"-Anzeige auf Systemen wie ARM64.
-    if (-not $present) {
+    #    NUR eleviert: ohne Adminrechte scheitert Win32_Tpm IMMER mit "Zugriff verweigert"
+    #    - und braucht dafür ~5 s.
+    if (-not $present -and (Test-IsElevated)) {
         try {
             $w = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1
             if ($w) {
                 $enabled = [bool]$w.IsEnabled_InitialValue
                 $ready   = ($enabled -and [bool]$w.IsActivated_InitialValue)
                 $present = $true
+            }
+        } catch { }
+    }
+
+    # 2b) Ohne Elevation: das TPM als PnP-Gerät (schnell, ohne Adminrechte). Status OK =
+    #     Treiber läuft; das ist das beste ohne Admin verfügbare Signal für "bereit".
+    if (-not $present) {
+        try {
+            $dev = Get-CimInstance -ClassName Win32_PnPEntity -Filter "Name LIKE '%Trusted Platform Module%'" -ErrorAction Stop | Select-Object -First 1
+            if ($dev) {
+                $present = $true
+                $enabled = $ready = ($dev.Status -eq 'OK')
             }
         } catch { }
     }
@@ -289,6 +347,16 @@ function Test-TpmReadiness {
 }
 
 function Get-DomainJoinState {
+    # Gecacht wie Test-TpmReadiness: der Join-Status ändert sich zur Laufzeit nicht, und
+    # dsregcmd kostet bei jedem Aufruf fast eine Sekunde.
+    if (-not $script:DomainJoinStateCache) {
+        Enter-WizardBusy -Text 'Prüfe Domänen-Status...'
+        try { $script:DomainJoinStateCache = Get-DomainJoinStateUncached } finally { Exit-WizardBusy }
+    }
+    return $script:DomainJoinStateCache
+}
+
+function Get-DomainJoinStateUncached {
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem
     if ($cs.PartOfDomain) {
         return [pscustomobject]@{ Mode = 'ADDomain'; Domain = $cs.Domain }
@@ -393,6 +461,70 @@ function Find-EnterpriseCAs {
     } catch {
         $out.Error = $_.Exception.Message
     }
+    return $out
+}
+
+function Get-OfflineTemplateCandidates {
+    # Kandidaten für das Offline-/Supply-in-request-Template (Szenario 03): alle auf der
+    # konfigurierten CA veröffentlichten Templates (Find-EnterpriseCAs, certificateTemplates)
+    # samt Flag, ob der Antragsteller Subject/SAN selbst liefern darf
+    # (msPKI-Certificate-Name-Flag Bit 0x1 = CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT) - nur solche
+    # Templates übernehmen die Ziel-UPN aus dem CSR.
+    # Absichtlich ohne Write-WizardLog (läuft typischerweise in einem Start-Job).
+    param(
+        [string]$Server,
+        [string]$CAConfig,
+        [int]$TimeoutSeconds = 8
+    )
+
+    $out = [pscustomobject]@{ Templates = @(); CaName = $null; Error = $null }
+    $found = Find-EnterpriseCAs -Server $Server -TimeoutSeconds $TimeoutSeconds
+    if ($found.Error -and $found.Cas.Count -eq 0) { $out.Error = $found.Error; return $out }
+
+    $cas = @($found.Cas | Where-Object { $CAConfig -and ($_.ConfigString -eq $CAConfig) })
+    if ($cas.Count -eq 0) { $cas = @($found.Cas) }   # konfigurierte CA nicht gefunden -> alle
+    $out.CaName = ($cas | ForEach-Object { $_.Name }) -join ', '
+    $published = @($cas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+    if ($published.Count -eq 0) { $out.Error = 'Auf der CA sind keine Templates veröffentlicht.'; return $out }
+
+    $flags = @{}
+    try {
+        $rootPath = if ($Server) { "LDAP://$Server/RootDSE" } else { 'LDAP://RootDSE' }
+        $configNC = (New-Object System.DirectoryServices.DirectoryEntry($rootPath)).Properties['configurationNamingContext'].Value
+        $tplDn = "CN=Certificate Templates,CN=Public Key Services,CN=Services,$configNC"
+        $tplPath = if ($Server) { "LDAP://$Server/$tplDn" } else { "LDAP://$tplDn" }
+        $searcher = New-Object System.DirectoryServices.DirectorySearcher((New-Object System.DirectoryServices.DirectoryEntry($tplPath)))
+        $searcher.Filter = '(objectClass=pKICertificateTemplate)'
+        $searcher.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $searcher.ServerTimeLimit = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'displayName', 'msPKI-Certificate-Name-Flag', 'pKIExtendedKeyUsage'))
+        foreach ($r in $searcher.FindAll()) {
+            if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
+            $nameFlag = if ($r.Properties['mspki-certificate-name-flag'].Count -gt 0) { [int64]$r.Properties['mspki-certificate-name-flag'][0] } else { 0 }
+            $display = if ($r.Properties['displayname'].Count -gt 0) { [string]$r.Properties['displayname'][0] } else { $null }
+            $flags[[string]$r.Properties['cn'][0]] = [pscustomobject]@{ NameFlag = $nameFlag; DisplayName = $display; Eku = @($r.Properties['pkiextendedkeyusage'] | ForEach-Object { [string]$_ }) }
+        }
+    } catch {
+        $out.Error = "Template-Details nicht lesbar: $($_.Exception.Message)"
+    }
+
+    # EKU: Smartcard-Anmeldung (1.3.6.1.4.1.311.20.2.2) bzw. Client-Authentifizierung
+    # (1.3.6.1.5.5.7.3.2). Supply-in-request allein trifft auch WebServer/SubCA/CEP -
+    # die gehören nicht in diese Auswahl.
+    $out.Templates = @($published | Sort-Object | ForEach-Object {
+        $f = $flags[$_]
+        $eku = if ($f) { @($f.Eku) } else { @() }
+        [pscustomobject]@{
+            Name            = $_
+            DisplayName     = if ($f) { $f.DisplayName } else { $null }
+            SuppliesSubject = [bool]($f -and ($f.NameFlag -band 1))
+            SmartCardLogon  = ($eku -contains '1.3.6.1.4.1.311.20.2.2')
+            ClientAuth      = ($eku -contains '1.3.6.1.5.5.7.3.2')
+            # KDC-Authentifizierung (1.3.6.1.5.2.3.5) = DC-Template (Kerberos Authentication)
+            KdcAuth         = ($eku -contains '1.3.6.1.5.2.3.5')
+            FlagKnown       = [bool]$f
+        }
+    })
     return $out
 }
 
@@ -613,6 +745,64 @@ function Get-FrameworkCscPath {
     return $null
 }
 
+function Get-NativeOsArchitecture {
+    # Echte Prozessorarchitektur des Geräts ('ARM64', 'AMD64', 'x86', ...).
+    # NICHT über $env:PROCESSOR_ARCHITECTURE/-W6432: in einem x64-emulierten Prozess
+    # auf ARM64 (z.B. die PS2EXE-Exe oder eine x64-pwsh) steht dort 'AMD64', und der
+    # Wert wird sogar an native Kindprozesse vererbt. Auch
+    # RuntimeInformation::OSArchitecture meldet emuliert 'X64'. Der systemweite Wert in
+    # HKLM\...\Session Manager\Environment ist dagegen immer die Hardware (und mit ~0,1 s
+    # deutlich schneller als Win32_Processor mit ~1 s).
+    if ($script:NativeOsArchitecture) { return $script:NativeOsArchitecture }
+    $arch = $null
+    try {
+        $arch = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE
+    } catch { }
+    if (-not $arch) {
+        $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    }
+    $script:NativeOsArchitecture = $arch
+    return $arch
+}
+
+function Get-NativeCreateHelperPath {
+    # Pfad des im Build erzeugten nativen COM-Helfers (helper\VscCreateHelper.csproj,
+    # 'dotnet publish' durch build.ps1) oder $null. Gesucht wird neben dem modules-
+    # Ordner (ausgelieferter EXE-Fall: dist\helper-<arch>) und im dist-Ordner des
+    # Repos (Start als .ps1 aus dem Repo nach einem build.ps1-Lauf).
+    param([Parameter(Mandatory)][ValidateSet('arm64')][string]$Architecture)
+    $appRoot = Split-Path -Parent $PSScriptRoot
+    foreach ($dir in @((Join-Path $appRoot "helper-$Architecture"), (Join-Path $appRoot "dist\helper-$Architecture"))) {
+        $exe = Join-Path $dir 'VscCreateHelper.exe'
+        if (Test-Path $exe) { return $exe }
+    }
+    return $null
+}
+
+function Test-IsUserCancelledError {
+    # $true, wenn ein Start-Process -Verb RunAs daran scheiterte, dass der Benutzer die
+    # UAC-Abfrage abgebrochen hat (ERROR_CANCELLED 1223). Windows PowerShell 5.1
+    # verpackt den Fehler in eine InvalidOperationException OHNE InnerException - dort
+    # bleibt nur der (lokalisierte) Win32-Meldungstext; der wird deshalb über Windows
+    # selbst ermittelt und verglichen (sprachunabhängig).
+    param([Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $ex = $ErrorRecord.Exception
+    while ($ex) {
+        if ($ex -is [System.ComponentModel.Win32Exception] -and $ex.NativeErrorCode -eq 1223) { return $true }
+        $ex = $ex.InnerException
+    }
+    $cancelText = (New-Object System.ComponentModel.Win32Exception 1223).Message
+    return [bool]($cancelText -and $ErrorRecord.Exception.Message -and $ErrorRecord.Exception.Message.Contains($cancelText))
+}
+
+function New-VscCancelledResult {
+    # Einheitliches Ergebnis "vom Benutzer abgebrochen" für alle Wege der VSC-Erstellung
+    # (die GUI zeigt das neutral statt als Fehler an).
+    param([Parameter(Mandatory)][string]$Reason)
+    Write-WizardLog -Message "VSC-Erstellung vom Benutzer abgebrochen ($Reason) - keine Karte erstellt." -Level Info
+    return [pscustomobject]@{ Success = $false; Cancelled = $true; InstanceId = $null; HResult = $null; Message = 'Vom Benutzer abgebrochen.'; PcscName = $null }
+}
+
 function New-VirtualSmartCard {
     # Erstellt eine virtuelle Smartcard über die COM-API (ITpmVirtualSmartCardManager)
     # statt über tpmvscmgr.exe. Vorteil: die PIN wird in einem echten, maskierten
@@ -625,9 +815,8 @@ function New-VirtualSmartCard {
     # des .NET Framework zu einer /target:winexe-Anwendung kompiliert und eleviert
     # gestartet: eine Fenster-Exe hat KEIN Konsolenfenster - es erscheint
     # ausschließlich der PIN-Dialog (die PIN verlaesst den elevierten Prozess nie).
-    # csc erzeugt architekturneutrales IL (AnyCPU), das beim Start nativ läuft
-    # (auf ARM64 als ARM64-Prozess) - der native TPM-COM-Server ist damit immer
-    # erreichbar, unabhängig davon, aus welchem Prozess kompiliert wurde.
+    # Auf ARM64 ersetzt ein im Build erzeugter NATIVER Helfer (derselbe Quelltext als
+    # .NET-win-arm64-App) das csc-Kompilat - .NET Framework läuft dort nur emuliert.
     #
     # Exe und Ergebnisdatei liegen in C:\Users\Public: bei einer Über-die-Schulter-
     # Elevation (der angemeldete Benutzer ist kein Admin, es wird ein separates
@@ -642,45 +831,58 @@ function New-VirtualSmartCard {
         [int]$PinPolicyMinLength = 6
     )
 
-    # ARM64: .NET Framework hat KEINE native ARM64-Laufzeit - ein AnyCPU-FW-Exe
-    # laeuft dort als x86-Emulation, und der native TPM-VSC-COM-Server laesst sich
-    # in einen solchen Prozess nicht laden (QueryInterface scheitert mit
-    # 0x800700C1 BAD_EXE_FORMAT). Auf ARM64 daher direkt den nativen tpmvscmgr.exe
-    # nutzen (PIN-Eingabe dann im elevierten Konsolenfenster).
-    $nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
-    if ($nativeArch -eq 'ARM64') {
-        Write-WizardLog -Message 'ARM64 erkannt: COM-Helfer (.NET Framework) nicht nutzbar - verwende direkt tpmvscmgr.exe.' -Level Info
-        return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
-    }
-
-    $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
-    if (-not (Test-Path $helperSource)) {
-        $msg = "Helfer-Quelldatei nicht gefunden: $helperSource"
-        Write-WizardLog -Message $msg -Level Error
-        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
-    }
-
-    $csc = Get-FrameworkCscPath
-    if (-not $csc) {
-        $msg = 'csc.exe des .NET Framework nicht gefunden (Microsoft.NET\Framework*\v4.0.30319).'
-        Write-WizardLog -Message $msg -Level Error
-        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
-    }
-
+    Clear-SmartCardInfoCache   # Kartenbestand ändert sich (PC/SC-Nummern werden wiederverwendet)
     $publicDir = Join-Path $env:SystemDrive 'Users\Public'
     $token = [guid]::NewGuid().ToString('N')
     $helperExe = Join-Path $publicDir "vscwizard-createhelper-$token.exe"
     $resultPath = Join-Path $publicDir "vscwizard-createresult-$token.txt"
 
-    $compile = Invoke-ExternalCommand -FilePath $csc -ArgumentList @(
-        '/nologo', '/target:winexe', "/out:$helperExe",
-        '/r:System.dll', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
-        $helperSource) -TimeoutSeconds 120 -Silent
-    if (-not $compile.Success -or -not (Test-Path $helperExe)) {
-        $detail = "$($compile.StdOut) $($compile.StdErr)".Trim()
-        $msg = "Helfer konnte nicht kompiliert werden: $detail"
-        Write-WizardLog -Message $msg -Level Error
-        return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+    # ARM64: .NET Framework hat KEINE native ARM64-Laufzeit - ein AnyCPU-FW-Exe
+    # laeuft dort emuliert, und der ARM64-Proxy/Stub des TPM-VSC-COM-Servers laesst
+    # sich in einen solchen Prozess nicht laden (QueryInterface 0x800700C1). Auf ARM64
+    # daher den im Build erzeugten NATIVEN Helfer verwenden (derselbe Quelltext, als
+    # self-contained .NET-win-arm64-App, siehe helper\VscCreateHelper.csproj). Fehlt
+    # er (z.B. Build ohne .NET SDK), direkt tpmvscmgr.exe (PIN in der Konsole).
+    if ((Get-NativeOsArchitecture) -eq 'ARM64') {
+        $nativeHelper = Get-NativeCreateHelperPath -Architecture 'arm64'
+        if (-not $nativeHelper) {
+            Write-WizardLog -Message 'ARM64 erkannt, nativer COM-Helfer (helper-arm64\VscCreateHelper.exe) nicht vorhanden - verwende tpmvscmgr.exe.' -Level Info
+            return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
+        }
+        # Kopie nach C:\Users\Public: gleicher Grund wie beim csc-Kompilat (Über-die-
+        # Schulter-Elevation kann das Benutzerprofil nicht zwangsläufig lesen).
+        try {
+            Copy-Item -Path $nativeHelper -Destination $helperExe -Force -ErrorAction Stop
+        } catch {
+            Write-WizardLog -Message "Nativer COM-Helfer konnte nicht bereitgestellt werden ($($_.Exception.Message)) - verwende tpmvscmgr.exe." -Level Error
+            return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
+        }
+        Write-WizardLog -Message "ARM64 erkannt: verwende nativen COM-Helfer ($nativeHelper)." -Level Info
+    } else {
+        $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
+        if (-not (Test-Path $helperSource)) {
+            $msg = "Helfer-Quelldatei nicht gefunden: $helperSource"
+            Write-WizardLog -Message $msg -Level Error
+            return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+        }
+
+        $csc = Get-FrameworkCscPath
+        if (-not $csc) {
+            $msg = 'csc.exe des .NET Framework nicht gefunden (Microsoft.NET\Framework*\v4.0.30319).'
+            Write-WizardLog -Message $msg -Level Error
+            return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+        }
+
+        $compile = Invoke-ExternalCommand -FilePath $csc -ArgumentList @(
+            '/nologo', '/target:winexe', "/out:$helperExe",
+            '/r:System.dll', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
+            $helperSource) -TimeoutSeconds 120 -Silent
+        if (-not $compile.Success -or -not (Test-Path $helperExe)) {
+            $detail = "$($compile.StdOut) $($compile.StdErr)".Trim()
+            $msg = "Helfer konnte nicht kompiliert werden: $detail"
+            Write-WizardLog -Message $msg -Level Error
+            return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+        }
     }
 
     # Argumente als fertig quotierter String (Start-Process quotiert Array-Elemente
@@ -700,7 +902,8 @@ function New-VirtualSmartCard {
         }
     } catch {
         Remove-Item $helperExe -ErrorAction SilentlyContinue
-        $msg = "Erhöhter Prozess konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
+        if (Test-IsUserCancelledError -ErrorRecord $_) { return New-VscCancelledResult -Reason 'UAC-Abfrage abgebrochen' }
+        $msg = "Erhöhter Prozess konnte nicht gestartet werden: $($_.Exception.Message)"
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
     }
@@ -716,6 +919,10 @@ function New-VirtualSmartCard {
         $res.Message = 'Kein Ergebnis vom elevierten Helfer erhalten (Prozess evtl. abgebrochen).'
     }
     Remove-Item $helperExe, $resultPath -ErrorAction SilentlyContinue
+
+    # Abbruch im PIN-Dialog ist KEIN Fehler: kein Fallback auf tpmvscmgr (sonst
+    # folgte sofort eine zweite PIN-Abfrage in der Konsole).
+    if ($res['Cancelled'] -eq 'True') { return New-VscCancelledResult -Reason 'PIN-Dialog abgebrochen' }
 
     $success = ($res.Success -eq 'True')
     $pcscName = $null
@@ -761,6 +968,8 @@ function New-VirtualSmartCardViaTpmVscMgr {
         [int]$PinPolicyMinLength = 6
     )
 
+    Clear-SmartCardInfoCache
+
     $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
     if (-not (Test-Path $tpmvscmgr)) {
         $msg = 'tpmvscmgr.exe nicht gefunden (System32).'
@@ -785,7 +994,8 @@ function New-VirtualSmartCardViaTpmVscMgr {
             Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -Wait -ErrorAction Stop
         }
     } catch {
-        $msg = "tpmvscmgr.exe konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
+        if (Test-IsUserCancelledError -ErrorRecord $_) { return New-VscCancelledResult -Reason 'UAC-Abfrage abgebrochen' }
+        $msg = "tpmvscmgr.exe konnte nicht gestartet werden: $($_.Exception.Message)"
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
     }
@@ -824,29 +1034,40 @@ function Get-VirtualSmartCardReaders {
     # Eigenschaft des Lesegeräts als Token "Microsoft_Virtual_Smart_Card_N" (die
     # SCFILTER-Kindknoten-Kennung). Darüber laesst sich jedes Zertifikat exakt seinem
     # Lesegerät zuordnen, statt es in den Sammel-Eintrag "nicht zuordenbar" zu werfen.
+    #
+    # Performance: EINE WMI-Abfrage (Win32_PnPEntity liefert nur vorhandene Geräte) für
+    # Lesegeräte UND Karten-Kindknoten, Zuordnung über den ParentIdPrefix des Lesegeräts
+    # aus der Registry (Kind-Instanz = "<ParentIdPrefix>&MICROSOFT_VIRTUAL_SMART_CARD_N_...").
+    # Früher: Get-PnpDeviceProperty einzeln je Lesegerät (~0,65 s pro Gerät, bei 6
+    # Lesegeräten ~5 s - und das bei jedem Aufruf).
+    Enter-WizardBusy -Text 'Lese Smartcard-Lesegeräte...'
     try {
-        $readers = Get-PnpDevice -Class SmartCardReader -PresentOnly -ErrorAction Stop
-        return @($readers | ForEach-Object {
+        $devices = @(Get-CimInstance -ClassName Win32_PnPEntity -Filter "PNPClass='SmartCardReader' OR PNPClass='SmartCard'" -ErrorAction Stop)
+        $cardIds = @($devices | Where-Object { $_.PNPClass -eq 'SmartCard' } | ForEach-Object { [string]$_.DeviceID })
+        return @($devices | Where-Object { $_.PNPClass -eq 'SmartCardReader' } | ForEach-Object {
             $pcscName = $null
             try {
-                $children = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_Children' -ErrorAction Stop).Data
-                foreach ($child in @($children)) {
-                    if ("$child" -match 'Microsoft_Virtual_Smart_Card_(\d+)') {
-                        $pcscName = "Microsoft Virtual Smart Card $($Matches[1])"
-                        break
+                # -LiteralPath: Geräte-IDs können [ ] enthalten (sonst als Wildcard gedeutet).
+                $prefix = (Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.DeviceID)" -Name ParentIdPrefix -ErrorAction Stop).ParentIdPrefix
+                if ($prefix) {
+                    foreach ($cardId in $cardIds) {
+                        if ($cardId -match ('\\' + [regex]::Escape($prefix) + '&MICROSOFT_VIRTUAL_SMART_CARD_(\d+)')) {
+                            $pcscName = "Microsoft Virtual Smart Card $($Matches[1])"
+                            break
+                        }
                     }
                 }
             } catch { }
             [pscustomobject]@{
-                FriendlyName = $_.FriendlyName
-                InstanceId   = $_.InstanceId
+                FriendlyName = $_.Name
+                InstanceId   = [string]$_.DeviceID
                 Status       = $_.Status
                 PcscName     = $pcscName
             }
         })
     } catch {
         return @()
-    }
+    } finally { Exit-WizardBusy }
 }
 
 function Remove-VirtualSmartCard {
@@ -856,6 +1077,7 @@ function Remove-VirtualSmartCard {
     # gespeicherten Schlüssel gehen dabei verloren - Bestätigung ist Aufgabe der GUI.
     param([Parameter(Mandatory)][string]$InstanceId)
 
+    Clear-SmartCardInfoCache
     $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
     $vscArgs = @('destroy', '/instance', $InstanceId)
 
@@ -867,7 +1089,10 @@ function Remove-VirtualSmartCard {
     # -WindowStyle Hidden: tpmvscmgr destroy braucht keine Interaktion - ShellExecute
     # startet die Konsole mit SW_HIDE, es blitzt also nicht einmal ein Fenster auf.
     Write-WizardLog -Message "Starte erhöhten Prozess (verstecktes Fenster): $tpmvscmgr $($vscArgs -join ' ')" -Level Command
-    $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait -WindowStyle Hidden
+    Enter-WizardBusy -Text 'Lösche virtuelle Smartcard...'
+    try {
+        $proc = Start-Process -FilePath $tpmvscmgr -ArgumentList $vscArgs -Verb RunAs -PassThru -Wait -WindowStyle Hidden
+    } finally { Exit-WizardBusy }
 
     [pscustomobject]@{
         ExitCode = $proc.ExitCode
@@ -905,7 +1130,12 @@ function Get-SmartCardCertificateInfo {
     #      (PcscName) dem PnP-Lesegerät zugeordnet wird.
     # HardwareDevice (falls ermittelbar) ist ein zusätzliches, von der Provider-Namen-
     # Heuristik unabhängiges Signal.
-    param([Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+    param(
+        [Parameter(Mandatory)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        # Optional: bereits per Sammelabfrage (Get-SmartCardCngProviderInfoBatch)
+        # ermitteltes CNG-Ergebnis - spart den eigenen Kindprozess pro Zertifikat.
+        [object]$CngResult
+    )
 
     $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; KeyContainerName = $null; DetectionError = $null }
 
@@ -922,7 +1152,7 @@ function Get-SmartCardCertificateInfo {
     }
 
     if (-not $info.Provider) {
-        $cngResult = Get-SmartCardCngProviderInfo -Thumbprint $Certificate.Thumbprint
+        $cngResult = if ($CngResult) { $CngResult } else { Get-SmartCardCngProviderInfo -Thumbprint $Certificate.Thumbprint }
         if ($cngResult.TimedOut) {
             $info.DetectionError = 'Zeitüberschreitung beim CNG-Schlüsselzugriff (evtl. verweist das Zertifikat auf eine bereits gelöschte virtuelle Smartcard).'
         } elseif ($cngResult.Provider) {
@@ -938,7 +1168,43 @@ function Get-SmartCardCertificateInfo {
     return $info
 }
 
+function Clear-SmartCardInfoCache {
+    # Nach Erstellen/Löschen von Karten oder Schlüsseln aufrufen (siehe Cache in
+    # Get-SmartCardCngProviderInfoBatch). Verwirft auch das gecachte TPM-Ergebnis: dessen
+    # letzte Stufe ("eine VSC existiert -> TPM nutzbar") hängt vom Kartenbestand ab.
+    $script:CngInfoCache = @{}
+    $script:TpmReadinessCache = $null
+}
+
+function Get-VscInventorySignature {
+    # Günstige (~20 ms) Signatur des VSC-Bestands: Instanzen + ParentIdPrefix unter
+    # Enum\ROOT\SMARTCARDREADER. Ändert sich bei jedem Erstellen/Löschen einer TPM-VSC,
+    # egal durch wen.
+    try {
+        return (@(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\SMARTCARDREADER' -ErrorAction Stop | ForEach-Object {
+            "$($_.PSChildName)=$((Get-ItemProperty -LiteralPath $_.PSPath -Name ParentIdPrefix -ErrorAction SilentlyContinue).ParentIdPrefix)"
+        }) -join ';')
+    } catch { return '' }
+}
+
 function Get-SmartCardCngProviderInfo {
+    # Einzelabfrage - dünner Wrapper um die Sammelabfrage (eine Quelle der Wahrheit).
+    param(
+        [Parameter(Mandatory)][string]$Thumbprint,
+        [int]$TimeoutSeconds = 3
+    )
+    return (Get-SmartCardCngProviderInfoBatch -Thumbprint @($Thumbprint) -TimeoutSeconds $TimeoutSeconds)[$Thumbprint]
+}
+
+function Get-SmartCardCngProviderInfoBatch {
+    # Liefert eine Hashtable Thumbprint -> Info-Objekt (Provider/Reader/IsHardware/
+    # Container/DetectionError/TimedOut) für MEHRERE Zertifikate in EINEM Kindprozess.
+    # Früher: ein powershell.exe-Start pro Zertifikat (~1 s je Stück, bei 17
+    # Zertifikaten ~18 s ohne Rückmeldung). Hängt der Sammelprozess an einem
+    # verwaisten Zertifikat (siehe unten), werden die bis dahin abgeschlossenen
+    # Ergebnisse übernommen und NUR die fehlenden einzeln (mit eigenem Timeout)
+    # nachgeholt - der Hänger-Schutz bleibt also vollständig erhalten.
+    #
     # GetRSAPrivateKey().Key.Provider (CNG-Weg, siehe Get-SmartCardCertificateInfo)
     # kann bei einem Zertifikat, dessen zugehörige virtuelle Smartcard bereits
     # gelöscht wurde (Schlüsselcontainer verweist auf eine nicht mehr vorhandene
@@ -951,9 +1217,29 @@ function Get-SmartCardCngProviderInfo {
     # beendbaren Prozess (Invoke-ExternalCommand tötet den Prozess zuverlässig bei
     # Zeitüberschreitung, im Gegensatz zu einem im selben Prozess hängenden Thread).
     param(
-        [Parameter(Mandatory)][string]$Thumbprint,
+        # AllowEmptyCollection: ein Benutzer ohne Zertifikat mit privatem Schlüssel ist
+        # legitim (sonst Bindungsfehler -> in der PS2EXE-Exe als Fehler-Popup).
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Thumbprint,
+        # Grundbudget (Prozessstart); pro Zertifikat kommt ein kleiner Zuschlag dazu.
         [int]$TimeoutSeconds = 3
     )
+
+    # Sitzungs-Cache: die Schlüssel-Zuordnung eines Zertifikats ändert sich nicht - nur
+    # neue Zertifikate brauchen den Kindprozess. Nur fehlerfreie Ergebnisse (kein
+    # Timeout/DetectionError) werden gecacht; Clear-SmartCardInfoCache leert ihn, sobald Karten
+    # erstellt/gelöscht werden (PC/SC-Nummern werden wiederverwendet).
+    # Kartenbestand auch AUSSERHALB des Wizards geändert (tpmvscmgr, zweite Instanz)?
+    # Dann Cache verwerfen - sonst würden alte Zertifikate einer wiederverwendeten
+    # PC/SC-Nummer der neuen Karte zugeordnet.
+    $vscSignature = Get-VscInventorySignature
+    if ($script:CngInfoCacheSignature -ne $vscSignature) { Clear-SmartCardInfoCache; $script:CngInfoCacheSignature = $vscSignature }
+    if (-not $script:CngInfoCache) { $script:CngInfoCache = @{} }
+    $results = @{}
+    foreach ($tp in @($Thumbprint | Where-Object { $_ } | Select-Object -Unique)) {
+        if ($script:CngInfoCache.ContainsKey($tp)) { $results[$tp] = $script:CngInfoCache[$tp] }
+    }
+    $pending = @($Thumbprint | Where-Object { $_ -and -not $results.ContainsKey($_) } | Select-Object -Unique)
+    if ($pending.Count -eq 0) { return $results }
 
     # Dieses Skript läuft als EIGENER Prozess (siehe unten) und importiert Core.psm1
     # deshalb NICHT - braucht den nativen-Module-Fix vom Kopf dieser Datei also
@@ -964,57 +1250,102 @@ function Get-SmartCardCngProviderInfo {
     # Änderungen an diesem Lookup-Skript würden nie wirksam.
     $scriptPath = Join-Path (Get-WizardWorkingDir) 'cng-provider-lookup.ps1'
     $lookupScript = @'
-param([Parameter(Mandatory)][string]$Thumbprint)
+# Thumbprints kommagetrennt (ein -File-Parameter kann kein Array aufnehmen).
+# Ausgabe je Zertifikat: "Begin=<tp>", key=value-Zeilen, "End=<tp>" - nur Blöcke mit
+# End-Marker gelten als abgeschlossen (wichtig bei einem Timeout-Abbruch).
+param([Parameter(Mandatory)][string]$Thumbprints)
 foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.Management')) {
     $nativeModulePath = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules\$nativeModuleName\$nativeModuleName.psd1"
     if (Test-Path $nativeModulePath) {
         Import-Module $nativeModulePath -Force -ErrorAction SilentlyContinue
     }
 }
-$cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction Stop
-$rsaKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
-    $k = $rsaKey.Key
-    if ($k -and $k.Provider) {
-        Write-Output "Provider=$($k.Provider.Provider)"
-        Write-Output "Container=$($k.KeyName)"
-        # NCrypt-Property "SmartCardReader" (ohne Leerzeichen!) - PC/SC-Lesegerätename.
-        # Fehlt bei Nicht-Smartcard-CNG-Schlüsseln; dann still überspringen.
-        try {
-            $prop = $k.GetProperty('SmartCardReader', [System.Security.Cryptography.CngPropertyOptions]::None)
-            $readerName = [System.Text.Encoding]::Unicode.GetString($prop.GetValue()).TrimEnd([char]0)
-            if ($readerName) { Write-Output "Reader=$readerName" }
-        } catch { }
+foreach ($Thumbprint in ($Thumbprints -split ',')) {
+    [Console]::Out.WriteLine("Begin=$Thumbprint")
+    try {
+        $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction Stop
+        $rsaKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+        if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
+            $k = $rsaKey.Key
+            if ($k -and $k.Provider) {
+                [Console]::Out.WriteLine("Provider=$($k.Provider.Provider)")
+                [Console]::Out.WriteLine("Container=$($k.KeyName)")
+                # NCrypt-Property "SmartCardReader" (ohne Leerzeichen!) - PC/SC-Lesegerätename.
+                # Fehlt bei Nicht-Smartcard-CNG-Schlüsseln; dann still überspringen.
+                try {
+                    $prop = $k.GetProperty('SmartCardReader', [System.Security.Cryptography.CngPropertyOptions]::None)
+                    $readerName = [System.Text.Encoding]::Unicode.GetString($prop.GetValue()).TrimEnd([char]0)
+                    if ($readerName) { [Console]::Out.WriteLine("Reader=$readerName") }
+                } catch { }
+            }
+        } elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
+            [Console]::Out.WriteLine("Provider=$($rsaKey.CspKeyContainerInfo.ProviderName)")
+            [Console]::Out.WriteLine("Reader=$($rsaKey.CspKeyContainerInfo.Reader)")
+            [Console]::Out.WriteLine("IsHardware=$([bool]$rsaKey.CspKeyContainerInfo.HardwareDevice)")
+            [Console]::Out.WriteLine("Container=$($rsaKey.CspKeyContainerInfo.KeyContainerName)")
+        }
+    } catch {
+        [Console]::Out.WriteLine("Error=$($_.Exception.Message -replace '[\r\n]+', ' ')")
     }
-} elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
-    Write-Output "Provider=$($rsaKey.CspKeyContainerInfo.ProviderName)"
-    Write-Output "Reader=$($rsaKey.CspKeyContainerInfo.Reader)"
-    Write-Output "IsHardware=$([bool]$rsaKey.CspKeyContainerInfo.HardwareDevice)"
-    Write-Output "Container=$($rsaKey.CspKeyContainerInfo.KeyContainerName)"
+    [Console]::Out.WriteLine("End=$Thumbprint")
+    [Console]::Out.Flush()
 }
 '@
     Set-Content -Path $scriptPath -Value $lookupScript -Encoding UTF8
 
+    $batchTimeout = $TimeoutSeconds + [int][math]::Ceiling($pending.Count / 4)
     $result = Invoke-ExternalCommand -FilePath 'powershell.exe' -ArgumentList @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-Thumbprint', $Thumbprint
-    ) -TimeoutSeconds $TimeoutSeconds -Silent
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-Thumbprints', ($pending -join ',')
+    ) -TimeoutSeconds $batchTimeout -Silent
+    $timedOut = ($result.StdErr -eq 'Timeout')
+    $output = if ($timedOut) { $result.PartialStdOut } else { $result.StdOut }
 
-    $info = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; Container = $null; DetectionError = $null; TimedOut = $false }
-    if ($result.StdErr -eq 'Timeout') {
-        $info.TimedOut = $true
-        return $info
+    $current = $null
+    foreach ($line in ("$output" -split "`r?`n")) {
+        if ($line -match '^Begin=(.*)$') {
+            $current = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; Container = $null; DetectionError = $null; TimedOut = $false }
+        } elseif (-not $current) {
+            continue
+        } elseif ($line -match '^End=(.*)$') {
+            $results[$Matches[1]] = $current
+            # Auch "kein CNG-RSA-Schlüssel" (z.B. ECC) ist stabil - nur Fehler nicht cachen.
+            if (-not $current.DetectionError) { $script:CngInfoCache[$Matches[1]] = $current }
+            $current = $null
+        }
+        elseif ($line -match '^Provider=(.*)$') { $current.Provider = $Matches[1] }
+        elseif ($line -match '^Reader=(.*)$') { $current.Reader = $Matches[1] }
+        elseif ($line -match '^IsHardware=(.*)$') { $current.IsHardware = [bool]::Parse($Matches[1]) }
+        elseif ($line -match '^Container=(.*)$') { $current.Container = $Matches[1] }
+        elseif ($line -match '^Error=(.*)$') { $current.DetectionError = $Matches[1] }
     }
-    foreach ($line in ($result.StdOut -split "`r?`n")) {
-        if ($line -match '^Provider=(.*)$') { $info.Provider = $Matches[1] }
-        elseif ($line -match '^Reader=(.*)$') { $info.Reader = $Matches[1] }
-        elseif ($line -match '^IsHardware=(.*)$') { $info.IsHardware = [bool]::Parse($Matches[1]) }
-        elseif ($line -match '^Container=(.*)$') { $info.Container = $Matches[1] }
+
+    $missing = @($pending | Where-Object { -not $results.ContainsKey($_) })
+    if ($missing.Count -gt 0) {
+        if ($timedOut -and $pending.Count -gt 1) {
+            # Sammelprozess hing (typisch: verwaistes Zertifikat einer gelöschten VSC) -
+            # die fehlenden einzeln nachholen; nur der Hänger läuft dann in seinen Timeout.
+            Write-WizardLog -Message "CNG-Sammelabfrage: Zeitüberschreitung, $($missing.Count) Zertifikat(e) werden einzeln geprüft." -Level Info
+            foreach ($tp in $missing) {
+                $results[$tp] = (Get-SmartCardCngProviderInfoBatch -Thumbprint @($tp) -TimeoutSeconds $TimeoutSeconds)[$tp]
+            }
+        } else {
+            $err = if ($timedOut) { $null } elseif ($result.StdErr) { $result.StdErr.Trim() } else { 'Kein Ergebnis vom Lookup-Prozess.' }
+            foreach ($tp in $missing) {
+                $results[$tp] = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; Container = $null; DetectionError = $err; TimedOut = $timedOut }
+            }
+        }
     }
-    if (-not $info.Provider -and $result.StdErr) { $info.DetectionError = $result.StdErr.Trim() }
-    return $info
+    return $results
 }
 
 function Get-SmartCardCertificates {
+    # Hülle: Busy-Anzeige um die eigentliche Erkennung (Read-SmartCardCertificates).
+    param([string]$StoreLocation = 'Cert:\CurrentUser\My')
+    Enter-WizardBusy -Text 'Lese Smartcard-Zertifikate...'
+    try { return (Read-SmartCardCertificates -StoreLocation $StoreLocation) } finally { Exit-WizardBusy }
+}
+
+function Read-SmartCardCertificates {
     # Alle Zertifikate im Benutzer-Zertifikatsspeicher mit privatem Schlüssel.
     # IsSmartCard=true, wenn Provider-Name "Smart Card" enthält ODER die CSP-Info
     # das Gerät als Hardware-Schlüssel meldet. Zertifikate mit privatem Schlüssel,
@@ -1031,9 +1362,15 @@ function Get-SmartCardCertificates {
         Write-WizardLog -Message "Get-ChildItem $StoreLocation fehlgeschlagen: $($_.Exception.Message)" -Level Error
     }
     Write-WizardLog -Message "Get-SmartCardCertificates: Get-ChildItem $StoreLocation lieferte $(@($certs).Count) Einträge (davon $(@($certs | Where-Object HasPrivateKey).Count) mit privatem Schlüssel)." -Level Info
-    $results = foreach ($cert in $certs) {
-        if (-not $cert.HasPrivateKey) { continue }
-        $info = Get-SmartCardCertificateInfo -Certificate $cert
+    # CNG-Infos für ALLE Kandidaten in EINEM Kindprozess vorab holen (statt eines
+    # powershell.exe-Starts pro Zertifikat - siehe Get-SmartCardCngProviderInfoBatch).
+    $keyCerts = @($certs | Where-Object { $_.HasPrivateKey })
+    if ($keyCerts.Count -eq 0) { return @() }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $cngLookup = Get-SmartCardCngProviderInfoBatch -Thumbprint @($keyCerts | ForEach-Object { $_.Thumbprint })
+    Write-WizardLog -Message "Get-SmartCardCertificates: CNG-Sammelabfrage für $($keyCerts.Count) Zertifikat(e) in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s." -Level Info
+    $results = foreach ($cert in $keyCerts) {
+        $info = Get-SmartCardCertificateInfo -Certificate $cert -CngResult $cngLookup[$cert.Thumbprint]
         $isSmartCard = $info.IsHardware -or ($info.Provider -and $info.Provider -match 'Smart Card')
         # UPN (Principal Name) aus dem SubjectAltName lesen - identifiziert das KONTO,
         # fuer das die Karte ausgestellt wurde (wichtig fuer die Verlaengerung, damit
@@ -1075,6 +1412,7 @@ function Remove-SmartCardCertificateFromCard {
         [string]$Thumbprint
     )
 
+    Clear-SmartCardInfoCache
     Write-WizardLog -Message "Entferne Schlüssel-Container '$ContainerName' (Provider '$Provider') von der Karte - 'certutil -delkey' erfordert Administratorrechte (UAC), danach ggf. PIN-Dialog." -Level Command
 
     $ok = $false
@@ -1098,6 +1436,7 @@ function Remove-SmartCardCertificateFromCard {
 Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`n")) -Encoding UTF8
 "@
         Set-Content -Path $scriptPath -Value $wrapper -Encoding UTF8
+        Enter-WizardBusy -Text 'Entferne Schlüssel von der Smartcard...'
         try {
             # -WindowStyle Hidden: bei -Verb RunAs erzwingt Windows ShellExecute; der
             # Hidden-Style wird zu SW_HIDE, sodass das elevierte PowerShell-Fenster
@@ -1110,7 +1449,7 @@ Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`
             $msg = "Elevierter Löschvorgang konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
             Write-WizardLog -Message $msg -Level Error
             return [pscustomobject]@{ Success = $false; Message = $msg }
-        }
+        } finally { Exit-WizardBusy }
         if (Test-Path $outPath) {
             $content = (Get-Content -Path $outPath -Raw -ErrorAction SilentlyContinue)
             if ($content -match 'EXIT=(-?\d+)') { $ok = ($Matches[1] -eq '0') }
@@ -1318,11 +1657,10 @@ function Submit-CertificateSigningRequest {
     $submitArgs += @($CsrPath, $cerPath)
     $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList $submitArgs
 
-    $requestId = $null
-    if ($result.StdOut -match 'RequestId:\s*(\d+)') { $requestId = $Matches[1] }
+    $requestId = Get-CertReqRequestId -Output $result.StdOut
 
-    if ($result.StdOut -match 'Certificate Pending' -or $result.StdOut -match 'Taken Under Submission') {
-        Write-WizardLog -Message "Antrag eingereicht, wartet auf Genehmigung (RequestId: $requestId)." -Level Info
+    if (Test-CertReqPending -Output $result.StdOut) {
+        Write-WizardLog -Message "Antrag eingereicht, wartet auf Genehmigung (RequestId: $requestId). $(Get-PendingApprovalHint -RequestId $requestId -NextStep '')" -Level Info
         return [pscustomobject]@{ Success = $true; Pending = $true; RequestId = $requestId; CerPath = $null }
     }
 
@@ -1342,14 +1680,57 @@ function Receive-PendingCertificate {
         [Parameter(Mandatory)][string]$OutputDirectory
     )
 
-    $cerPath = Join-Path $OutputDirectory 'certnew.cer'
+    if (-not (Test-Path $OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
+    # Eigener Dateiname je Antrag: ein bereits zuvor ausgestelltes certnew.cer im selben
+    # (in Plan B vom Benutzer gewählten) Ordner bleibt unangetastet.
+    $cerPath = Join-Path $OutputDirectory "certnew-$RequestId.cer"
+    # Nur DIESE Ausgabedateien entfernen - sonst fragt certreq interaktiv "overwrite?"
+    # und der umgeleitete Prozess blockiert.
+    Remove-Item -LiteralPath $cerPath, ([IO.Path]::ChangeExtension($cerPath, '.rsp')) -Force -ErrorAction SilentlyContinue
     $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList @('-retrieve', '-config', $CAConfig, $RequestId, $cerPath)
 
     if ($result.Success -and (Test-Path $cerPath)) {
         Write-WizardLog -Message "Zertifikat abgerufen: $cerPath" -Level Success
-        return [pscustomobject]@{ Success = $true; CerPath = $cerPath }
+        return [pscustomobject]@{ Success = $true; Status = 'Issued'; CerPath = $cerPath; Message = '' }
     }
-    return [pscustomobject]@{ Success = $false; CerPath = $null }
+    # Unterscheiden statt pauschal "noch nicht ausgestellt": noch offen / abgelehnt / Fehler.
+    $out = "$($result.StdOut) $($result.StdErr)"
+    if (Test-CertReqPending -Output $out) {
+        return [pscustomobject]@{ Success = $false; Status = 'Pending'; CerPath = $null; Message = "Antrag $RequestId ist noch nicht genehmigt. $(Get-PendingApprovalHint -RequestId $RequestId)" }
+    }
+    if ($out -match 'Denied|abgelehnt|verweigert') {
+        return [pscustomobject]@{ Success = $false; Status = 'Denied'; CerPath = $null; Message = "Antrag $RequestId wurde von der CA abgelehnt - bitte neu beantragen." }
+    }
+    return [pscustomobject]@{ Success = $false; Status = 'Error'; CerPath = $null; Message = "Abruf von Antrag $RequestId fehlgeschlagen (Details siehe Log)." }
+}
+
+function Get-CertReqRequestId {
+    # Request-ID aus der certreq-Ausgabe. Die Beschriftung ist LOKALISIERT
+    # (EN "RequestId: 932", DE "Anforderungs-ID: 932") - früher wurde nur die englische
+    # erkannt; auf deutschem Windows blieb die ID leer und "Zertifikat abrufen" tat
+    # nichts. Fallback sprachunabhängig: erste Zeile der Form "<Beschriftung>: <Zahl>".
+    param([string]$Output)
+    if ("$Output" -match '(?im)^\s*(?:RequestId|Request ID|Anforderungs-ID)\s*:\s*"?(\d+)') { return $Matches[1] }
+    if ("$Output" -match '(?m)^[^:\r\n]{1,40}:\s*"?(\d+)"?\s*$') { return $Matches[1] }
+    return $null
+}
+
+function Test-CertReqPending {
+    # "Taken Under Submission" stammt von der CA (Sprache der CA), "Certificate Pending"/
+    # "ausstehend" von certreq (Sprache des Clients).
+    param([string]$Output)
+    return [bool]("$Output" -match 'Taken Under Submission|Certificate Pending|ausstehend')
+}
+
+function Get-PendingApprovalHint {
+    # Was bei einem wartenden Antrag zu tun ist - vorher stand das nirgends.
+    param(
+        [string]$RequestId,
+        # Für Stellen ohne "Zertifikat abrufen"-Button (z.B. EA-Dialog).
+        [string]$NextStep = "Danach hier 'Zertifikat abrufen'."
+    )
+    $id = if ($RequestId) { $RequestId } else { '<ID>' }
+    return "Ein CA-Manager muss ihn genehmigen: auf der CA in der Zertifizierungsstellen-Konsole (certsrv.msc) unter 'Ausstehende Anforderungen' ausstellen oder dort 'certutil -resubmit $id' ausführen. $NextStep".Trim()
 }
 
 function Complete-CertificateEnrollment {

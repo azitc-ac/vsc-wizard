@@ -9,16 +9,19 @@
 //   - powershell.exe ist eine Konsolenanwendung - beim elevierten Start erscheint
 //     zwangslaeufig ein (leeres) Konsolenfenster neben dem PIN-Dialog. Eine
 //     winexe hat gar kein Konsolenfenster; es erscheint ausschliesslich der Dialog.
-//   - csc erzeugt architekturneutrales IL (AnyCPU): beim Start laeuft der Prozess
-//     nativ (auf ARM64-Geraeten als ARM64), unabhaengig davon, aus welchem
-//     (ggf. emulierten) Prozess kompiliert wurde - der native TPM-COM-Server ist
-//     damit immer erreichbar (kein 0x800700C1).
 //   - Der Sprachstand muss C# 5 bleiben (csc aus %WINDIR%\Microsoft.NET\...\v4.0.30319):
 //     keine String-Interpolation, keine ?.-Operatoren, keine expression-bodied members.
 //
+// ARM64: .NET Framework hat dort keine native Laufzeit - das csc-Kompilat laeuft
+// emuliert, und der ARM64-Proxy/Stub des TPM-COM-Servers ist darin nicht ladbar
+// (QueryInterface 0x800700C1). Dieselbe Quelldatei wird deshalb zusaetzlich von
+// helper\VscCreateHelper.csproj als NATIVE, self-contained .NET-win-arm64-App gebaut
+// (build.ps1 / dotnet publish) - Aenderungen hier wirken auf beide Wege. Der Code muss
+// daher sowohl mit csc (C# 5, .NET Framework) als auch mit .NET 8 kompilieren.
+//
 // Aufruf:  VscWizard.CreateHelper.exe "<CardName>" <MinPinLength> "<ResultPath>"
-// Ergebnis: key=value-Zeilen in ResultPath (Success/HResult/InstanceId/Message/
-//           PinPolicyUsed) - identisches Format wie beim frueheren PS1-Helfer.
+// Ergebnis: key=value-Zeilen in ResultPath (Success/Cancelled/HResult/InstanceId/
+//           Message/PinPolicyUsed).
 //
 // PIN-Policy: Mindestlaengen unter 8 erfordern
 // ITpmVirtualSmartCardManager2::CreateVirtualSmartCardWithPinPolicy (MS-TPMVSC
@@ -279,8 +282,16 @@ namespace VscWizardHelper
     {
         private static void WriteResult(string path, bool success, string hresult, string instanceId, string message, bool pinPolicyUsed)
         {
+            WriteResult(path, success, hresult, instanceId, message, pinPolicyUsed, false);
+        }
+
+        // Cancelled=True: Benutzer hat den PIN-Dialog abgebrochen - der Aufrufer darf
+        // dann NICHT auf tpmvscmgr zurueckfallen (keine zweite PIN-Abfrage).
+        private static void WriteResult(string path, bool success, string hresult, string instanceId, string message, bool pinPolicyUsed, bool cancelled)
+        {
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("Success=" + success);
+            sb.AppendLine("Cancelled=" + cancelled);
             sb.AppendLine("HResult=" + hresult);
             sb.AppendLine("InstanceId=" + (instanceId == null ? "" : instanceId));
             sb.AppendLine("Message=" + message);
@@ -317,7 +328,7 @@ namespace VscWizardHelper
                 {
                     if (dlg.ShowDialog() != DialogResult.OK || string.IsNullOrEmpty(dlg.Pin))
                     {
-                        WriteResult(resultPath, false, "", "", "Vom Benutzer abgebrochen.", false);
+                        WriteResult(resultPath, false, "", "", "Vom Benutzer abgebrochen.", false, true);
                         return 0;
                     }
                     pin = dlg.Pin;

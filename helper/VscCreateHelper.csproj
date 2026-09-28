@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Nativer VSC-Erstellungshelfer fuer Windows-ARM64 (siehe docs/ARM64-native-vsc.md).
+
+    Quelltext ist BEWUSST dieselbe Datei wie der Laufzeit-csc-Helfer
+    (modules/VscWizard.CreateHelper.cs) - eine Quelle der Wahrheit fuer COM-Interop,
+    PIN-Dialog und Ergebnisformat. Dieses Projekt kompiliert sie nur zusaetzlich als
+    NATIVE ARM64-.NET-App: .NET Framework hat auf ARM64 keine native Laufzeit, und der
+    ARM64-Proxy/Stub des TPM-VSC-COM-Servers laesst sich in einen emulierten Prozess
+    nicht laden (QueryInterface 0x800700C1).
+
+    Build (macht build.ps1 automatisch, falls das .NET SDK vorhanden ist):
+      dotnet publish helper -c Release -r win-arm64 -o dist\helper-arm64
+    Ergebnis: dist\helper-arm64\VscCreateHelper.exe - self-contained Einzeldatei,
+    beim Endnutzer ist KEINE .NET-Laufzeit noetig.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>VscCreateHelper</AssemblyName>
+    <RootNamespace>VscWizardHelper</RootNamespace>
+    <Product>VSC-Wizard</Product>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
+    <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>de;en</SatelliteResourceLanguages>
+
+    <!-- SYSLIB0032: HandleProcessCorruptedStateExceptions ist unter .NET (Core) wirkungslos,
+         bleibt aber fuer den .NET-Framework-Laufzeitweg (csc) im gemeinsamen Quelltext. -->
+    <NoWarn>$(NoWarn);SYSLIB0032</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\modules\VscWizard.CreateHelper.cs" Link="VscWizard.CreateHelper.cs" />
+  </ItemGroup>
+
+</Project>

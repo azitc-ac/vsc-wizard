@@ -464,12 +464,16 @@ $btnSubmit.Add_Click({
 
     $submit = Invoke-Tool -FilePath 'certreq.exe' -ArgumentList @('-submit', '-config', $txtCA.Text, '-attrib', "CertificateTemplate:$($cboTemplate.Text)", $csrPath, $cerPath)
 
+    # Beschriftung ist LOKALISIERT (EN "RequestId: 932", DE "Anforderungs-ID: 932") -
+    # gleiche Logik wie Get-CertReqRequestId in Core.psm1 (dieses Skript ist bewusst
+    # eigenständig, daher hier dupliziert).
     $requestId = $null
-    if ($submit.StdOut -match 'RequestId:\s*(\d+)') { $requestId = $Matches[1] }
+    if ($submit.StdOut -match '(?im)^\s*(?:RequestId|Request ID|Anforderungs-ID)\s*:\s*"?(\d+)') { $requestId = $Matches[1] }
+    elseif ($submit.StdOut -match '(?m)^[^:\r\n]{1,40}:\s*"?(\d+)"?\s*$') { $requestId = $Matches[1] }
 
-    if ($submit.StdOut -match 'Certificate Pending' -or $submit.StdOut -match 'Taken Under Submission') {
+    if ($submit.StdOut -match 'Taken Under Submission|Certificate Pending|ausstehend') {
         $script:PendingRequestId = $requestId
-        Write-Status "Antrag wartet auf Genehmigung (RequestId $requestId)."
+        Write-Status "Antrag wartet auf Genehmigung (RequestId $requestId). Ein CA-Manager muss ihn genehmigen: in certsrv.msc unter 'Ausstehende Anforderungen' ausstellen oder auf der CA 'certutil -resubmit $requestId'. Danach 'Zertifikat abrufen'."
         $btnRetrieve.Visible = $true
     } elseif ($submit.Success -and (Test-Path $cerPath)) {
         Write-Status 'Zertifikat ausgestellt.'
@@ -482,15 +486,23 @@ $btnSubmit.Add_Click({
 })
 
 $btnRetrieve.Add_Click({
-    if (-not $script:PendingRequestId) { return }
+    if (-not $script:PendingRequestId) {
+        [System.Windows.Forms.MessageBox]::Show('Die Request-ID des Antrags ist nicht bekannt - bitte den Antrag erneut einreichen.', 'Hinweis', 'OK', 'Warning') | Out-Null
+        return
+    }
     $cerPath = Join-Path $script:WorkDir 'certnew.cer'
+    Remove-Item -Path $cerPath, (Join-Path $script:WorkDir 'certnew.rsp') -Force -ErrorAction SilentlyContinue
     $retrieve = Invoke-Tool -FilePath 'certreq.exe' -ArgumentList @('-retrieve', '-config', $txtCA.Text, $script:PendingRequestId, $cerPath)
     if ($retrieve.Success -and (Test-Path $cerPath)) {
         Write-Status 'Zertifikat abgerufen.'
         $btnRetrieve.Visible = $false
         Complete-Submission -CerPath $cerPath
+    } elseif ("$($retrieve.StdOut) $($retrieve.StdErr)" -match 'Taken Under Submission|Certificate Pending|ausstehend') {
+        [System.Windows.Forms.MessageBox]::Show("Antrag $($script:PendingRequestId) ist noch nicht genehmigt. Ein CA-Manager muss ihn in certsrv.msc ausstellen oder auf der CA 'certutil -resubmit $($script:PendingRequestId)' ausführen.", 'Hinweis', 'OK', 'Information') | Out-Null
+    } elseif ("$($retrieve.StdOut) $($retrieve.StdErr)" -match 'Denied|abgelehnt|verweigert') {
+        [System.Windows.Forms.MessageBox]::Show("Antrag $($script:PendingRequestId) wurde von der CA abgelehnt - bitte neu einreichen.", 'Hinweis', 'OK', 'Warning') | Out-Null
     } else {
-        [System.Windows.Forms.MessageBox]::Show('Zertifikat ist noch nicht ausgestellt.', 'Hinweis', 'OK', 'Information') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Abruf von Antrag $($script:PendingRequestId) fehlgeschlagen - Details siehe Log.", 'Fehler', 'OK', 'Error') | Out-Null
     }
 })
 

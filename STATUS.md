@@ -93,16 +93,69 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
    *Offener Follow-up:* On-Prem-Offline via **altSecurityIdentities** (starke Bindung
    am Zielkonto schreiben) als optionaler, expliziter Zweig. Siehe #1 (cloud-only-Auto-Erkennung) und
    Follow-ups unten.
-3. **Nativer ARM64-VSC-Weg** (eigener PIN-Dialog statt tpmvscmgr-Konsole). Design-Skizze
-   liegt in `docs/ARM64-native-vsc.md`: der COM-Client-Prozess muss NATIV ARM64 sein
-   (Proxy/Stub lädt nicht in einen emulierten .NET-FW-Prozess → 0x800700C1). Empfohlen:
-   den vorhandenen Helfer als self-contained **.NET-win-arm64**-App im Build erzeugen
-   (Option A); tpmvscmgr bleibt Fallback. Erst der Validierungsschritt (COM aus
-   elevierter ARM64-`pwsh` testen), dann bauen.
+3. **[ERLEDIGT 2026-09-28] Nativer ARM64-VSC-Weg** (eigener PIN-Dialog statt
+   tpmvscmgr-Konsole) - Option A umgesetzt und auf echter ARM64-Hardware getestet,
+   Details in `docs/ARM64-native-vsc.md`.
+6. **Zweisprachigkeit (DE/EN)** der Oberfläche (Wunsch 2026-09-28; nach der
+   Funktionsabsicherung).
+7. **Layout-/Design-Überarbeitung** (Wunsch 2026-09-28, nachrangig): wirkt altbacken,
+   teils große Freiflächen, anderswo gequetscht; zweigeteilte Startseite schöner lösen.
+   Absolute Pixel-Positionen → Layout-Container (TableLayout/Flow) wären der Hebel.
+   `tests\Test-Layout.ps1` sichert dabei gegen abgeschnittene/überlappende Texte ab.
+8. **`OfflineTemplate` in den Einstellungen** (bisher nur `config.psd1`; Szenario 03
+   liest die Kandidaten inzwischen selbst aus AD).
+9. **EA-Dialog: „Zertifikat abrufen"** für wartende EA-Anträge fehlt (dort gibt es nur
+   „erneut beantragen").
 4. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
    (aktuell reicht `-WindowStyle Hidden`).
 4. *(Optional)* **Echtes Renew** (RenewalCert, gleicher Schlüssel) als Experiment.
 5. *(Optional/zurückgestellt)* **Accordion-/aufklappbare Schritte** in der UI.
+
+## Zuletzt erledigt (2026-09-28, ARM64-Session)
+
+- **Nativer ARM64-Helfer** (Backlog #3) - siehe `docs/ARM64-native-vsc.md`.
+- **Abbrechen bricht wirklich ab:** PIN-Dialog- oder UAC-Abbruch führt nicht mehr in
+  den tpmvscmgr-Fallback (zweite PIN-Abfrage in der Konsole); GUI zeigt neutral
+  „Abgebrochen - es wurde keine Karte erstellt."
+- **Wartender Antrag (Pending) repariert:** die Request-ID wurde nur bei englischem
+  certreq erkannt (`RequestId:`) - auf deutschem Windows (`Anforderungs-ID:`) blieb sie
+  leer und „Zertifikat abrufen" tat **stumm nichts**. Jetzt zentral
+  `Get-CertReqRequestId` (sprachunabhängig, auch im Einreichungshelfer); fehlt die ID
+  trotzdem, fragt der Wizard sie ab. Der Wartet-Text sagt jetzt, **was zu tun ist**
+  (CA-Manager: certsrv.msc „Ausstehende Anforderungen" oder `certutil -resubmit <ID>`),
+  und der Abruf unterscheidet noch offen / abgelehnt / Fehler.
+- **Performance** (gemessen, identische Ergebnisse): Karten auflisten 6,3 → 0,7 s
+  (eine WMI-Abfrage + ParentIdPrefix aus der Registry statt Get-PnpDeviceProperty je
+  Gerät), TPM 9,9 → 0,6 s (Win32_Tpm nur eleviert; gecacht), Domänen-Status gecacht,
+  Zertifikate lesen 17,7 → ~4 s (EIN Kindprozess für alle statt einer je Zertifikat,
+  Hänger-Schutz bleibt) und danach 0,09 s (Sitzungs-Cache je Thumbprint, geleert bei
+  Karten-/Schlüsseländerungen).
+- **Busy-Anzeige zentral:** langsame Kernfunktionen melden sich selbst
+  (`Enter-/Exit-WizardBusy` + `Register-WizardBusyHook`) → Banner/Wartecursor erscheinen
+  automatisch, egal von welcher GUI-Stelle; Warte-Phasen > 1 s landen mit Dauer im Log.
+- **Szenario 03:** Template-Auswahl liest die auf der CA veröffentlichten
+  Supply-in-request-Templates mit Smartcard-Anmelde-EKU (ohne DC-Templates) aus AD.
+- **Layout-Fehler behoben** (per `tests\Test-Layout.ps1` gefunden/abgesichert):
+  abgeschnittene Ergebniszeilen, überdeckte „Zertifikatstemplate"-Beschriftung,
+  einzeilige „Hier nicht möglich"-Begründung, Szenario-Untertitel/Umgebungszeile über
+  den Rand, zweizeilige Einstellungs-Beschriftungen.
+- **Log-Level `Warn`** existierte nicht → Aufräumen nach Verlängerung wäre an zwei
+  Stellen mit Fehler abgebrochen.
+- „Vorhandene virtuelle Smartcards anzeigen" aus den Einstellungen entfernt (doppelt
+  zu Szenario 04; Banner lag dort hinter dem Dialog).
+- **Review-Fixes:** kein Bindungsfehler mehr ohne Zertifikate mit privatem Schlüssel;
+  kein `DoEvents` mehr in `Set-/Clear-Busy` (sonst liefen gepufferte Klicks mitten in
+  einer Aktion) + „Zertifikat abrufen" während des Laufs gesperrt; Zertifikats-Cache
+  prüft eine Registry-Signatur des VSC-Bestands (auch Änderungen außerhalb des Wizards);
+  Abruf schreibt `certnew-<ID>.cer` (überschreibt nichts Fremdes); eingetippte
+  Request-ID wird im Fortsetzungs-Stand gespeichert; Template-Abfrage max. 15 s,
+  Fehlschlag 2 min gemerkt; Plan A meldet jetzt, wenn ein abgerufenes Zertifikat nicht
+  auf die Karte übernommen wurde (vorher stumm).
+- *Bekannte Einschränkung:* ohne Adminrechte ist „TPM bereit" nur „TPM-Gerät läuft"
+  (PnP-Status OK) - ein nicht provisioniertes TPM fällt erst bei der Erstellung auf.
+- **Tests ohne Durchklicken:** `tests\Test-Layout.ps1` (28 Zustände + alle Dialoge,
+  mehrere Fenstergrößen) und `tests\Test-Flows.ps1` (alle Szenarien mit Weiter/Zurück,
+  Resume, Laufzeitfehler) - vor jeder Auslieferung laufen lassen.
 
 ## Zuletzt erledigt (Ergänzung)
 

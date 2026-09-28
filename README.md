@@ -112,6 +112,8 @@ Kindprozess, der die CNG-Schluesselinfos ermittelt.
 - `modules/VscWizard.CreateHelper.cs` - C#-Quellcode des elevierten
   Erstellungshelfers (COM-Interop + PIN-Dialog); wird zur Laufzeit per
   `csc.exe` zu einer fensterlosen winexe kompiliert, siehe "Ablauf im Detail"
+- `helper/VscCreateHelper.csproj` - baut denselben Helfer-Quellcode als native,
+  self-contained ARM64-App (`build.ps1`, benoetigt .NET 8 SDK nur zur Build-Zeit)
 - `config.psd1` - Konfiguration (CA, Template, RDP-Zielserver, etc.)
 - `VscWizard.bat` - Launcher
 - `VscWizard.Submit.ps1` - eigenstaendiger Einreichungshelfer fuer die RDP-Sitzung
@@ -186,9 +188,13 @@ EA-Zertifikat, weist Schritt 3 auf Plan B (RDP) hin.
    `/target:winexe`-Anwendung kompiliert: eine Fenster-Exe hat **kein
    Konsolenfenster** - es erscheint ausschliesslich der echte maskierte
    PIN-Dialog (PIN + Bestaetigung; die PIN verlaesst den elevierten Prozess
-   nie). csc erzeugt architekturneutrales IL (AnyCPU), das beim Start nativ
-   laeuft (auf ARM64 als ARM64-Prozess) - der native TPM-COM-Server ist
-   damit unabhaengig vom kompilierenden Prozess immer erreichbar. Nach der
+   nie). **Auf ARM64** laeuft .NET Framework nur emuliert und kann den
+   nativen COM-Proxy nicht laden (`0x800700C1`); dort wird stattdessen der
+   im Build erzeugte native Helfer `helper-arm64\VscCreateHelper.exe`
+   (derselbe Quellcode als self-contained .NET-win-arm64-App, siehe
+   `helper/VscCreateHelper.csproj`) eleviert gestartet - gleicher PIN-Dialog.
+   Fehlt er, faellt der Wizard auf `tpmvscmgr.exe` (PIN in der Konsole)
+   zurueck. Nach der
    Erstellung ermittelt der Wizard den PC/SC-Namen der neuen Karte
    ("Microsoft Virtual Smart Card N") und zeigt ihn an - unter DIESEM Namen
    (nicht dem vergebenen Kartennamen!) erscheint die Karte in
@@ -270,8 +276,8 @@ Namensbestandteil "Key Storage Provider" und laesst dann die reinen
 CAPI-Direktiven (`ProviderType`, `KeySpec`) weg, die ein KSP nicht
 akzeptiert.
 
-Der Button **"Vorhandene virtuelle Smartcards anzeigen..."** oeffnet einen
-weiteren Dialog (Master-Detail: Lesegeraete oben, Zertifikate des ausgewaehlten
+Szenario **04 "VSCs verwalten"** auf der Startseite oeffnet einen
+Dialog (Master-Detail: Lesegeraete oben, Zertifikate des ausgewaehlten
 Lesegeraets unten, beide als Listen mit Spalten statt Baumtext) mit allen
 auf diesem Rechner erkannten Smartcard-Lesegeraeten (inkl. virtueller
 TPM-Smartcards, da `tpmvscmgr` selbst keinen "list"-Befehl kennt - die

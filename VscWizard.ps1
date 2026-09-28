@@ -180,6 +180,30 @@ function Get-ConfiguredPinMinLength {
 # davon immer im aktuellen Benutzerkontext (die Smartcard-PIN ist kontounabhängig
 # und certreq verwaltet offene Anträge im Profil des aufrufenden Benutzers) - nur
 # die Einreichung bei der CA muss aus Berechtigungsgründen als Zielkonto erfolgen.
+function Resolve-PendingRequestId {
+    # "Zertifikat abrufen" ohne bekannte Request-ID (z.B. Antrag von einer älteren
+    # Wizard-Version, deren ID nicht erkannt wurde, oder außerhalb eingereicht): statt
+    # stumm nichts zu tun, die ID abfragen. Liefert die ID oder $null (abgebrochen).
+    param([string]$RequestId)
+    if ($RequestId) { return $RequestId }
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $entered = [Microsoft.VisualBasic.Interaction]::InputBox('Die Request-ID des wartenden Antrags ist nicht bekannt. Bitte die ID eingeben (steht im Log bzw. in der CA-Konsole unter "Ausstehende Anforderungen"):', 'Request-ID eingeben', '')
+    if ("$entered".Trim() -match '^\d+$') {
+        $id = "$entered".Trim()
+        # Im gespeicherten Fortsetzungs-Stand nachtragen - sonst fragt der nächste Start erneut.
+        $state = Get-WizardResumeState
+        if ($state -and $state['Stage'] -eq 'Pending' -and -not $state['RequestId']) {
+            $state['RequestId'] = $id
+            Save-WizardResumeState -State $state
+        }
+        return $id
+    }
+    if ("$entered".Trim()) {
+        [System.Windows.Forms.MessageBox]::Show('Die Request-ID ist eine Zahl (z.B. 932).', 'Ungültige Eingabe', 'OK', 'Warning') | Out-Null
+    }
+    return $null
+}
+
 function Get-EnrollmentIdentity {
     if ($script:TargetAccount) {
         $upn = if ($script:TargetAccount -match '@') { $script:TargetAccount } else { $null }
@@ -207,7 +231,8 @@ function Invoke-EnrollmentAgentRequest {
         Write-WizardLog -Message "Erstelle VSC für EA-Zertifikat ('$cardName')." -Level Command
         $vsc = New-VirtualSmartCard -CardName $cardName -PinPolicyMinLength (Get-ConfiguredPinMinLength)
         if (-not $vsc.Success) {
-            return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'VSC-Erstellung für EA-Zertifikat fehlgeschlagen.' }
+            $vscMsg = if ($vsc.Cancelled) { 'VSC-Erstellung für EA-Zertifikat abgebrochen.' } else { 'VSC-Erstellung für EA-Zertifikat fehlgeschlagen.' }
+            return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = $vscMsg }
         }
         $csp = $config.CspName
     } else {
@@ -298,6 +323,74 @@ function Set-TemplateComboItem {
     if ($ComboBox.Items.Count -gt 0) { $ComboBox.SelectedIndex = 0 }
 }
 
+function Update-OfflineTemplateChoices {
+    # Szenario 03 ohne konfiguriertes OfflineTemplate: die auf der CA veröffentlichten
+    # Templates aus AD lesen (wie "PKI automatisch erkennen") und die Supply-in-request-
+    # fähigen in die (weiterhin editierbare) Combo legen. Ergebnis pro Sitzung gecacht;
+    # Abfrage im Hintergrund-Job mit Timeout (max. 15 s mit Banner), damit ein nicht
+    # erreichbarer DC die GUI nicht unbegrenzt blockiert.
+    if (-not $script:PlanA_OfflineDirect -or $config.OfflineTemplate) { return }
+
+    $c = $script:OfflineTemplateCandidates
+    # Ein Fehlschlag (DC nicht erreichbar) wird 2 Minuten gemerkt: Zurück/Weiter soll nicht
+    # jedes Mal erneut bis zum Timeout blockieren (der Job-Wait läuft im UI-Thread).
+    if (-not $c -and $script:OfflineTemplateFailure -and ((Get-Date) - $script:OfflineTemplateFailure.At).TotalSeconds -lt 120) {
+        $c = $script:OfflineTemplateFailure.Result
+    }
+    if (-not $c) {
+        $modulePath = $script:ModulePath
+        $c = Invoke-Busy -Text 'Lese Zertifikatstemplates der CA...' -Action {
+            $job = Start-Job -ScriptBlock {
+                param($ModulePath, $Server, $CAConfig)
+                Import-Module $ModulePath -Force
+                Get-OfflineTemplateCandidates -Server $Server -CAConfig $CAConfig -TimeoutSeconds 8
+            } -ArgumentList $modulePath, $config.DiscoveryDomain, $config.CAConfig
+            $data = $null; $jobErr = $null
+            if (Wait-Job -Job $job -Timeout 15) {
+                $data = Receive-Job -Job $job -ErrorVariable jobErr -ErrorAction SilentlyContinue
+                if (-not $data) { $data = [pscustomobject]@{ Templates = @(); CaName = $null; Error = "AD-Abfrage fehlgeschlagen: $(@($jobErr)[0])" } }
+            } else {
+                Stop-Job -Job $job
+                $data = [pscustomobject]@{ Templates = @(); CaName = $null; Error = 'Zeitüberschreitung bei der AD-Abfrage (DC erreichbar? VPN?).' }
+            }
+            Remove-Job -Job $job -Force
+            $data
+        }
+        # Erfolg für die Sitzung cachen; Fehlschlag nur kurz (s.o.) - nach VPN-Aufbau o.ä.
+        # soll ein späteres Betreten des Schritts es noch einmal versuchen.
+        if (@($c.Templates).Count -gt 0) { $script:OfflineTemplateCandidates = $c }
+        else { $script:OfflineTemplateFailure = [pscustomobject]@{ At = Get-Date; Result = $c } }
+        $supplyNames = @($c.Templates | Where-Object { $_.SuppliesSubject -and ($_.SmartCardLogon -or $_.ClientAuth) -and -not $_.KdcAuth } | ForEach-Object { $_.Name })
+        Write-WizardLog -Message "Offline-Templates: $(@($c.Templates).Count) auf der CA ($($c.CaName)) veröffentlicht, davon Supply-in-request: $(if ($supplyNames) { $supplyNames -join ', ' } else { 'keines' })$(if ($c.Error) { " - $($c.Error)" })." -Level Info
+    }
+
+    # Bevorzugt Supply-in-request + Smartcard-Anmeldung; gibt es keins, dann
+    # Supply-in-request + Client-Authentifizierung (reicht für Entra CBA).
+    # DC-Templates (KDC-Authentifizierung) nie anbieten.
+    $supply = @($c.Templates | Where-Object { $_.SuppliesSubject -and $_.SmartCardLogon -and -not $_.KdcAuth })
+    if ($supply.Count -eq 0) { $supply = @($c.Templates | Where-Object { $_.SuppliesSubject -and $_.ClientAuth -and -not $_.KdcAuth }) }
+    $typed = $cboTemplateA.Text
+    $cboTemplateA.Items.Clear()
+    foreach ($t in $supply) { [void]$cboTemplateA.Items.Add($t.Name) }
+    if ($typed) {
+        $cboTemplateA.Text = $typed
+    } elseif ($supply.Count -eq 1) {
+        $cboTemplateA.SelectedIndex = 0
+    }
+
+    $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DimGray
+    if ($supply.Count -ge 1) {
+        $lblTemplateHintA.Text = "$($supply.Count) Supply-in-request-Template(s) auf der CA gefunden - bitte auswählen (dauerhaft: OfflineTemplate in config.psd1)."
+    } elseif (@($c.Templates).Count -gt 0) {
+        $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblTemplateHintA.Text = 'Auf der CA ist kein Anmelde-Template mit "Informationen im Antrag angeben" veröffentlicht - Namen bitte eintippen (dauerhaft: OfflineTemplate in config.psd1).'
+    } else {
+        $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblTemplateHintA.Text = "Templates nicht ermittelbar$(if ($c.Error) { " ($($c.Error))" }) - Namen bitte eintippen (dauerhaft: OfflineTemplate in config.psd1)."
+    }
+    $lblTemplateHintA.Visible = $true
+}
+
 function Set-PlanATemplateForMode {
     # Bereitet die Template-Auswahl in Plan A auf den aktuellen Modus vor.
     #  - Normal/EOBO/Verlängern: fest vorausgewähltes Standard-Template ($config.Template).
@@ -313,9 +406,11 @@ function Set-PlanATemplateForMode {
         } else {
             $cboTemplateA.Text = ''
         }
+        $lblTemplateHintA.Visible = -not $config.OfflineTemplate
     } else {
         $cboTemplateA.DropDownStyle = 'DropDownList'
         Set-TemplateComboItem -ComboBox $cboTemplateA -Template $config.Template
+        $lblTemplateHintA.Visible = $false
     }
 }
 
@@ -353,8 +448,18 @@ $script:BusyLabel.Size = New-Object System.Drawing.Size(560, 40)
 $script:BusyLabel.Visible = $false
 $form.Controls.Add($script:BusyLabel)
 
+# Verschachtelungstiefe: ein innerer Set-/Clear-Busy (z.B. Zertifikate lesen innerhalb
+# einer laufenden Übernahme) darf das äußere Banner nicht vorzeitig ausblenden.
+$script:BusyDepth = 0
+
 function Set-Busy {
     param([string]$Text)
+    $script:BusyDepth++
+    # Verschachtelt (z.B. Kernfunktion innerhalb einer GUI-Aktion): der äußere,
+    # spezifischere Text bleibt stehen.
+    if ($script:BusyDepth -gt 1) { return }
+    $script:BusyText = $Text
+    $script:BusyWatch = [System.Diagnostics.Stopwatch]::StartNew()
     [System.Windows.Forms.Application]::UseWaitCursor = $true
     if ($script:BusyLabel -and $form) {
         $script:BusyLabel.Text = "$([char]0x231B)  $Text"   # Sanduhr-Symbol + Text
@@ -364,16 +469,30 @@ function Set-Busy {
         $script:BusyLabel.Visible = $true
         $script:BusyLabel.BringToFront()
     }
+    # Refresh zeichnet das Banner synchron - bewusst KEIN Application.DoEvents(): seit die
+    # Kernfunktionen über den Busy-Hook bei jedem externen Aufruf hierher kommen, würde
+    # DoEvents zwischengepufferte Klicks MITTEN in einer laufenden Aktion ausführen
+    # (z.B. Doppelklick auf "Zertifikat abrufen" -> verschachtelt zweimal installieren).
     try { $form.Refresh() } catch { }
-    [System.Windows.Forms.Application]::DoEvents()
 }
 
 function Clear-Busy {
+    if ($script:BusyDepth -gt 0) { $script:BusyDepth-- }
+    if ($script:BusyDepth -gt 0) { return }
+    # Laufzeit-Protokoll: jede Warte-Phase über 1 s landet im Log - so lassen sich
+    # langsame Stellen gezielt aus dem Logfile finden, statt sie beim Durchklicken zu suchen.
+    if ($script:BusyWatch -and $script:BusyWatch.Elapsed.TotalSeconds -ge 1) {
+        Write-WizardLog -Message ("Dauer {0:0.0} s: {1}" -f $script:BusyWatch.Elapsed.TotalSeconds, $script:BusyText) -Level Info
+    }
+    $script:BusyWatch = $null
     [System.Windows.Forms.Application]::UseWaitCursor = $false
     if ($script:BusyLabel) { $script:BusyLabel.Visible = $false }
-    try { $form.Refresh() } catch { }
-    [System.Windows.Forms.Application]::DoEvents()
+    try { $form.Refresh() } catch { }   # kein DoEvents - siehe Set-Busy
 }
+
+# Kernfunktionen (Core.psm1) melden langsame Arbeit selbst über diesen Hook - Banner und
+# Wartecursor erscheinen damit automatisch, auch an GUI-Stellen ohne eigenes Set-Busy.
+Register-WizardBusyHook -Enter { param($Text) Set-Busy -Text $Text } -Exit { Clear-Busy }
 
 function Invoke-Busy {
     # Fuehrt $Action aus, waehrend Wartecursor + Banner sichtbar sind; raeumt IMMER auf.
@@ -855,7 +974,8 @@ $pnlContentArea.Controls.Add($pnlScenario)
 
 $scnRoot = New-Object System.Windows.Forms.TableLayoutPanel
 $scnRoot.Dock = 'Fill'; $scnRoot.ColumnCount = 1; $scnRoot.RowCount = 2
-[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 100)))
+# 122 px: Platz für eine bis zu dreizeilige "Hier nicht möglich"-Begründung.
+[void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 122)))
 [void]$scnRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $pnlScenario.Controls.Add($scnRoot)
 
@@ -867,11 +987,20 @@ $lblScnTitle.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawi
 $lblScnTitle.Height = 26
 $lblScnSub = New-WizardLabel -Text 'Szenario wählen - der Wizard richtet Karte, Antrag und Einreichungsweg passend ein.' -X 16 -Y 42 -Width 760
 $lblScnSub.ForeColor = [System.Drawing.Color]::DimGray
-$lblScnValidation = New-WizardLabel -Text '' -X 16 -Y 42 -Width 760
+# Begründungen sind bis ~300 Zeichen lang -> mehrzeilig (vorher einzeilig, abgeschnitten).
+$lblScnValidation = New-WizardLabel -Text '' -X 16 -Y 42 -Width 840 -Height 50
 $lblScnValidation.ForeColor = [System.Drawing.Color]::Firebrick
 $lblScnValidation.Visible = $false
 # Umgebungs-Banner: was der Wizard HIER erkannt hat (Join, TPM, On-Prem-TGT, VSCs, EA).
-$lblScnEnv = New-WizardLabel -Text '' -X 16 -Y 68 -Width 900 -Height 22
+$lblScnEnv = New-WizardLabel -Text '' -X 16 -Y 94 -Width 840 -Height 22
+$lblScnEnv.AutoEllipsis = $true
+# Breite der Kopfzeilen an die Fensterbreite koppeln. Bewusst per SizeChanged statt
+# Anchor: Anchor merkt sich den Abstand zur (beim Hinzufügen noch winzigen) Panelbreite
+# und liess die Labels dann weit über den rechten Rand wachsen.
+$scnHeader.Add_SizeChanged({
+    $w = [Math]::Max(200, $scnHeader.ClientSize.Width - 32)
+    foreach ($l in @($lblScnValidation, $lblScnEnv)) { $l.Width = $w }
+})
 $lblScnEnv.ForeColor = [System.Drawing.Color]::FromArgb(42, 128, 145)
 $scnHeader.Controls.AddRange(@($lblScnTitle, $lblScnSub, $lblScnValidation, $lblScnEnv))
 
@@ -966,6 +1095,7 @@ function Update-ScenarioRowColors {
 # Gemeinsamer Klick-Handler: liest die Szenario-Id aus .Tag des angeklickten Controls.
 $scnRowClick = { param($s, $e) $id = $s.Tag; if ($null -ne $id) { Select-ScenarioById -Id ([int]$id) } }
 
+$scnToolTip = New-Object System.Windows.Forms.ToolTip
 foreach ($scn in $script:Scenarios) {
     $row = New-Object System.Windows.Forms.Panel
     $row.Height = 62; $row.Width = 380
@@ -986,11 +1116,17 @@ foreach ($scn in $script:Scenarios) {
     $lblT.Tag = $scn.Id
     $row.Controls.Add($lblT)
 
+    # Untertitel wächst mit der (fensterabhängigen) Zeilenbreite und endet bei Platzmangel
+    # mit "..." statt hart abgeschnitten zu werden; voller Text als Tooltip (und ohnehin
+    # im Detailbereich rechts).
     $lblS = New-Object System.Windows.Forms.Label
     $lblS.Text = $scn.Sub
     $lblS.ForeColor = [System.Drawing.Color]::DimGray
-    $lblS.Location = New-Object System.Drawing.Point(14, 32); $lblS.AutoSize = $true
+    $lblS.Location = New-Object System.Drawing.Point(14, 32)
+    $lblS.Size = New-Object System.Drawing.Size(($row.Width - 20), 18)
+    $lblS.AutoEllipsis = $true
     $lblS.Tag = $scn.Id
+    $scnToolTip.SetToolTip($lblS, $scn.Sub)
     $row.Controls.Add($lblS)
 
     $row.Add_Click($scnRowClick)
@@ -1005,7 +1141,11 @@ foreach ($scn in $script:Scenarios) {
 $scnResize = {
     $w = $scnList.ClientSize.Width - 24
     if ($w -lt 200) { $w = 200 }
-    foreach ($row in $scnList.Controls) { $row.Width = $w }
+    foreach ($row in $scnList.Controls) {
+        $row.Width = $w
+        # Untertitel (AutoEllipsis) mitziehen - kein Anchor, siehe Kommentar bei $scnHeader.
+        foreach ($c in $row.Controls) { if ($c -is [System.Windows.Forms.Label] -and $c.AutoEllipsis) { $c.Width = [Math]::Max(50, $w - 20) } }
+    }
 }
 $scnList.Add_SizeChanged($scnResize)
 
@@ -1316,7 +1456,7 @@ function Select-ExistingVsc {
         return $null
     }
     if ($readers.Count -eq 1) { return $readers[0] }
-    $certs = @(Get-SmartCardCertificates)
+    $certs = @(Invoke-Busy -Text 'Lese vorhandene Smartcards und Zertifikate...' -Action { Get-SmartCardCertificates })
     return (Show-VscPickerDialog -Readers $readers -Certs $certs)
 }
 
@@ -1341,7 +1481,7 @@ function Invoke-RenewalCleanup {
         return
     }
 
-    $cardCerts = @(Get-SmartCardCertificates | Where-Object { $_.Reader -and ($_.Reader -eq $PcscName) })
+    $cardCerts = @(Invoke-Busy -Text 'Prüfe Zertifikate auf der Smartcard...' -Action { Get-SmartCardCertificates } | Where-Object { $_.Reader -and ($_.Reader -eq $PcscName) })
     Write-WizardLog -Message "Aufräumen: $($cardCerts.Count) Zertifikat(e) auf Karte '$PcscName' gefunden." -Level Info
     if ($cardCerts.Count -le 1) {
         Write-WizardLog -Message 'Aufräumen: nur ein Zertifikat auf der Karte - nichts zu entfernen.' -Level Info
@@ -1559,7 +1699,7 @@ $btnCreateVscA.Text = 'Virtuelle Smartcard erstellen'
 $btnCreateVscA.Location = New-Object System.Drawing.Point(20, 172)
 $btnCreateVscA.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblVscResultA = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780
+$lblVscResultA = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780 -Height 44
 
 $pnlA2.Controls.AddRange(@($lblCardNameA, $txtCardNameA, $lblVscInfoA, $btnCreateVscA, $lblVscResultA))
 
@@ -1588,6 +1728,9 @@ $btnCreateVscA.Add_Click({
         } else {
             'Virtuelle Smartcard wurde erfolgreich erstellt.'
         }
+    } elseif ($result.Cancelled) {
+        $lblVscResultA.ForeColor = [System.Drawing.Color]::Black
+        $lblVscResultA.Text = 'Abgebrochen - es wurde keine Karte erstellt.'
     } else {
         $lblVscResultA.ForeColor = [System.Drawing.Color]::Firebrick
         $detail = if ($result.Message) { $result.Message } else { "Exit-Code $($result.ExitCode)" }
@@ -1605,27 +1748,43 @@ $lblCardHintA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 44
 $lblCardHintA.ForeColor = [System.Drawing.Color]::ForestGreen
 $lblCardHintA.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
 
-$lblTemplateA = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 58 -Width 300
+# Alles unterhalb des (bis zu zweizeiligen, fetten) Karten-Hinweises beginnt erst bei
+# Y 68 - vorher überdeckte das 44 px hohe Hinweislabel die Oberkante von
+# "Zertifikatstemplate:".
+$lblTemplateA = New-WizardLabel -Text 'Zertifikatstemplate:' -X 20 -Y 68 -Width 300
 $cboTemplateA = New-Object System.Windows.Forms.ComboBox
-$cboTemplateA.Location = New-Object System.Drawing.Point(20, 84)
+$cboTemplateA.Location = New-Object System.Drawing.Point(20, 94)
 $cboTemplateA.Size = New-Object System.Drawing.Size(300, 24)
 $cboTemplateA.DropDownStyle = 'DropDownList'
 Set-TemplateComboItem -ComboBox $cboTemplateA -Template $config.Template
 
+# Nur im Offline-Direkt-Modus (Szenario 03) ohne konfiguriertes OfflineTemplate sichtbar:
+# die Combo ist dann ein leeres, editierbares Feld - ohne Erklärung wirkt das wie
+# "kein Template wählbar".
+$lblTemplateHintA = New-WizardLabel -Text 'Kein Offline-Template konfiguriert: bitte den Namen des Supply-in-request-Templates eintippen (dauerhaft: OfflineTemplate in config.psd1).' -X 332 -Y 90 -Width 468 -Height 36
+$lblTemplateHintA.ForeColor = [System.Drawing.Color]::DarkOrange
+$lblTemplateHintA.Visible = $false
+
 $btnRequestCertA = New-Object System.Windows.Forms.Button
 $btnRequestCertA.Text = 'Zertifikat anfordern'
-$btnRequestCertA.Location = New-Object System.Drawing.Point(20, 122)
+$btnRequestCertA.Location = New-Object System.Drawing.Point(20, 132)
 $btnRequestCertA.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblCertResultA = New-WizardLabel -Text '' -X 20 -Y 166 -Width 780 -Height 50
+# Hinweis: Windows fragt bei der Anforderung/Installation mehrfach nach der Karten-PIN -
+# ohne Vorwarnung wirkt das wie ein Fehler/eine Schleife.
+$lblPinHintA = New-WizardLabel -Text 'Hinweis: Windows fragt dabei mehrmals nach der PIN der virtuellen Smartcard (typisch 2-3 Mal) - das ist normal.' -X 276 -Y 128 -Width 524 -Height 40
+$lblPinHintA.ForeColor = [System.Drawing.Color]::DimGray
+
+# Höhe 64: der Wartet-auf-Genehmigung-Text samt Genehmigungs-Hinweis braucht bis zu 4 Zeilen.
+$lblCertResultA = New-WizardLabel -Text '' -X 20 -Y 176 -Width 780 -Height 64
 
 $btnRetrieveA = New-Object System.Windows.Forms.Button
 $btnRetrieveA.Text = 'Zertifikat abrufen (bei Genehmigung)'
-$btnRetrieveA.Location = New-Object System.Drawing.Point(20, 228)
+$btnRetrieveA.Location = New-Object System.Drawing.Point(20, 248)
 $btnRetrieveA.Size = New-Object System.Drawing.Size(260, 32)
 $btnRetrieveA.Visible = $false
 
-$pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequestCertA, $lblCertResultA, $btnRetrieveA))
+$pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $lblTemplateHintA, $btnRequestCertA, $lblPinHintA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
     # Fuer ein separates Zielkonto gibt es zwei direkte Wege:
@@ -1690,7 +1849,7 @@ $btnRequestCertA.Add_Click({
             EnrollDir = $script:PlanA_EnrollDir
         }
         $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). Bitte später erneut abrufen - auch nach einem Neustart des Wizards möglich."
+        $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId $($submit.RequestId)). $(Get-PendingApprovalHint -RequestId $submit.RequestId) Auch nach einem Neustart des Wizards möglich."
         $btnRetrieveA.Visible = $true
         $btnRequestCertA.Enabled = $true
         return
@@ -1721,7 +1880,20 @@ $btnRequestCertA.Add_Click({
 })
 
 $btnRetrieveA.Add_Click({
+    $script:PlanA_PendingRequestId = Resolve-PendingRequestId -RequestId $script:PlanA_PendingRequestId
     if (-not $script:PlanA_PendingRequestId) { return }
+    # Während des Abrufs gesperrt: ein zweiter Klick darf den Abruf/die Installation
+    # (mit erneuter PIN-Abfrage) nicht ein weiteres Mal auslösen.
+    $btnRetrieveA.Enabled = $false
+    try {
+        Invoke-PlanARetrieve
+    } finally {
+        [System.Windows.Forms.Application]::DoEvents()   # gepufferte Klicks am gesperrten Button verwerfen
+        $btnRetrieveA.Enabled = $true
+    }
+})
+
+function Invoke-PlanARetrieve {
     $recv = Receive-PendingCertificate -RequestId $script:PlanA_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanA_EnrollDir
     if ($recv.Success) {
         $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
@@ -1736,11 +1908,17 @@ $btnRetrieveA.Add_Click({
                 Invoke-RenewalCleanup -PcscName $script:PlanA_PcscName -UpnOrTerm $(if ($idA.Upn) { $idA.Upn } else { $idA.SearchTerm })
                 Update-PlanASummary
             }
+        } else {
+            # Vorher ohne jede Anzeige: abgerufen, aber nicht auf die Karte übernommen
+            # (z.B. PIN-Abfrage abgebrochen). Erneutes "Zertifikat abrufen" wiederholt es.
+            $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblCertResultA.Text = "Zertifikat wurde abgerufen ($($recv.CerPath)), aber nicht auf die Smartcard übernommen (z.B. PIN-Abfrage abgebrochen) - 'Zertifikat abrufen' erneut klicken. Details siehe Log."
         }
     } else {
-        [System.Windows.Forms.MessageBox]::Show('Zertifikat ist noch nicht ausgestellt.', 'Hinweis', 'OK', 'Information') | Out-Null
+        $lblCertResultA.ForeColor = if ($recv.Status -eq 'Pending') { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick }
+        $lblCertResultA.Text = $recv.Message
     }
-})
+}
 
 # --- Schritt A4: Zusammenfassung ---
 $pnlA4 = New-Object System.Windows.Forms.Panel
@@ -1770,7 +1948,7 @@ function Get-CardValiditySummaryText {
 
     $certs = @()
     if ($PcscName) {
-        $certs = @(Get-SmartCardCertificates |
+        $certs = @(Invoke-Busy -Text 'Lese Zertifikate der Smartcard...' -Action { Get-SmartCardCertificates } |
             Where-Object { $_.Reader -and ($_.Reader -eq $PcscName) } |
             Sort-Object NotAfter)
     }
@@ -1883,6 +2061,7 @@ function Show-PlanAStep {
             $lblCardHintA.Text = if ($script:PlanA_PcscName) {
                 "➜ Im Windows-Kartenauswahl-Dialog die Karte `"$($script:PlanA_PcscName)`" wählen  (= '$($script:PlanA_CardName)')."
             } else { '' }
+            Update-OfflineTemplateChoices
         }
         2 { Update-PlanASummary }
     }
@@ -1964,7 +2143,7 @@ $btnCreateVscB.Text = 'Virtuelle Smartcard erstellen'
 $btnCreateVscB.Location = New-Object System.Drawing.Point(20, 172)
 $btnCreateVscB.Size = New-Object System.Drawing.Size(240, 32)
 
-$lblVscResultB = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780
+$lblVscResultB = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780 -Height 44
 
 $pnlB2.Controls.AddRange(@($lblCardNameB, $txtCardNameB, $lblVscInfoB, $btnCreateVscB, $lblVscResultB))
 
@@ -1993,6 +2172,9 @@ $btnCreateVscB.Add_Click({
         } else {
             'Virtuelle Smartcard wurde erfolgreich erstellt.'
         }
+    } elseif ($result.Cancelled) {
+        $lblVscResultB.ForeColor = [System.Drawing.Color]::Black
+        $lblVscResultB.Text = 'Abgebrochen - es wurde keine Karte erstellt.'
     } else {
         $lblVscResultB.ForeColor = [System.Drawing.Color]::Firebrick
         $detail = if ($result.Message) { $result.Message } else { "Exit-Code $($result.ExitCode)" }
@@ -2006,7 +2188,7 @@ $pnlB3 = New-Object System.Windows.Forms.Panel
 $pnlB3.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB3)
 
-$lblCsrInfoB = New-WizardLabel -Text 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.' -X 20 -Y 20 -Width 780 -Height 48
+$lblCsrInfoB = New-WizardLabel -Text 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Windows fragt dabei ggf. mehrmals nach der PIN der Smartcard - das ist normal.' -X 20 -Y 20 -Width 780 -Height 48
 
 $btnCreateCsrB = New-Object System.Windows.Forms.Button
 $btnCreateCsrB.Text = 'CSR erstellen'
@@ -2164,22 +2346,23 @@ $btnRetrieveB.Location = New-Object System.Drawing.Point(230, 270)
 $btnRetrieveB.Size = New-Object System.Drawing.Size(260, 32)
 $btnRetrieveB.Visible = $false
 
-$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 310 -Width 780 -Height 40
+# Höhe 64: der Wartet-auf-Genehmigung-Text samt Genehmigungs-Hinweis braucht bis zu 4 Zeilen.
+$lblSubmitResultB = New-WizardLabel -Text '' -X 20 -Y 310 -Width 780 -Height 64
 
-$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 354 -Width 400
+$lblCerPathLabelB = New-WizardLabel -Text 'Pfad der ausgestellten Zertifikatsdatei:' -X 20 -Y 378 -Width 400
 $txtCerPathB = New-Object System.Windows.Forms.TextBox
-$txtCerPathB.Location = New-Object System.Drawing.Point(20, 380)
+$txtCerPathB.Location = New-Object System.Drawing.Point(20, 404)
 $txtCerPathB.Size = New-Object System.Drawing.Size(560, 24)
 $txtCerPathB.ReadOnly = $true
 
 $btnCopyCerPathB = New-Object System.Windows.Forms.Button
 $btnCopyCerPathB.Text = 'Pfad kopieren'
-$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 378)
+$btnCopyCerPathB.Location = New-Object System.Drawing.Point(590, 402)
 $btnCopyCerPathB.Size = New-Object System.Drawing.Size(120, 28)
 
 $btnOpenCerFolderB = New-Object System.Windows.Forms.Button
 $btnOpenCerFolderB.Text = 'Ordner öffnen'
-$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 416)
+$btnOpenCerFolderB.Location = New-Object System.Drawing.Point(20, 440)
 $btnOpenCerFolderB.Size = New-Object System.Drawing.Size(160, 28)
 
 $pnlB5.Controls.AddRange(@($lblSubmitInfoB, $lblCsrPasteLabelB, $txtCsrPasteB, $btnSelectCsrB, $txtSelectedCsrB, $lblTemplateSubmitB, $cboTemplateSubmitB, $btnSubmitB, $btnRetrieveB, $lblSubmitResultB, $lblCerPathLabelB, $txtCerPathB, $btnCopyCerPathB, $btnOpenCerFolderB))
@@ -2232,7 +2415,7 @@ $btnSubmitB.Add_Click({
             TargetAccount = "$($script:TargetAccount)"
         }
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId)) - Abruf auch nach einem Neustart des Wizards möglich."
+        $lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId $($submit.RequestId)). $(Get-PendingApprovalHint -RequestId $submit.RequestId) Auch nach einem Neustart des Wizards möglich."
         $btnRetrieveB.Visible = $true
     } elseif ($submit.Success) {
         $txtCerPathB.Text = $submit.CerPath
@@ -2246,15 +2429,23 @@ $btnSubmitB.Add_Click({
 })
 
 $btnRetrieveB.Add_Click({
+    $script:PlanB_PendingRequestId = Resolve-PendingRequestId -RequestId $script:PlanB_PendingRequestId
     if (-not $script:PlanB_PendingRequestId) { return }
-    $recv = Receive-PendingCertificate -RequestId $script:PlanB_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanB_SubmitDir
+    $btnRetrieveB.Enabled = $false   # siehe btnRetrieveA: kein doppelter Abruf
+    try {
+        $recv = Receive-PendingCertificate -RequestId $script:PlanB_PendingRequestId -CAConfig $config.CAConfig -OutputDirectory $script:PlanB_SubmitDir
+    } finally {
+        [System.Windows.Forms.Application]::DoEvents()
+        $btnRetrieveB.Enabled = $true
+    }
     if ($recv.Success) {
         $txtCerPathB.Text = $recv.CerPath
         $btnRetrieveB.Visible = $false
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblSubmitResultB.Text = 'Zertifikat wurde abgerufen.'
     } else {
-        [System.Windows.Forms.MessageBox]::Show('Zertifikat ist noch nicht ausgestellt.', 'Hinweis', 'OK', 'Information') | Out-Null
+        $lblSubmitResultB.ForeColor = if ($recv.Status -eq 'Pending') { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick }
+        $lblSubmitResultB.Text = $recv.Message
     }
 })
 
@@ -2896,10 +3087,14 @@ function Show-SettingsDialog {
             [Parameter(Mandatory)][string]$LabelText,
             [Parameter(Mandatory)][System.Windows.Forms.Control]$InputControl
         )
+        # AutoSize + MaximumSize (Spaltenbreite 280 minus Rand): lange Beschriftungen
+        # brechen um und die (AutoSize-)Zeile wächst mit, statt die zweite Zeile
+        # abzuschneiden.
         $lbl = New-Object System.Windows.Forms.Label
         $lbl.Text = $LabelText
-        $lbl.Dock = 'Fill'
-        $lbl.TextAlign = 'MiddleLeft'
+        $lbl.AutoSize = $true
+        $lbl.MaximumSize = New-Object System.Drawing.Size(270, 0)
+        $lbl.Anchor = 'Left'
         $lbl.Font = New-Object System.Drawing.Font('Segoe UI', 9)
         $lbl.Margin = New-Object System.Windows.Forms.Padding(0, 6, 10, 6)
 
@@ -2931,12 +3126,6 @@ function Show-SettingsDialog {
         $settingsLayout.Controls.Add($Control, 0, $rowIndex)
         $settingsLayout.SetColumnSpan($Control, 2)
     }
-
-    $btnShowInventory = New-Object System.Windows.Forms.Button
-    $btnShowInventory.Text = 'Vorhandene virtuelle Smartcards anzeigen...'
-    $btnShowInventory.Size = New-Object System.Drawing.Size(280, 30)
-    Add-SettingsFullRow -Control $btnShowInventory
-    $btnShowInventory.Add_Click({ Show-VscInventoryDialog -Owner $dlg })
 
     $txtCfgCA = New-Object System.Windows.Forms.TextBox
     Set-TextBoxPlaceholder -TextBox $txtCfgCA -Placeholder 'z.B. ca01.contoso.local\Contoso-Issuing-CA' -Value $config.CAConfig
@@ -3099,7 +3288,7 @@ function Show-SettingsDialog {
             }
         } elseif ($result.Pending) {
             $lblEaResult.ForeColor = [System.Drawing.Color]::DarkOrange
-            $lblEaResult.Text = "EA-Antrag eingereicht, wartet auf Genehmigung (RequestId $($result.RequestId)). Nach Genehmigung erneut beantragen/abrufen."
+            $lblEaResult.Text = "EA-Antrag eingereicht, wartet auf Genehmigung (RequestId $($result.RequestId)). $(Get-PendingApprovalHint -RequestId $result.RequestId -NextStep 'Danach das EA-Zertifikat hier erneut beantragen.')"
         } else {
             $lblEaResult.ForeColor = [System.Drawing.Color]::Firebrick
             $lblEaResult.Text = "EA-Beantragung fehlgeschlagen: $($result.Message) Details siehe Log."

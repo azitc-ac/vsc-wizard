@@ -1,8 +1,36 @@
-# Skizze: Native ARM64-VSC-Erstellung (eigener PIN-Dialog statt tpmvscmgr-Konsole)
+# Native ARM64-VSC-Erstellung (eigener PIN-Dialog statt tpmvscmgr-Konsole)
 
-> Status: **Design/Skizze** – noch nicht implementiert. Fallback (tpmvscmgr.exe)
-> bleibt in jedem Fall bestehen. Diese Datei reist mit dem Repo, damit die
-> Weiterentwicklung (auch in einer Windows-ARM64-Claude-Session) direkt anknüpfen kann.
+> Status: **UMGESETZT (Option A)** am 2026-09-28 auf echter ARM64-Hardware
+> (Snapdragon X Elite, Windows 11 ARM64). Fallback (tpmvscmgr.exe) bleibt bestehen.
+>
+> **Ergebnis der Validierung** (nativer ARM64-.NET-8-Prozess, eleviert):
+> `CreateInstance` OK, `QueryInterface` auf `ITpmVirtualSmartCardManager` und
+> `…Manager2` jeweils `0x00000000` - kein `0x800700C1`. Ohne Elevation:
+> `0x800702E4` (ERROR_ELEVATION_REQUIRED) - erwartet.
+> Hinweis: die installierte `pwsh` 7 war die **x64**-Variante (emuliert) - der
+> Test-Snippet unten wäre damit NICHT aussagekräftig gewesen; validiert wurde daher
+> direkt mit einer nativen .NET-8-win-arm64-Konsolen-App.
+>
+> **Umsetzung:**
+> - `helper/VscCreateHelper.csproj` kompiliert **dieselbe** Quelldatei
+>   `modules/VscWizard.CreateHelper.cs` (per `<Compile Include>`, keine Kopie) als
+>   self-contained Einzeldatei für `win-arm64` (~60 MB; WinForms ist nicht trimmbar).
+> - `build.ps1` ruft `dotnet publish` auf, falls das .NET SDK vorhanden ist →
+>   `dist\helper-arm64\VscCreateHelper.exe` (wird mitsigniert).
+> - `New-VirtualSmartCard`: auf ARM64 den nativen Helfer nach `C:\Users\Public`
+>   kopieren und eleviert starten (gleiche Result-Datei wie beim csc-Weg); fehlt er →
+>   tpmvscmgr.exe. Suche über `Get-NativeCreateHelperPath` (`<App>\helper-arm64` und
+>   `<Repo>\dist\helper-arm64`).
+> - **ARM64-Erkennung** (`Get-NativeOsArchitecture`) liest den systemweiten Wert aus
+>   `HKLM\...\Session Manager\Environment`: `$env:PROCESSOR_ARCHITECTURE` meldet in
+>   emulierten Prozessen (z.B. der PS2EXE-Exe) `AMD64` und wird sogar an native
+>   Kindprozesse vererbt; `RuntimeInformation::OSArchitecture` meldet dort `X64`.
+> - PIN-Dialog-Abbruch (`Cancelled=True` in der Result-Datei) und UAC-Abbruch
+>   (Fehler 1223) gelten als Benutzerabbruch → **kein** tpmvscmgr-Fallback mehr.
+> - Real getestet: Erstellung per `New-VirtualSmartCard` und per GUI (`dist\VscWizard.exe`),
+>   PIN-Dialog ohne Konsolenfenster, PIN-Policy via Manager2 (Mindestlänge 6).
+>
+> Die ursprüngliche Design-Skizze folgt unverändert.
 
 ## Problem (warum aktuell tpmvscmgr auf ARM64)
 

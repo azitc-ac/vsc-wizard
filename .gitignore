@@ -1,0 +1,4 @@
+# Build-Ausgaben (werden von build.ps1 erzeugt, nie committen)
+dist/
+helper/bin/
+helper/obj/
