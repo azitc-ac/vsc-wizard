@@ -490,6 +490,23 @@ function Update-PrimaryEnabledLook([System.Windows.Forms.Button]$Button) {
         $Button.BackColor = if ($Button.Enabled) { $script:UI.Accent } else { $script:UI.Disabled }
     }
 }
+function Set-DialogStyle {
+    # Dialoge an das Hauptfenster angleichen (vor ShowDialog aufrufen): Schrift, und alle
+    # Buttons im neuen Stil - die Standard-Schaltfläche (AcceptButton) als Primary.
+    param([Parameter(Mandatory)][System.Windows.Forms.Form]$Dialog)
+    $walk = {
+        param($root)
+        foreach ($c in $root.Controls) {
+            if ($c -is [System.Windows.Forms.Button] -and -not ($c.Tag -is [hashtable] -and $c.Tag['Kind'])) {
+                $kind = if ($Dialog.AcceptButton -and [object]::ReferenceEquals($Dialog.AcceptButton, $c)) { 'Primary' } else { 'Secondary' }
+                Set-ButtonStyle -Button $c -Kind $kind
+            }
+            if ($c.HasChildren) { & $walk $c }
+        }
+    }
+    & $walk $Dialog
+}
+
 function Add-BorderPaint {
     # 1-px-Rahmen in Palettenfarbe (BorderStyle kann keine Farbe) - für "Karten".
     param([Parameter(Mandatory)][System.Windows.Forms.Control]$Control, [System.Drawing.Color]$Color = $script:UI.Border, [switch]$TopOnly)
@@ -690,6 +707,7 @@ function Show-AboutDialog {
     $dlg.Controls.Add($ok)
     $dlg.AcceptButton = $ok
 
+    Set-DialogStyle -Dialog $dlg
     [void]$dlg.ShowDialog($form)
 }
 
@@ -1625,6 +1643,7 @@ function Show-AccountInputDialog {
 
     $dlg.Controls.AddRange(@($lbl, $txt, $ok, $cancel))
     $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+    Set-DialogStyle -Dialog $dlg
     $res = $dlg.ShowDialog($form)
     if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $txt.Text.Trim()) { return $txt.Text.Trim() }
     return $null
@@ -1670,6 +1689,7 @@ function Show-VscPickerDialog {
 
     $dlg.Controls.AddRange(@($lbl, $list, $ok, $cancel))
     $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+    Set-DialogStyle -Dialog $dlg
     $res = $dlg.ShowDialog($form)
     if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $list.SelectedIndex -ge 0) {
         return $Readers[$list.SelectedIndex]
@@ -1751,6 +1771,7 @@ function Show-VscChoiceDialog {
 
     $dlg.Controls.AddRange(@($btnNew, $btnExisting, $btnCancel))
     $dlg.CancelButton = $btnCancel
+    Set-DialogStyle -Dialog $dlg
     if ($dlg.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { return $script:VscChoice }
     return $null
 }
@@ -3349,6 +3370,7 @@ function Show-VscInventoryDialog {
     # Aktualisieren/Löschen schließen den Dialog und öffnen ihn NACH Rückkehr aus
     # ShowDialog neu - sonst stapelt sich ein zweites Fenster ueber dem alten.
     $script:InventoryReopen = $false
+    Set-DialogStyle -Dialog $dlg
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
     if ($script:InventoryReopen) {
         $script:InventoryReopen = $false
@@ -3768,6 +3790,8 @@ function Show-SettingsDialog {
         $lblCfgSaved.Text = (T 'Gespeichert.')
     })
 
+    Set-ButtonStyle -Button $btnSaveConfig -Kind Primary   # Hauptaktion des Dialogs
+    Set-DialogStyle -Dialog $dlg
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
 }
 
