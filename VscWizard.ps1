@@ -656,7 +656,7 @@ $scnTagDanger = [System.Drawing.Color]::FromArgb(181, 52, 42)
 # Szenario-Definitionen (Reihenfolge wie im Runbook). Steps: T = Tag, X = Text.
 $script:Scenarios = @(
     [pscustomobject]@{
-        Id = 1; Title = 'Neues SC-only-Admin-Konto einrichten'; Sub = 'GEFÜHRT - BOOTSTRAP   Erste VSC für ein Konto ohne Karte (löst das Henne-Ei-Problem).'; Stripe = 'blue'
+        Id = 1; Title = 'VSC für onprem-Adminkonto'; Sub = 'GEFÜHRT   Separates On-Prem-Admin-Konto (nicht dein angemeldetes): EOBO (mit EA-Zertifikat) oder Bootstrap/RDP.'; Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Du';       X = 'Zielkonto temporär auf Passwort-Anmeldung zulassen (SC-only kurz aus).' }
             [pscustomobject]@{ T = 'Tool';     X = 'VSC auf dieser Maschine erstellen, PIN vergeben.' }
@@ -678,7 +678,7 @@ $script:Scenarios = @(
         Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Kein echtes Renewal (neuer Schlüssel/Cert). Funktioniert AUCH bei bereits abgelaufenem Zertifikat - die VSC selbst läuft nie ab, nur das Zertifikat darauf.' }
     }
     [pscustomobject]@{
-        Id = 3; Title = 'VSC für dieses Konto direkt ausstellen'; Sub = 'AUTOMATISIERT   Geradliniger Weg, wenn die CA von hier erreichbar ist.'; Stripe = 'green'
+        Id = 3; Title = 'VSC für onprem- oder hybrid-Konto'; Sub = 'AUTOMATISIERT   Dein eigenes (on-prem oder hybrid synchronisiertes) Konto - Direkt-Ausstellung, wenn die CA erreichbar ist.'; Stripe = 'green'
         Steps = @(
             [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt-Einreichung prüfen (Kerberos, DNS, certutil -ping).' }
             [pscustomobject]@{ T = 'Tool';     X = 'VSC erstellen, PIN vergeben.' }
@@ -687,15 +687,15 @@ $script:Scenarios = @(
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 4; Title = 'Cloud-Konto (Entra CBA): Zertifikat auf VSC/YubiKey'; Sub = 'GEFÜHRT - NUR CLOUD   Entra CBA: als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'; Stripe = 'blue'
+        Id = 4; Title = 'VSC für Cloudonly-Adminkonto'; Sub = 'NUR CLOUD   Cloud-only-Konto (Entra CBA): als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'; Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Du';       X = 'Cloud-Zielkonto/UPN angeben (Entra, z.B. gadmin@contoso.onmicrosoft.com).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'VSC (oder YubiKey/PIV) als Schlüsselträger, PIN vergeben.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'VSC als Schlüsselträger erstellen, PIN vergeben.' }
             [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-UPN im SAN erzeugen (Supply-in-request/Offline-Template).' }
             [pscustomobject]@{ T = 'Prüfung'; X = 'Als DU direkt bei der CA einreichen (Enroll-Recht auf dem Offline-Template).' }
             [pscustomobject]@{ T = 'Tool';     X = 'Ausgestelltes Zertifikat auf die VSC übernehmen.' }
             [pscustomobject]@{ T = 'Du';       X = 'In Entra: ausstellende CA importieren + CBA-Binding auf UPN, CRL öffentlich erreichbar (RUNBOOK).' }
-            [pscustomobject]@{ T = 'Du';       X = 'Alternative ganz ohne PKI: FIDO2/Passkey auf demselben YubiKey.' }
+            [pscustomobject]@{ T = 'Du';       X = 'Alternative ganz ohne PKI: FIDO2/Passkey (Sicherheitsschlüssel oder Passkey).' }
         )
         Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: EOBO (Szenario 06) oder Bootstrap/RDP (Szenario 01). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).' }
     }
