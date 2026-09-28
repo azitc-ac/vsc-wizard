@@ -65,11 +65,13 @@ function Save-VscWizardConfig {
     $lines = @('@{')
     foreach ($key in $Config.Keys) {
         $value = $Config[$key]
+        # Apostrophe verdoppeln (PSD1-Stringliteral) - sonst wäre die Datei danach unlesbar
+        # und der Wizard startete mit leerer Konfiguration.
         if ($value -is [array]) {
-            $items = ($value | ForEach-Object { "'$_'" }) -join ', '
+            $items = ($value | ForEach-Object { "'$("$_".Replace("'", "''"))'" }) -join ', '
             $lines += "    $key = @($items)"
         } else {
-            $lines += "    $key = '$value'"
+            $lines += "    $key = '$("$value".Replace("'", "''"))'"
         }
     }
     $lines += '}'

@@ -184,14 +184,18 @@ function Resolve-PendingRequestId {
     # "Zertifikat abrufen" ohne bekannte Request-ID (z.B. Antrag von einer älteren
     # Wizard-Version, deren ID nicht erkannt wurde, oder außerhalb eingereicht): statt
     # stumm nichts zu tun, die ID abfragen. Liefert die ID oder $null (abgebrochen).
-    param([string]$RequestId)
+    param(
+        [string]$RequestId,
+        # Für Anträge, die NICHT zum Plan-A/B-Fortsetzungsstand gehören (EA-Zertifikat).
+        [switch]$NoResumeState
+    )
     if ($RequestId) { return $RequestId }
     Add-Type -AssemblyName Microsoft.VisualBasic
     $entered = [Microsoft.VisualBasic.Interaction]::InputBox('Die Request-ID des wartenden Antrags ist nicht bekannt. Bitte die ID eingeben (steht im Log bzw. in der CA-Konsole unter "Ausstehende Anforderungen"):', 'Request-ID eingeben', '')
     if ("$entered".Trim() -match '^\d+$') {
         $id = "$entered".Trim()
         # Im gespeicherten Fortsetzungs-Stand nachtragen - sonst fragt der nächste Start erneut.
-        $state = Get-WizardResumeState
+        $state = if ($NoResumeState) { $null } else { Get-WizardResumeState }
         if ($state -and $state['Stage'] -eq 'Pending' -and -not $state['RequestId']) {
             $state['RequestId'] = $id
             Save-WizardResumeState -State $state
@@ -380,13 +384,13 @@ function Update-OfflineTemplateChoices {
 
     $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DimGray
     if ($supply.Count -ge 1) {
-        $lblTemplateHintA.Text = "$($supply.Count) Supply-in-request-Template(s) auf der CA gefunden - bitte auswählen (dauerhaft: OfflineTemplate in config.psd1)."
+        $lblTemplateHintA.Text = "$($supply.Count) Supply-in-request-Template(s) auf der CA gefunden - bitte auswählen (dauerhaft: Einstellungen > Offline-Template)."
     } elseif (@($c.Templates).Count -gt 0) {
         $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblTemplateHintA.Text = 'Auf der CA ist kein Anmelde-Template mit "Informationen im Antrag angeben" veröffentlicht - Namen bitte eintippen (dauerhaft: OfflineTemplate in config.psd1).'
+        $lblTemplateHintA.Text = 'Auf der CA ist kein Anmelde-Template mit "Informationen im Antrag angeben" veröffentlicht - Namen bitte eintippen (dauerhaft: Einstellungen > Offline-Template).'
     } else {
         $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblTemplateHintA.Text = "Templates nicht ermittelbar$(if ($c.Error) { " ($($c.Error))" }) - Namen bitte eintippen (dauerhaft: OfflineTemplate in config.psd1)."
+        $lblTemplateHintA.Text = "Templates nicht ermittelbar$(if ($c.Error) { " ($($c.Error))" }) - Namen bitte eintippen (dauerhaft: Einstellungen > Offline-Template)."
     }
     $lblTemplateHintA.Visible = $true
 }
@@ -1761,7 +1765,7 @@ Set-TemplateComboItem -ComboBox $cboTemplateA -Template $config.Template
 # Nur im Offline-Direkt-Modus (Szenario 03) ohne konfiguriertes OfflineTemplate sichtbar:
 # die Combo ist dann ein leeres, editierbares Feld - ohne Erklärung wirkt das wie
 # "kein Template wählbar".
-$lblTemplateHintA = New-WizardLabel -Text 'Kein Offline-Template konfiguriert: bitte den Namen des Supply-in-request-Templates eintippen (dauerhaft: OfflineTemplate in config.psd1).' -X 332 -Y 90 -Width 468 -Height 36
+$lblTemplateHintA = New-WizardLabel -Text 'Kein Offline-Template konfiguriert: bitte den Namen des Supply-in-request-Templates eintippen (dauerhaft: Einstellungen > Offline-Template).' -X 332 -Y 90 -Width 468 -Height 36
 $lblTemplateHintA.ForeColor = [System.Drawing.Color]::DarkOrange
 $lblTemplateHintA.Visible = $false
 
@@ -3136,6 +3140,13 @@ function Show-SettingsDialog {
     Set-TextBoxPlaceholder -TextBox $cboCfgTemplate -Placeholder 'z.B. SmartcardLogon' -Value $config.Template
     Add-SettingsRow -LabelText 'Zertifikatstemplate (für VSC-Anmeldung):' -InputControl $cboCfgTemplate
 
+    # Szenario 03 (Cloud/Entra CBA): Supply-in-request-Template. Leer = der Wizard liest
+    # die passenden Templates der CA im Ablauf selbst aus AD und bietet sie zur Wahl an.
+    $cboCfgOfflineTemplate = New-Object System.Windows.Forms.ComboBox
+    $cboCfgOfflineTemplate.DropDownStyle = 'DropDown'
+    Set-TextBoxPlaceholder -TextBox $cboCfgOfflineTemplate -Placeholder 'leer = im Ablauf aus der CA wählen' -Value $config.OfflineTemplate
+    Add-SettingsRow -LabelText 'Offline-Template (Szenario 03, Supply-in-request):' -InputControl $cboCfgOfflineTemplate
+
     $txtCfgPrefix = New-Object System.Windows.Forms.TextBox
     $txtCfgPrefix.Text = $config.VscNamePrefix
     Add-SettingsRow -LabelText 'Namenspräfix für virtuelle Smartcards:' -InputControl $txtCfgPrefix
@@ -3255,6 +3266,13 @@ function Show-SettingsDialog {
     $btnRequestEa.Text = 'EA-Zertifikat beantragen'
     $btnRequestEa.Size = New-Object System.Drawing.Size(220, 30)
     $eaPanel.Controls.Add($btnRequestEa)
+    # Wartende EA-Anträge (Manager-Genehmigung) abrufen - geht auch nach einem Neustart
+    # des Wizards (der offene Antrag liegt im Windows-Antragsspeicher; die ID wird dann
+    # abgefragt). Vorher gab es hier nur "erneut beantragen" (= neuer Antrag).
+    $btnRetrieveEa = New-Object System.Windows.Forms.Button
+    $btnRetrieveEa.Text = 'Wartenden EA-Antrag abrufen...'
+    $btnRetrieveEa.Size = New-Object System.Drawing.Size(240, 30)
+    $eaPanel.Controls.Add($btnRetrieveEa)
     Add-SettingsFullRow -Control $eaPanel
 
     $lblEaResult = New-Object System.Windows.Forms.Label
@@ -3288,12 +3306,48 @@ function Show-SettingsDialog {
             }
         } elseif ($result.Pending) {
             $lblEaResult.ForeColor = [System.Drawing.Color]::DarkOrange
-            $lblEaResult.Text = "EA-Antrag eingereicht, wartet auf Genehmigung (RequestId $($result.RequestId)). $(Get-PendingApprovalHint -RequestId $result.RequestId -NextStep 'Danach das EA-Zertifikat hier erneut beantragen.')"
+            $script:EaPendingRequestId = $result.RequestId
+            $lblEaResult.Text = "EA-Antrag eingereicht, wartet auf Genehmigung (RequestId $($result.RequestId)). $(Get-PendingApprovalHint -RequestId $result.RequestId -NextStep "Danach hier 'Wartenden EA-Antrag abrufen...'.")"
         } else {
             $lblEaResult.ForeColor = [System.Drawing.Color]::Firebrick
             $lblEaResult.Text = "EA-Beantragung fehlgeschlagen: $($result.Message) Details siehe Log."
         }
         $btnRequestEa.Enabled = $true
+    })
+
+    $btnRetrieveEa.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($config.CAConfig)) {
+            [System.Windows.Forms.MessageBox]::Show('Bitte zuerst CA-Konfigurationsstring eintragen und speichern.', 'Hinweis', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $script:EaPendingRequestId = Resolve-PendingRequestId -RequestId $script:EaPendingRequestId -NoResumeState
+        if (-not $script:EaPendingRequestId) { return }
+        $btnRetrieveEa.Enabled = $false
+        try {
+            $recv = Receive-PendingCertificate -RequestId $script:EaPendingRequestId -CAConfig $config.CAConfig -OutputDirectory (Join-Path (Get-WizardWorkingDir) 'EA-Abruf')
+            if (-not $recv.Success) {
+                $lblEaResult.ForeColor = if ($recv.Status -eq 'Pending') { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick }
+                $lblEaResult.Text = $recv.Message
+                return
+            }
+            $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
+            if (-not $complete.Success) {
+                $lblEaResult.ForeColor = [System.Drawing.Color]::Firebrick
+                $lblEaResult.Text = "EA-Zertifikat abgerufen ($($recv.CerPath)), aber nicht installiert (z.B. PIN-Abfrage abgebrochen) - erneut abrufen. Details siehe Log."
+                return
+            }
+            $script:EaPendingRequestId = $null
+            $lblEaResult.ForeColor = [System.Drawing.Color]::ForestGreen
+            $lblEaResult.Text = 'EA-Zertifikat wurde abgerufen und installiert. Es steht ab sofort für die Ausstellung an separate Konten (Plan A) zur Verfügung.'
+            $eaNow = @(Get-EnrollmentAgentCertificates)
+            if ($eaNow.Count -gt 0) {
+                $lblEaStatus.ForeColor = [System.Drawing.Color]::ForestGreen
+                $lblEaStatus.Text = "EA-Zertifikat vorhanden: $($eaNow[0].Subject) (gültig bis $($eaNow[0].NotAfter.ToString('yyyy-MM-dd')))."
+            }
+        } finally {
+            [System.Windows.Forms.Application]::DoEvents()   # gepufferte Klicks am gesperrten Button verwerfen
+            $btnRetrieveEa.Enabled = $true
+        }
     })
 
     $footerPanel = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -3359,6 +3413,10 @@ function Show-SettingsDialog {
                 $cboCfgTemplate.Items.Clear()
                 [void]$cboCfgTemplate.Items.AddRange($allTemplates)
                 Set-TextBoxRealValue -TextBox $cboCfgTemplate -Value $allTemplates[0]
+                # Offline-Template: nur Auswahlliste füllen, Wert NICHT überschreiben
+                # (leer ist ein gültiger, bewusster Zustand).
+                $cboCfgOfflineTemplate.Items.Clear()
+                [void]$cboCfgOfflineTemplate.Items.AddRange($allTemplates)
             }
 
             $txtDiscoverResultCfg.Text = "$($reachData.ReachableCas.Count) erreichbare CA(s) gefunden und übernommen - bitte Template prüfen (Dropdown-Pfeil zeigt alle $($allTemplates.Count) auf der CA verfügbaren Templates) und Speichern:`r`n" + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
@@ -3377,17 +3435,20 @@ function Show-SettingsDialog {
     })
 
     $btnSaveConfig.Add_Click({
-        $newConfig = @{
-            CAConfig      = Get-TextBoxRealValue -TextBox $txtCfgCA
-            Template      = Get-TextBoxRealValue -TextBox $cboCfgTemplate
-            VscNamePrefix = $txtCfgPrefix.Text
-            RdpJumpServer = Get-TextBoxRealValue -TextBox $txtCfgJump
-            CspName       = $txtCfgCsp.Text
-            DiscoveryDomain = Get-TextBoxRealValue -TextBox $txtCfgDomain
-            EATemplate    = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
-            PinMinLength  = [int]$numCfgPinMin.Value
-            WorkingDir    = $config.WorkingDir
-        }
+        # Vom bestehenden Stand ausgehen: Schlüssel, die dieser Dialog nicht kennt, bleiben
+        # erhalten (früher ging dabei z.B. OfflineTemplate verloren).
+        $newConfig = @{}
+        if ($config) { foreach ($k in @($config.Keys)) { $newConfig[$k] = $config[$k] } }
+        $newConfig['CAConfig']        = Get-TextBoxRealValue -TextBox $txtCfgCA
+        $newConfig['Template']        = Get-TextBoxRealValue -TextBox $cboCfgTemplate
+        $newConfig['OfflineTemplate'] = Get-TextBoxRealValue -TextBox $cboCfgOfflineTemplate
+        $newConfig['VscNamePrefix']   = $txtCfgPrefix.Text
+        $newConfig['RdpJumpServer']   = Get-TextBoxRealValue -TextBox $txtCfgJump
+        $newConfig['CspName']         = $txtCfgCsp.Text
+        $newConfig['DiscoveryDomain'] = Get-TextBoxRealValue -TextBox $txtCfgDomain
+        $newConfig['EATemplate']      = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
+        $newConfig['PinMinLength']    = [int]$numCfgPinMin.Value
+        $newConfig['WorkingDir']      = $config.WorkingDir
         Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
         $script:config = $newConfig
 

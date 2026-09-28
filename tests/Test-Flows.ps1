@@ -11,8 +11,23 @@ $global:Log = New-Object System.Collections.Generic.List[string]
 $global:Errors = New-Object System.Collections.Generic.List[string]
 $global:Msgs = New-Object System.Collections.Generic.List[string]
 
+$global:ClickInDialog = $null   # Button-Text, der im nächsten Dialog geklickt werden soll
 function global:Invoke-HarnessDialog($d) {
-    if ($d -is [System.Windows.Forms.Form]) { $global:Log.Add("    (Dialog '$($d.Text)' -> Abbrechen)"); $d.Dispose() }
+    if ($d -is [System.Windows.Forms.Form]) {
+        if ($global:ClickInDialog) {
+            $onClick = [System.Windows.Forms.Control].GetMethod('OnClick', [Reflection.BindingFlags]'NonPublic,Instance')
+            $stack = New-Object System.Collections.Stack; $stack.Push($d)
+            while ($stack.Count) {
+                $c = $stack.Pop(); foreach ($k in $c.Controls) { $stack.Push($k) }
+                if ($c -is [System.Windows.Forms.Button] -and $c.Text -eq $global:ClickInDialog) {
+                    $global:Log.Add("    (Dialog '$($d.Text)': Klick '$($c.Text)')")
+                    $onClick.Invoke($c, @([EventArgs]::Empty))
+                }
+            }
+            $global:ClickInDialog = $null
+        }
+        $global:Log.Add("    (Dialog '$($d.Text)' -> Abbrechen)"); $d.Dispose()
+    }
     return [System.Windows.Forms.DialogResult]::Cancel
 }
 function global:Invoke-HarnessMsgBox {
@@ -130,6 +145,11 @@ $global:Log.Add('=== Zusammenfassungen (echte Daten) ===')
 foreach ($r in @(Get-VirtualSmartCardReaders | Where-Object PcscName)) {
     Step "Zusammenfassung $($r.FriendlyName)" { $null = Get-CardValiditySummaryText -CardName $r.FriendlyName -PcscName $r.PcscName -MatchTerm 'x' }
 }
+
+# Einstellungen: wartenden EA-Antrag abrufen ohne bekannte ID (InputBox leer -> Abbruch)
+$global:Log.Add('=== Einstellungen ===')
+$global:ClickInDialog = 'Wartenden EA-Antrag abrufen...'
+Step 'EA-Abruf ohne ID' { Show-SettingsDialog -Owner $form }
 
 # Fortsetzen-Dialog (Resume) mit simuliertem wartendem Antrag ohne ID (wie Antrag 932)
 $global:Log.Add('=== Resume ===')

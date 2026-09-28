@@ -102,10 +102,11 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
    teils große Freiflächen, anderswo gequetscht; zweigeteilte Startseite schöner lösen.
    Absolute Pixel-Positionen → Layout-Container (TableLayout/Flow) wären der Hebel.
    `tests\Test-Layout.ps1` sichert dabei gegen abgeschnittene/überlappende Texte ab.
-8. **`OfflineTemplate` in den Einstellungen** (bisher nur `config.psd1`; Szenario 03
-   liest die Kandidaten inzwischen selbst aus AD).
-9. **EA-Dialog: „Zertifikat abrufen"** für wartende EA-Anträge fehlt (dort gibt es nur
-   „erneut beantragen").
+8. **[ERLEDIGT] `OfflineTemplate` in den Einstellungen.** Dabei behoben: „Speichern"
+   baute die Konfiguration neu auf und **löschte** Schlüssel, die der Dialog nicht kennt
+   (u.a. `OfflineTemplate`); Werte mit Apostroph machten die `config.psd1` unlesbar.
+9. **[ERLEDIGT] EA-Dialog: „Wartenden EA-Antrag abrufen..."** (auch nach Neustart,
+   ID wird dann abgefragt); vorher nur „erneut beantragen" (= neuer Antrag).
 4. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
    (aktuell reicht `-WindowStyle Hidden`).
 4. *(Optional)* **Echtes Renew** (RenewalCert, gleicher Schlüssel) als Experiment.
