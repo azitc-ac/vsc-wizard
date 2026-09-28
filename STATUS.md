@@ -93,7 +93,13 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
    *Offener Follow-up:* On-Prem-Offline via **altSecurityIdentities** (starke Bindung
    am Zielkonto schreiben) als optionaler, expliziter Zweig. Siehe #1 (cloud-only-Auto-Erkennung) und
    Follow-ups unten.
-3. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
+3. **Nativer ARM64-VSC-Weg** (eigener PIN-Dialog statt tpmvscmgr-Konsole). Design-Skizze
+   liegt in `docs/ARM64-native-vsc.md`: der COM-Client-Prozess muss NATIV ARM64 sein
+   (Proxy/Stub lädt nicht in einen emulierten .NET-FW-Prozess → 0x800700C1). Empfohlen:
+   den vorhandenen Helfer als self-contained **.NET-win-arm64**-App im Build erzeugen
+   (Option A); tpmvscmgr bleibt Fallback. Erst der Validierungsschritt (COM aus
+   elevierter ARM64-`pwsh` testen), dann bauen.
+4. *(Optional)* Eigener kleiner **C#-Elevations-Shim** für literal null Flackern
    (aktuell reicht `-WindowStyle Hidden`).
 4. *(Optional)* **Echtes Renew** (RenewalCert, gleicher Schlüssel) als Experiment.
 5. *(Optional/zurückgestellt)* **Accordion-/aufklappbare Schritte** in der UI.
