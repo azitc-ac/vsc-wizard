@@ -336,6 +336,52 @@ $mainLayout.ColumnCount = 1
 [void]$mainLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 24)))
 $form.Controls.Add($mainLayout)
 
+# --- Busy-/Warte-Anzeige -----------------------------------------------------------
+# Viele Aktionen (VSCs auslesen, Umgebung erkennen, certreq/certutil) laufen SYNCHRON
+# im UI-Thread und blockieren die Oberflaeche. Ohne Rueckmeldung wirkt das eingefroren.
+# Zwei Signale: (1) der OS-Wartecursor via Application.UseWaitCursor - die drehende
+# Scheibe wird vom BETRIEBSSYSTEM animiert, auch wenn unser Thread blockiert; (2) ein
+# sichtbares gelbes Banner mit Klartext, was gerade laeuft.
+$script:BusyLabel = New-Object System.Windows.Forms.Label
+$script:BusyLabel.AutoSize = $false
+$script:BusyLabel.TextAlign = 'MiddleCenter'
+$script:BusyLabel.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+$script:BusyLabel.BackColor = [System.Drawing.Color]::FromArgb(255, 248, 196)
+$script:BusyLabel.ForeColor = [System.Drawing.Color]::FromArgb(90, 70, 0)
+$script:BusyLabel.BorderStyle = 'FixedSingle'
+$script:BusyLabel.Size = New-Object System.Drawing.Size(560, 40)
+$script:BusyLabel.Visible = $false
+$form.Controls.Add($script:BusyLabel)
+
+function Set-Busy {
+    param([string]$Text)
+    [System.Windows.Forms.Application]::UseWaitCursor = $true
+    if ($script:BusyLabel -and $form) {
+        $script:BusyLabel.Text = "$([char]0x231B)  $Text"   # Sanduhr-Symbol + Text
+        $x = [int](($form.ClientSize.Width - $script:BusyLabel.Width) / 2)
+        if ($x -lt 0) { $x = 0 }
+        $script:BusyLabel.Location = New-Object System.Drawing.Point($x, 52)
+        $script:BusyLabel.Visible = $true
+        $script:BusyLabel.BringToFront()
+    }
+    try { $form.Refresh() } catch { }
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Clear-Busy {
+    [System.Windows.Forms.Application]::UseWaitCursor = $false
+    if ($script:BusyLabel) { $script:BusyLabel.Visible = $false }
+    try { $form.Refresh() } catch { }
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Invoke-Busy {
+    # Fuehrt $Action aus, waehrend Wartecursor + Banner sichtbar sind; raeumt IMMER auf.
+    param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][scriptblock]$Action)
+    Set-Busy -Text $Text
+    try { & $Action } finally { Clear-Busy }
+}
+
 #endregion
 
 #region TOP BAR (schrittunabhängig - auf jedem Schritt sichtbar, u.a. für Einstellungen)
@@ -906,7 +952,9 @@ function Update-ScenarioAvailability {
     # Frische Umgebungs-Momentaufnahme holen, Banner setzen und die Kacheln entsprechend
     # aktivieren/ausgrauen. Wird bei jedem Anzeigen der Startseite aufgerufen, damit z.B.
     # eine neu erstellte VSC oder ein frisch geholtes TGT sofort beruecksichtigt wird.
-    $caps = Get-EnvironmentCapabilities
+    # Die Erkennung (dsregcmd/klist/PnP/Zertifikatsspeicher) dauert - Busy-Anzeige.
+    Set-Busy -Text 'Umgebung erkennen (TPM, Kerberos, Karten)...'
+    try { $caps = Get-EnvironmentCapabilities } finally { Clear-Busy }
     $script:EnvCaps = $caps
 
     foreach ($scn in $script:Scenarios) {
@@ -1404,14 +1452,13 @@ $btnCreateVscA.Add_Click({
     $btnCreateVscA.Enabled = $false
     $lblVscResultA.ForeColor = [System.Drawing.Color]::Black
     $lblVscResultA.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestätigen, dann im Dialog die PIN festlegen...'
-    $form.Refresh()
-
+    Set-Busy -Text 'Erstelle virtuelle Smartcard...'
     try {
         $result = New-VirtualSmartCard -CardName $txtCardNameA.Text -PinPolicyMinLength (Get-ConfiguredPinMinLength)
     } catch {
         $result = [pscustomobject]@{ Success = $false; ExitCode = $null; Message = $_.Exception.Message }
         Write-WizardLog -Message "Unerwarteter Fehler bei der VSC-Erstellung: $($_.Exception.Message)" -Level Error
-    }
+    } finally { Clear-Busy }
     if ($result.Success) {
         $script:PlanA_VscCreated = $true
         $script:PlanA_CardName = $txtCardNameA.Text
@@ -1810,14 +1857,13 @@ $btnCreateVscB.Add_Click({
     $btnCreateVscB.Enabled = $false
     $lblVscResultB.ForeColor = [System.Drawing.Color]::Black
     $lblVscResultB.Text = 'Erstelle virtuelle Smartcard - bitte UAC bestätigen, dann im Dialog die PIN festlegen...'
-    $form.Refresh()
-
+    Set-Busy -Text 'Erstelle virtuelle Smartcard...'
     try {
         $result = New-VirtualSmartCard -CardName $txtCardNameB.Text -PinPolicyMinLength (Get-ConfiguredPinMinLength)
     } catch {
         $result = [pscustomobject]@{ Success = $false; ExitCode = $null; Message = $_.Exception.Message }
         Write-WizardLog -Message "Unerwarteter Fehler bei der VSC-Erstellung: $($_.Exception.Message)" -Level Error
-    }
+    } finally { Clear-Busy }
     if ($result.Success) {
         $script:PlanB_VscCreated = $true
         $script:PlanB_CardName = $txtCardNameB.Text
@@ -2434,12 +2480,11 @@ function Show-VscInventoryDialog {
     # Anzahl der Zertifikate und ggf. verwaisten VSC-Verweisen mehrere Sekunden bis
     # niedrige zweistellige Sekunden dauern - Wartecursor als sichtbares Feedback,
     # sonst wirkt die App in dieser Zeit eingefroren.
-    if ($Owner) { $Owner.Cursor = 'WaitCursor'; $Owner.Refresh() }
-    [System.Windows.Forms.Cursor]::Current = 'WaitCursor'
-    $readers = Get-VirtualSmartCardReaders
-    $certs = Get-SmartCardCertificates
-    [System.Windows.Forms.Cursor]::Current = 'Default'
-    if ($Owner) { $Owner.Cursor = 'Default' }
+    Set-Busy -Text 'Lese virtuelle Smartcards und Zertifikate...'
+    try {
+        $readers = Get-VirtualSmartCardReaders
+        $certs = Get-SmartCardCertificates
+    } finally { Clear-Busy }
     Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegerät(e), $($certs.Count) Zertifikat(e) mit privatem Schlüssel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
     foreach ($rd in $readers) { Write-WizardLog -Message "  Leser '$($rd.FriendlyName)' PcscName='$($rd.PcscName)'" -Level Info }
     foreach ($ct in @($certs | Where-Object IsSmartCard)) { Write-WizardLog -Message "  SC-Cert Reader='$($ct.Reader)' Subject='$($ct.Subject.Substring(0,[Math]::Min(40,$ct.Subject.Length)))'" -Level Info }

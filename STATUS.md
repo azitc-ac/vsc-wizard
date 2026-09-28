@@ -100,6 +100,14 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Zuletzt erledigt (Ergänzung)
 
+- **Busy-/Warte-Anzeige** bei blockierenden Aktionen: App-weiter OS-Wartecursor
+  (`Application.UseWaitCursor` — vom Betriebssystem animiert, auch wenn der UI-Thread
+  synchron blockiert) + gelbes „⏳ läuft…"-Banner. Helfer `Set-Busy`/`Clear-Busy`/
+  `Invoke-Busy` (immer try/finally → nie hängender Cursor). Angewandt auf: VSCs
+  auslesen (Inventar — der gemeldete Fall), Umgebungserkennung (Rückkehr zum Start),
+  VSC-Erstellung (Plan A/B). certreq-Buttons haben bereits Klartext-Status; dort ließe
+  sich das Banner bei Bedarf ebenso ergänzen.
+
 - **Szenarien nach Kontotyp umgebaut, 02 (Erneuern) aufgelöst → jetzt fünf:**
   01 „VSC für onprem-Adminkonto" (separat; EOBO/Bootstrap), 02 „VSC für onprem- oder
   hybrid-Konto" (du selbst, direkt), 03 „VSC für Cloudonly-Adminkonto" (Entra CBA,
