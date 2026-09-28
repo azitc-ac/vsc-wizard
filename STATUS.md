@@ -96,12 +96,18 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 3. **[ERLEDIGT 2026-09-28] Nativer ARM64-VSC-Weg** (eigener PIN-Dialog statt
    tpmvscmgr-Konsole) - Option A umgesetzt und auf echter ARM64-Hardware getestet,
    Details in `docs/ARM64-native-vsc.md`.
-6. **Zweisprachigkeit (DE/EN)** der Oberfläche (Wunsch 2026-09-28; nach der
-   Funktionsabsicherung).
-7. **Layout-/Design-Überarbeitung** (Wunsch 2026-09-28, nachrangig): wirkt altbacken,
-   teils große Freiflächen, anderswo gequetscht; zweigeteilte Startseite schöner lösen.
-   Absolute Pixel-Positionen → Layout-Container (TableLayout/Flow) wären der Hebel.
-   `tests\Test-Layout.ps1` sichert dabei gegen abgeschnittene/überlappende Texte ab.
+6. **[ERLEDIGT] Zweisprachigkeit (DE/EN).** Deutscher Text = Schlüssel: `(T 'Text')`,
+   Übersetzungen in `modules\VscWizard.Strings.en.psd1` (356 Einträge), Werte über
+   Platzhalter `(T '... {0} ...') -f $wert`. Umschalter Deutsch|English in der
+   Seitenleiste (speichert `Language` in config.psd1 und startet neu; Hintergrund-Jobs
+   übernehmen die Sprache über `VSCWIZARD_UILANG`). Das **Protokoll bleibt deutsch**
+   (Diagnose). Neue Texte IMMER mit `T` schreiben und die Übersetzung ergänzen -
+   `tests\Test-Strings.ps1` meldet fehlende/verwaiste Einträge und Platzhalter-Fehler.
+7. **[ERLEDIGT] Layout-/Design-Überarbeitung** nach dem freigegebenen Entwurf
+   (claude.ai Design-Canvas): Seitenleiste mit Schrittanzeige/Gerät/Sprache,
+   Szenario-Karten statt Zweiteilung, Inhaltskarten mit Fließlayout, Hinweisboxen,
+   einklappbares Protokoll. *Offen:* die Dialoge (Einstellungen, Inventar, Über,
+   Konto/VSC-Wahl) haben noch den alten Stil.
 8. **[ERLEDIGT] `OfflineTemplate` in den Einstellungen.** Dabei behoben: „Speichern"
    baute die Konfiguration neu auf und **löschte** Schlüssel, die der Dialog nicht kennt
    (u.a. `OfflineTemplate`); Werte mit Apostroph machten die `config.psd1` unlesbar.
@@ -155,8 +161,10 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 - *Bekannte Einschränkung:* ohne Adminrechte ist „TPM bereit" nur „TPM-Gerät läuft"
   (PnP-Status OK) - ein nicht provisioniertes TPM fällt erst bei der Erstellung auf.
 - **Tests ohne Durchklicken:** `tests\Test-Layout.ps1` (28 Zustände + alle Dialoge,
-  mehrere Fenstergrößen) und `tests\Test-Flows.ps1` (alle Szenarien mit Weiter/Zurück,
-  Resume, Laufzeitfehler) - vor jeder Auslieferung laufen lassen.
+  mehrere Fenstergrößen; auf Englisch zusätzlich "deutscher Text übrig?"),
+  `tests\Test-Flows.ps1` (alle Szenarien mit Weiter/Zurück, Resume, Laufzeitfehler) und
+  `tests\Test-Strings.ps1` (Übersetzungen) - vor jeder Auslieferung laufen lassen, die
+  ersten beiden auch mit `$env:VSCWIZARD_LANG='en'`.
 
 ## Zuletzt erledigt (Ergänzung)
 

@@ -64,6 +64,11 @@ function Test-Layout($root, [string]$Context) {
                     }
                 }
             }
+            # 1a) Englische Oberfläche: kein deutscher Text übrig (Umlaute/typische Wörter).
+            if ($txt -and (Get-WizardLanguage) -eq 'en' -and $c -isnot [System.Windows.Forms.TextBoxBase] -and $c -isnot [System.Windows.Forms.ComboBox] -and
+                $txt -match '[äöüÄÖÜß]|\b(der|die|das|und|nicht|wird|bitte|Karte|Zertifikat|Antrag|keine?|Szenario|wählen|Schritt|Weiter|Zurück|Fehler)\b') {
+                $global:Findings.Add("[$Context] DEUTSCH IN EN: $name  Text: '$($txt.Substring(0,[Math]::Min(90,$txt.Length)))'")
+            }
             # 1b) AutoSize-Label mit MaximumSize: gewachsene Höhe muss in den Container passen
             #     (wird über "Ragt über Rand" unten erfasst).
             # 2) Ragt über den Rand des Eltern-Containers (ohne Scrollen)
@@ -137,21 +142,21 @@ foreach ($offline in $false, $true) {
     $txtCardNameA.Text = $long
     Show-PlanAStep -Index 0
     Test-Layout $form "Plan A Schritt 2 leer ($mode)"
-    $lblVscResultA.Text = "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der Zertifikatsanforderung) heißt sie: '$pcsc'."
+    $lblVscResultA.Text = (T "Virtuelle Smartcard wurde erfolgreich erstellt. In Windows-Kartendialogen (z.B. bei der Zertifikatsanforderung) heißt sie: '{0}'.") -f $pcsc
     Test-Layout $form "Plan A Schritt 2 Erfolg ($mode)"
-    $lblVscResultA.Text = "Fehler bei der Erstellung: Nach dem tpmvscmgr-Lauf wurde keine Karte '$long' gefunden (Abbruch, abweichende/zu kurze PIN oder Erstellung fehlgeschlagen). (Details siehe Log)."
+    $lblVscResultA.Text = (T 'Fehler bei der Erstellung: {0} (Details siehe Log).') -f ((T "Nach dem tpmvscmgr-Lauf wurde keine Karte '{0}' gefunden (Abbruch, abweichende/zu kurze PIN oder Erstellung fehlgeschlagen).") -f $long)
     Test-Layout $form "Plan A Schritt 2 Fehler ($mode)"
 
     $script:PlanA_CardName = $long; $script:PlanA_PcscName = $pcsc
     Show-PlanAStep -Index 1
     Test-Layout $form "Plan A Schritt 3 ($mode)"
-    $lblCertResultA.Text = "Antrag wurde eingereicht und wartet auf Genehmigung (RequestId 123456). $(Get-PendingApprovalHint -RequestId 123456) Auch nach einem Neustart des Wizards möglich."
+    $lblCertResultA.Text = (T 'Antrag wurde eingereicht und wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f 123456, (Get-PendingApprovalHint -RequestId 123456)
     $btnRetrieveA.Visible = $true
     Test-Layout $form "Plan A Schritt 3 Pending ($mode)"
     $btnRetrieveA.Visible = $false
 
     Show-PlanAStep -Index 2
-    $lblSummaryA.Text = (@("Kartenname: $long", 'Auf der Karte liegen 3 Zertifikate:') + (1..3 | ForEach-Object { "  $_) CN=administrator.langername@contoso.onmicrosoft.com"; "     gültig 2026-09-28 bis 2028-09-28  (Thumbprint 0123456789ABCDEF0123456789ABCDEF01234567)" }) + 'Hinweis: Beim Smartcard-Logon nutzt Windows i.d.R. das erste passende Zertifikat. Für "eine Karte = ein Zertifikat" die älteren entfernen (Aufräum-Abfrage nach dem Erneuern oder Szenario 04).') -join "`r`n"
+    $lblSummaryA.Text = (@(((T 'Kartenname: {0}') -f $long), ((T 'Auf der Karte liegen {0} Zertifikate:') -f 3)) + (1..3 | ForEach-Object { "  $_) CN=administrator.langername@contoso.onmicrosoft.com"; ((T '     gültig {0} bis {1}  (Thumbprint {2})') -f '2026-09-28', '2028-09-28', '0123456789ABCDEF0123456789ABCDEF01234567') }) + (T 'Hinweis: Beim Smartcard-Logon nutzt Windows i.d.R. das erste passende Zertifikat. Für "eine Karte = ein Zertifikat" die älteren entfernen (Aufräum-Abfrage nach dem Erneuern oder Szenario 04).')) -join "`r`n"
     Test-Layout $form "Plan A Schritt 4 Zusammenfassung 3 Zertifikate ($mode)"
 }
 $script:PlanA_OfflineDirect = $false; $script:TargetAccount = $null
@@ -165,14 +170,14 @@ for ($i = 0; $i -le 6; $i++) {
     Test-Layout $form "Plan B Schritt-Index $i"
 }
 Show-PlanBStep -Index 4
-$lblSubmitResultB.Text = "Antrag wartet auf Genehmigung (RequestId 123456). $(Get-PendingApprovalHint -RequestId 123456) Auch nach einem Neustart des Wizards möglich."
+$lblSubmitResultB.Text = (T 'Antrag wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f 123456, (Get-PendingApprovalHint -RequestId 123456)
 $btnRetrieveB.Visible = $true
 Test-Layout $form 'Plan B Einreichen Pending'
 $tabPlanB.Visible = $false
 
 # --- Dialoge ---
 try { Show-AboutDialog } catch { $global:Findings.Add("Show-AboutDialog Fehler: $($_.Exception.Message)") }
-try { $null = Show-AccountInputDialog -Prefill 'administrator.langername@contoso.onmicrosoft.com' -Prompt 'Für welches Konto soll die Smartcard beantragt werden?' } catch { $global:Findings.Add("Show-AccountInputDialog Fehler: $($_.Exception.Message)") }
+try { $null = Show-AccountInputDialog -Prefill 'administrator.langername@contoso.onmicrosoft.com' -Prompt (T 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):') } catch { $global:Findings.Add("Show-AccountInputDialog Fehler: $($_.Exception.Message)") }
 $fakeReaders = @(1..3 | ForEach-Object { [pscustomobject]@{ FriendlyName = "$long$_"; InstanceId = "ROOT\SMARTCARDREADER\000$_"; Status = 'OK'; PcscName = "Microsoft Virtual Smart Card $_" } })
 $fakeCerts = @(1..3 | ForEach-Object { [pscustomobject]@{ Subject = 'CN=administrator.langername@contoso.onmicrosoft.com'; Upn = 'administrator.langername@contoso.onmicrosoft.com'; Thumbprint = '0123456789ABCDEF0123456789ABCDEF0123456' + $_; NotBefore = (Get-Date); NotAfter = (Get-Date).AddYears(2); Provider = 'Microsoft Smart Card Key Storage Provider'; Reader = "Microsoft Virtual Smart Card $_"; KeyContainerName = 'x'; IsSmartCard = $true; DetectionError = $null } })
 try { $null = Show-VscPickerDialog -Readers $fakeReaders -Certs $fakeCerts } catch { $global:Findings.Add("Show-VscPickerDialog Fehler: $($_.Exception.Message)") }

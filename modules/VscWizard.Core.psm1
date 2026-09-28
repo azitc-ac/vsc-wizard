@@ -168,6 +168,45 @@ function Write-WizardLog {
 
 #endregion
 
+#region Sprache (DE/EN)
+
+# Der DEUTSCHE Text ist zugleich der Schlüssel: (T 'Zertifikat anfordern') liefert auf
+# Deutsch den Text unverändert, auf Englisch die Übersetzung aus
+# VscWizard.Strings.en.psd1 (Deutsch -> Englisch). Fehlt eine Übersetzung, erscheint
+# der deutsche Text (nie eine Lücke); tests\Test-Strings.ps1 findet fehlende Einträge.
+# Texte mit Werten: Platzhalter {0}, {1} ... -> (T 'Antrag {0} ...') -f $id.
+# Das Protokoll (Write-WizardLog) bleibt bewusst deutsch (Diagnose).
+$script:Lang = 'de'
+$script:EnStrings = @{}
+
+function Set-WizardLanguage {
+    param([string]$Language)
+    $script:Lang = if ("$Language" -match '^en') { 'en' } else { 'de' }
+    # Für Hintergrund-Jobs (Start-Job = eigener Prozess, erbt die Umgebung): das Modul
+    # übernimmt diese Sprache beim Laden automatisch (siehe Ende dieses Abschnitts).
+    $env:VSCWIZARD_UILANG = $script:Lang
+    $script:EnStrings = @{}
+    if ($script:Lang -eq 'en') {
+        $path = Join-Path $PSScriptRoot 'VscWizard.Strings.en.psd1'
+        if (Test-Path $path) {
+            try { $script:EnStrings = Import-PowerShellDataFile -Path $path -ErrorAction Stop } catch { $script:EnStrings = @{} }
+        }
+    }
+}
+
+function Get-WizardLanguage { return $script:Lang }
+
+function T {
+    param([Parameter(Mandatory, Position = 0)][AllowEmptyString()][string]$Text)
+    if ($script:Lang -eq 'en' -and $script:EnStrings.ContainsKey($Text)) { return $script:EnStrings[$Text] }
+    return $Text
+}
+
+# In einem Hintergrund-Job: Sprache des GUI-Prozesses übernehmen.
+if ($env:VSCWIZARD_UILANG) { Set-WizardLanguage -Language $env:VSCWIZARD_UILANG }
+
+#endregion
+
 #region Busy-Anzeige (GUI-Hook)
 
 # Alle potenziell langsamen Kernfunktionen (PnP/WMI, Zertifikate, LDAP, externe
@@ -184,7 +223,8 @@ function Register-WizardBusyHook {
 
 function Enter-WizardBusy {
     param([Parameter(Mandatory)][string]$Text)
-    if ($script:BusyEnterHook) { try { & $script:BusyEnterHook $Text } catch { } }
+    # Übersetzung hier zentral - Aufrufer übergeben den deutschen Text.
+    if ($script:BusyEnterHook) { try { & $script:BusyEnterHook (T $Text) } catch { } }
 }
 
 function Exit-WizardBusy {
@@ -234,7 +274,7 @@ function Invoke-ExternalCommand {
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
 
-    Enter-WizardBusy -Text "$([System.IO.Path]::GetFileNameWithoutExtension($FilePath)) läuft..."
+    Enter-WizardBusy -Text ((T '{0} läuft...') -f [System.IO.Path]::GetFileNameWithoutExtension($FilePath))
     try {
         [void]$proc.Start()
 
@@ -427,7 +467,7 @@ function Find-EnterpriseCAs {
         $rootDse = New-Object System.DirectoryServices.DirectoryEntry($rootPath)
         $configNC = $rootDse.Properties['configurationNamingContext'].Value
         if (-not $configNC) {
-            $out.Error = "Keine Antwort von $rootPath (configurationNamingContext leer)."
+            $out.Error = (T 'Keine Antwort von {0} (configurationNamingContext leer).') -f $rootPath
             return $out
         }
 
@@ -458,7 +498,7 @@ function Find-EnterpriseCAs {
         }
         $out.Cas = @($cas)
         if ($out.Cas.Count -eq 0) {
-            $out.Error = 'LDAP-Verbindung erfolgreich, aber keine registrierten CAs (pKIEnrollmentService) gefunden.'
+            $out.Error = T 'LDAP-Verbindung erfolgreich, aber keine registrierten CAs (pKIEnrollmentService) gefunden.'
         }
     } catch {
         $out.Error = $_.Exception.Message
@@ -487,7 +527,7 @@ function Get-OfflineTemplateCandidates {
     if ($cas.Count -eq 0) { $cas = @($found.Cas) }   # konfigurierte CA nicht gefunden -> alle
     $out.CaName = ($cas | ForEach-Object { $_.Name }) -join ', '
     $published = @($cas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
-    if ($published.Count -eq 0) { $out.Error = 'Auf der CA sind keine Templates veröffentlicht.'; return $out }
+    if ($published.Count -eq 0) { $out.Error = T 'Auf der CA sind keine Templates veröffentlicht.'; return $out }
 
     $flags = @{}
     try {
@@ -507,7 +547,7 @@ function Get-OfflineTemplateCandidates {
             $flags[[string]$r.Properties['cn'][0]] = [pscustomobject]@{ NameFlag = $nameFlag; DisplayName = $display; Eku = @($r.Properties['pkiextendedkeyusage'] | ForEach-Object { [string]$_ }) }
         }
     } catch {
-        $out.Error = "Template-Details nicht lesbar: $($_.Exception.Message)"
+        $out.Error = (T 'Template-Details nicht lesbar: {0}') -f $_.Exception.Message
     }
 
     # EKU: Smartcard-Anmeldung (1.3.6.1.4.1.311.20.2.2) bzw. Client-Authentifizierung
@@ -637,26 +677,24 @@ function Test-DirectEnrollmentCapability {
 
     # Klartext-Begründung: die ERSTE zutreffende Fehlerursache zählt (Kette).
     if ($direct) {
-        $reason = 'Direkte Einreichung möglich: die CA ist erreichbar und akzeptiert deine Anmeldung. Plan A empfohlen. (Ob dein Konto für das gewählte Template Enroll-Rechte hat, zeigt sich erst beim Submit.)'
+        $reason = T 'Direkte Einreichung möglich: die CA ist erreichbar und akzeptiert deine Anmeldung. Plan A empfohlen. (Ob dein Konto für das gewählte Template Enroll-Rechte hat, zeigt sich erst beim Submit.)'
     } elseif (-not $hasTgt) {
-        $reason = 'Kein On-Prem-Kerberos-Ticket (TGT) gefunden - es fehlt eine authentifizierbare AD-Identität. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus (Anmeldung per Windows Hello/passwordless, erreichbarer DC). Ohne Ticket kann die CA dich nicht autorisieren -> Plan B (CA-Schritt delegieren).'
+        $reason = T 'Kein On-Prem-Kerberos-Ticket (TGT) gefunden - es fehlt eine authentifizierbare AD-Identität. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus (Anmeldung per Windows Hello/passwordless, erreichbarer DC). Ohne Ticket kann die CA dich nicht autorisieren -> Plan B (CA-Schritt delegieren).'
     } elseif (-not $caConfigEffective) {
-        $reason = "CA-Ziel ließ sich nicht bestimmen (AD-Discovery fehlgeschlagen: $discoveryError). Meist DNS/DC-Locator: der Client nutzt nicht den On-Prem-DNS -> SRV-Records/DC nicht auffindbar. CA-Konfigurationsstring in den Einstellungen setzen oder DNS korrigieren -> sonst Plan B."
+        $reason = (T 'CA-Ziel ließ sich nicht bestimmen (AD-Discovery fehlgeschlagen: {0}). Meist DNS/DC-Locator: der Client nutzt nicht den On-Prem-DNS -> SRV-Records/DC nicht auffindbar. CA-Konfigurationsstring in den Einstellungen setzen oder DNS korrigieren -> sonst Plan B.') -f $discoveryError
     } elseif (-not $dnsOk) {
-        $reason = "CA-Server '$caServer' ist per DNS nicht auflösbar - der Client nutzt vermutlich nicht den On-Prem-DNS-Server. DNS korrigieren (On-Prem-DNS / Conditional Forwarder) -> sonst Plan B."
+        $reason = (T "CA-Server '{0}' ist per DNS nicht auflösbar - der Client nutzt vermutlich nicht den On-Prem-DNS-Server. DNS korrigieren (On-Prem-DNS / Conditional Forwarder) -> sonst Plan B.") -f $caServer
     } else {
-        $reason = "Kerberos-Ticket und DNS sind vorhanden, aber 'certutil -ping' an $caConfigEffective schlägt fehl - vermutlich RPC/DCOM (Port 135 + dynamische Ports) durch Firewall blockiert, oder die CA weist die Anmeldung ab. Details im Log -> vorerst Plan B."
+        $reason = (T "Kerberos-Ticket und DNS sind vorhanden, aber 'certutil -ping' an {0} schlägt fehl - vermutlich RPC/DCOM (Port 135 + dynamische Ports) durch Firewall blockiert, oder die CA weist die Anmeldung ab. Details im Log -> vorerst Plan B.") -f $caConfigEffective
     }
 
-    $tgtText = if ($hasTgt) { "ja ($realm)" } else { 'nein' }
+    $yes = T 'ja'; $no = T 'nein'
+    $tgtText = if ($hasTgt) { "$yes ($realm)" } else { $no }
     $onPremText = if ($onPremTgtField) { $onPremTgtField } else { 'n/a' }
-    $detail = @"
-Join-Kontext        : $joinMode (dsregcmd OnPremTgt: $onPremText)
-On-Prem-TGT (klist) : $tgtText
-CA-Ziel             : $(if ($caConfigEffective) { $caConfigEffective } else { 'nicht bestimmbar' })
-CA-DNS auflösbar   : $(if ($caServer) { if ($dnsOk) { 'ja' } else { 'nein' } } else { 'n/a' })
-certutil -ping      : $(if ($caConfigEffective) { if ($pingOk) { 'ok' } else { 'fehlgeschlagen' } } else { 'nicht ausgeführt' })
-"@
+    $caText = if ($caConfigEffective) { $caConfigEffective } else { T 'nicht bestimmbar' }
+    $dnsText = if ($caServer) { if ($dnsOk) { $yes } else { $no } } else { 'n/a' }
+    $pingText = if ($caConfigEffective) { if ($pingOk) { 'ok' } else { T 'fehlgeschlagen' } } else { T 'nicht ausgeführt' }
+    $detail = (T "Join-Kontext        : {0} (dsregcmd OnPremTgt: {1})`r`nOn-Prem-TGT (klist) : {2}`r`nCA-Ziel             : {3}`r`nCA-DNS auflösbar   : {4}`r`ncertutil -ping      : {5}") -f $joinMode, $onPremText, $tgtText, $caText, $dnsText, $pingText
 
     return [pscustomobject]@{
         DirectPossible = $direct
@@ -802,7 +840,7 @@ function New-VscCancelledResult {
     # (die GUI zeigt das neutral statt als Fehler an).
     param([Parameter(Mandatory)][string]$Reason)
     Write-WizardLog -Message "VSC-Erstellung vom Benutzer abgebrochen ($Reason) - keine Karte erstellt." -Level Info
-    return [pscustomobject]@{ Success = $false; Cancelled = $true; InstanceId = $null; HResult = $null; Message = 'Vom Benutzer abgebrochen.'; PcscName = $null }
+    return [pscustomobject]@{ Success = $false; Cancelled = $true; InstanceId = $null; HResult = $null; Message = (T 'Vom Benutzer abgebrochen.'); PcscName = $null }
 }
 
 function New-VirtualSmartCard {
@@ -863,14 +901,14 @@ function New-VirtualSmartCard {
     } else {
         $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
         if (-not (Test-Path $helperSource)) {
-            $msg = "Helfer-Quelldatei nicht gefunden: $helperSource"
+            $msg = (T 'Helfer-Quelldatei nicht gefunden: {0}') -f $helperSource
             Write-WizardLog -Message $msg -Level Error
             return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
         }
 
         $csc = Get-FrameworkCscPath
         if (-not $csc) {
-            $msg = 'csc.exe des .NET Framework nicht gefunden (Microsoft.NET\Framework*\v4.0.30319).'
+            $msg = T 'csc.exe des .NET Framework nicht gefunden (Microsoft.NET\Framework*\v4.0.30319).'
             Write-WizardLog -Message $msg -Level Error
             return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
         }
@@ -881,7 +919,7 @@ function New-VirtualSmartCard {
             $helperSource) -TimeoutSeconds 120 -Silent
         if (-not $compile.Success -or -not (Test-Path $helperExe)) {
             $detail = "$($compile.StdOut) $($compile.StdErr)".Trim()
-            $msg = "Helfer konnte nicht kompiliert werden: $detail"
+            $msg = (T 'Helfer konnte nicht kompiliert werden: {0}') -f $detail
             Write-WizardLog -Message $msg -Level Error
             return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
         }
@@ -905,7 +943,7 @@ function New-VirtualSmartCard {
     } catch {
         Remove-Item $helperExe -ErrorAction SilentlyContinue
         if (Test-IsUserCancelledError -ErrorRecord $_) { return New-VscCancelledResult -Reason 'UAC-Abfrage abgebrochen' }
-        $msg = "Erhöhter Prozess konnte nicht gestartet werden: $($_.Exception.Message)"
+        $msg = (T 'Erhöhter Prozess konnte nicht gestartet werden: {0}') -f $_.Exception.Message
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
     }
@@ -918,7 +956,7 @@ function New-VirtualSmartCard {
             if ($idx -gt 0) { $res[$line.Substring(0, $idx)] = $line.Substring($idx + 1) }
         }
     } else {
-        $res.Message = 'Kein Ergebnis vom elevierten Helfer erhalten (Prozess evtl. abgebrochen).'
+        $res.Message = T 'Kein Ergebnis vom elevierten Helfer erhalten (Prozess evtl. abgebrochen).'
     }
     Remove-Item $helperExe, $resultPath -ErrorAction SilentlyContinue
 
@@ -974,7 +1012,7 @@ function New-VirtualSmartCardViaTpmVscMgr {
 
     $tpmvscmgr = Join-Path $env:WINDIR 'System32\tpmvscmgr.exe'
     if (-not (Test-Path $tpmvscmgr)) {
-        $msg = 'tpmvscmgr.exe nicht gefunden (System32).'
+        $msg = T 'tpmvscmgr.exe nicht gefunden (System32).'
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
     }
@@ -997,7 +1035,7 @@ function New-VirtualSmartCardViaTpmVscMgr {
         }
     } catch {
         if (Test-IsUserCancelledError -ErrorRecord $_) { return New-VscCancelledResult -Reason 'UAC-Abfrage abgebrochen' }
-        $msg = "tpmvscmgr.exe konnte nicht gestartet werden: $($_.Exception.Message)"
+        $msg = (T 'tpmvscmgr.exe konnte nicht gestartet werden: {0}') -f $_.Exception.Message
         Write-WizardLog -Message $msg -Level Error
         return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
     }
@@ -1017,7 +1055,7 @@ function New-VirtualSmartCardViaTpmVscMgr {
         return [pscustomobject]@{ Success = $true; InstanceId = $newReader.InstanceId; HResult = $null; Message = ''; PcscName = $newReader.PcscName }
     }
 
-    $msg = "Nach dem tpmvscmgr-Lauf wurde keine Karte '$CardName' gefunden (Abbruch, abweichende/zu kurze PIN oder Erstellung fehlgeschlagen)."
+    $msg = (T "Nach dem tpmvscmgr-Lauf wurde keine Karte '{0}' gefunden (Abbruch, abweichende/zu kurze PIN oder Erstellung fehlgeschlagen).") -f $CardName
     Write-WizardLog -Message $msg -Level Error
     return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $null; Message = $msg; PcscName = $null }
 }
@@ -1156,7 +1194,7 @@ function Get-SmartCardCertificateInfo {
     if (-not $info.Provider) {
         $cngResult = if ($CngResult) { $CngResult } else { Get-SmartCardCngProviderInfo -Thumbprint $Certificate.Thumbprint }
         if ($cngResult.TimedOut) {
-            $info.DetectionError = 'Zeitüberschreitung beim CNG-Schlüsselzugriff (evtl. verweist das Zertifikat auf eine bereits gelöschte virtuelle Smartcard).'
+            $info.DetectionError = T 'Zeitüberschreitung beim CNG-Schlüsselzugriff (evtl. verweist das Zertifikat auf eine bereits gelöschte virtuelle Smartcard).'
         } elseif ($cngResult.Provider) {
             $info.Provider = $cngResult.Provider
             $info.Reader = $cngResult.Reader
@@ -1331,7 +1369,7 @@ foreach ($Thumbprint in ($Thumbprints -split ',')) {
                 $results[$tp] = (Get-SmartCardCngProviderInfoBatch -Thumbprint @($tp) -TimeoutSeconds $TimeoutSeconds)[$tp]
             }
         } else {
-            $err = if ($timedOut) { $null } elseif ($result.StdErr) { $result.StdErr.Trim() } else { 'Kein Ergebnis vom Lookup-Prozess.' }
+            $err = if ($timedOut) { $null } elseif ($result.StdErr) { $result.StdErr.Trim() } else { T 'Kein Ergebnis vom Lookup-Prozess.' }
             foreach ($tp in $missing) {
                 $results[$tp] = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; Container = $null; DetectionError = $err; TimedOut = $timedOut }
             }
@@ -1448,7 +1486,7 @@ Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`
             Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop
         } catch {
             Remove-Item $scriptPath, $outPath -ErrorAction SilentlyContinue
-            $msg = "Elevierter Löschvorgang konnte nicht gestartet werden (UAC abgelehnt?): $($_.Exception.Message)"
+            $msg = (T 'Elevierter Löschvorgang konnte nicht gestartet werden (UAC abgelehnt?): {0}') -f $_.Exception.Message
             Write-WizardLog -Message $msg -Level Error
             return [pscustomobject]@{ Success = $false; Message = $msg }
         } finally { Exit-WizardBusy }
@@ -1457,7 +1495,7 @@ Set-Content -Path '$outPath' -Value ("EXIT=`$LASTEXITCODE`r`n" + (`$o -join "`r`
             if ($content -match 'EXIT=(-?\d+)') { $ok = ($Matches[1] -eq '0') }
             $detail = "$content".Trim()
         } else {
-            $detail = 'Kein Ergebnis vom elevierten Prozess erhalten.'
+            $detail = T 'Kein Ergebnis vom elevierten Prozess erhalten.'
         }
         Remove-Item $scriptPath, $outPath -ErrorAction SilentlyContinue
     }
@@ -1698,12 +1736,12 @@ function Receive-PendingCertificate {
     # Unterscheiden statt pauschal "noch nicht ausgestellt": noch offen / abgelehnt / Fehler.
     $out = "$($result.StdOut) $($result.StdErr)"
     if (Test-CertReqPending -Output $out) {
-        return [pscustomobject]@{ Success = $false; Status = 'Pending'; CerPath = $null; Message = "Antrag $RequestId ist noch nicht genehmigt. $(Get-PendingApprovalHint -RequestId $RequestId)" }
+        return [pscustomobject]@{ Success = $false; Status = 'Pending'; CerPath = $null; Message = ((T 'Antrag {0} ist noch nicht genehmigt. {1}') -f $RequestId, (Get-PendingApprovalHint -RequestId $RequestId)) }
     }
     if ($out -match 'Denied|abgelehnt|verweigert') {
-        return [pscustomobject]@{ Success = $false; Status = 'Denied'; CerPath = $null; Message = "Antrag $RequestId wurde von der CA abgelehnt - bitte neu beantragen." }
+        return [pscustomobject]@{ Success = $false; Status = 'Denied'; CerPath = $null; Message = ((T 'Antrag {0} wurde von der CA abgelehnt - bitte neu beantragen.') -f $RequestId) }
     }
-    return [pscustomobject]@{ Success = $false; Status = 'Error'; CerPath = $null; Message = "Abruf von Antrag $RequestId fehlgeschlagen (Details siehe Log)." }
+    return [pscustomobject]@{ Success = $false; Status = 'Error'; CerPath = $null; Message = ((T 'Abruf von Antrag {0} fehlgeschlagen (Details siehe Log).') -f $RequestId) }
 }
 
 function Get-CertReqRequestId {
@@ -1729,10 +1767,10 @@ function Get-PendingApprovalHint {
     param(
         [string]$RequestId,
         # Für Stellen ohne "Zertifikat abrufen"-Button (z.B. EA-Dialog).
-        [string]$NextStep = "Danach hier 'Zertifikat abrufen'."
+        [string]$NextStep = (T "Danach hier 'Zertifikat abrufen'.")
     )
     $id = if ($RequestId) { $RequestId } else { '<ID>' }
-    return "Ein CA-Manager muss ihn genehmigen: auf der CA in der Zertifizierungsstellen-Konsole (certsrv.msc) unter 'Ausstehende Anforderungen' ausstellen oder dort 'certutil -resubmit $id' ausführen. $NextStep".Trim()
+    return ((T "Ein CA-Manager muss ihn genehmigen: auf der CA in der Zertifizierungsstellen-Konsole (certsrv.msc) unter 'Ausstehende Anforderungen' ausstellen oder dort 'certutil -resubmit {0}' ausführen. {1}") -f $id, $NextStep).Trim()
 }
 
 function Complete-CertificateEnrollment {
