@@ -1,4 +1,4 @@
-# VSC-Wizard - Runbook
+﻿# VSC-Wizard - Runbook
 
 Handlungsanleitung pro Szenario: was das Tool automatisch tut **[Tool]**, was du
 manuell machst **[Du]** und wo ein Faehigkeits-Check entscheidet **[Pruefung]**.
@@ -52,119 +52,93 @@ wertlos.
 
 ---
 
-## Szenario 01 - Neues SC-only-Admin-Konto einrichten (Bootstrap)
+## Szenario 01 - VSC fuer onprem-Adminkonto
 
-**Wann:** Ein Konto soll Smartcard-only werden, hat aber noch keine Karte -
-klassisches Henne-Ei-Problem (ohne Karte keine Anmeldung, ohne Anmeldung keine
-Einreichung).
+**Wann:** Eine VSC fuer ein SEPARATES On-Prem-Admin-Konto (nicht das gerade
+angemeldete). Ausstellung per **EOBO** (mit Enrollment-Agent-Zertifikat, ohne RDP)
+oder per **Plan B / Bootstrap** (Einreichung ALS das Zielkonto per RDP; bei
+Erstausstellung ggf. einmalig Passwort-Anmeldung erlauben).
 
-**Voraussetzungen:** bereites TPM auf der Zielmaschine; Recht, das Zielkonto
-kurzzeitig auf Passwort-Anmeldung zu stellen; erreichbare CA (direkt oder ueber
-einen Einreich-Host).
+**Neue oder bestehende VSC:** Der Wizard fragt, ob eine neue VSC erstellt oder eine
+vorhandene als Schluesseltraeger verwendet werden soll (letzteres ersetzt das
+fruehere "Erneuern"). Die Identitaet kommt IMMER aus dem angegebenen Zielkonto,
+nicht aus der Karte.
+
+**Voraussetzungen:** bereites TPM (fuer eine neue VSC); erreichbare CA (direkt oder
+ueber einen Einreich-Host); fuer den Bootstrap-Weg das Recht, das Zielkonto kurz auf
+Passwort-Anmeldung zu stellen.
 
 | # | Wer | Schritt |
 |---|---|---|
-| 1 | **[Du]** | Zielkonto **temporaer auf Passwort-Anmeldung** zulassen ("Smartcard erforderlich" voruebergehend aus). Noetig, weil ein kartenloses SC-only-Konto sich sonst nirgends anmelden kann. |
-| 2 | **[Tool]** | VSC **auf dieser Maschine** erstellen, PIN vergeben (`tpmvscmgr create`). |
-| 3 | **[Tool]** | CSR erzeugen - der private Schluessel entsteht auf der VSC. |
-| 4 | **[Pruefung]** | Direkt-Einreichung moeglich? **ja** -> [Tool] direkt bei der CA einreichen. **nein** -> [Du] per RDP als Zielkonto auf einen Einreich-Host, dort Submit (siehe Server-Core-Abschnitt, wenn der Host Server Core ist). |
-| 5 | **[Tool]** | Ausgestelltes Zertifikat auf die VSC uebernehmen (`certreq -accept`). |
-| 6 | **[Du]** | Zielkonto wieder auf **"Smartcard erforderlich"** setzen, Passwort-Anmeldung deaktivieren. |
+| 1 | **[Du]** | Separates Admin-Konto angeben. |
+| 2 | **[Du]** | Neue VSC erstellen ODER eine bestehende verwenden. |
+| 3 | **[Pruefung]** | Mit EA-Zertifikat: **EOBO** (Plan A, ohne RDP). Sonst: **Plan B** - Submit ALS das Zielkonto per RDP (bei Erstausstellung ggf. Konto kurz auf Passwort-Anmeldung; danach zurueck auf "Smartcard erforderlich"). |
+| 4 | **[Tool]** | CSR erzeugen, einreichen, Zertifikat auf die VSC uebernehmen. |
 
-**Guardrails:**
-- Das Passwort ist ein **einmaliger** Bootstrap. Der Wizard erinnert am Ende an
-  Schritt 6 (Rueckstellung auf SC-only).
-- VSC nicht auf einem fremden TPM erzeugen (siehe VSC-Bindung oben).
+**Guardrails:** Ein Bootstrap-Passwort ist einmalig; danach Konto wieder SC-only.
+Das EA-Zertifikat ist admin-aequivalent (ESC3, siehe Szenario 05).
 
-**Ergebnis:** Konto ist SC-only mit gueltiger VSC. Kuenftige Verlaengerungen
-laufen **ohne** Passwort (Szenario 02).
-
-**Troubleshooting:** Schlaegt die Direkt-Einreichung fehl, zeigt die Pruefung den
-konkreten Grund (kein TGT / DNS / RPC). Kein bereites TPM -> VSC-Erstellung nicht
-moeglich.
+**Warum kein eigenes "Erneuern" mehr:** Es findet ohnehin keine echte Verlaengerung
+statt (jeder Antrag ist eine Neuausstellung mit neuem Schluessel). Daher ist
+"bestehende VSC verwenden" nur eine Option innerhalb der Konto-Szenarien 01-03. Eine
+VSC laeuft nie ab - nur das Zertifikat darauf; "bestehende verwenden" funktioniert
+also auch bei bereits abgelaufenem Zertifikat.
 
 ---
 
-## Szenario 02 - Zertifikat verlaengern (vor Ablauf)
+## Szenario 02 - VSC fuer onprem- oder hybrid-Konto
 
-**Wann:** Ein SC-only-Konto hat eine **noch gueltige** VSC; das Zertifikat laeuft
-bald ab.
+**Wann:** Fuer das AKTUELL angemeldete Konto (reines On-Prem-AD-Konto oder hybrid
+synchronisiert), wenn die CA von hier erreichbar ist (DJ-Client oder EJ-Client mit
+funktionierendem Cloud Kerberos Trust). Direkt-Ausstellung als du selbst.
 
-**Voraussetzung:** mindestens eine noch nicht abgelaufene VSC/Zertifikat (die
-Kette braucht eine gueltige Karte als Anmeldemittel).
-
-| # | Wer | Schritt |
-|---|---|---|
-| 1 | **[Tool]** | Vorhandene VSC + Zertifikat erkennen, **Restlaufzeit** anzeigen. |
-| 2 | **[Du]** | Mit der **gueltigen Karte** anmelden - beim delegierten Weg per **Smartcard-Redirect** ins Einreich-Host, **kein Passwort noetig**. |
-| 3 | **[Tool]** | Neuen CSR erzeugen und einreichen (direkt oder delegiert). |
-| 4 | **[Tool]** | Neues Zertifikat auf die bestehende VSC uebernehmen. |
-
-**Der Trick:** Die noch gueltige Karte ersetzt das Passwort - deshalb
-**rechtzeitig** verlaengern.
-
-**Wenn bereits abgelaufen:** Kein Chain moeglich, es fuehrt kein passwortfreier
-Weg mehr hinein -> zurueck zu **Szenario 01 (Bootstrap)** mit temporaerem
-Passwort.
-
-**Ergebnis:** frisches Zertifikat auf derselben VSC, Kette bleibt intakt.
-
----
-
-## Szenario 03 - VSC fuer dieses Konto direkt ausstellen
-
-**Wann:** Fuer das aktuell angemeldete Konto, wenn die CA von hier erreichbar ist
-(DJ-Client oder EJ-Client mit funktionierendem Cloud Kerberos Trust).
+**Neue oder bestehende VSC:** wie in Szenario 01 - neu erstellen oder eine
+vorhandene Karte weiterverwenden.
 
 | # | Wer | Schritt |
 |---|---|---|
-| 1 | **[Pruefung]** | Direkt-Einreichung pruefen (Kerberos-Ticket, DNS, `certutil -ping`). |
-| 2 | **[Tool]** | VSC erstellen, PIN vergeben. |
-| 3 | **[Tool]** | CSR -> direkt einreichen -> Zertifikat uebernehmen. Ein durchgehender Ablauf. |
+| 1 | **[Du]** | Neue VSC erstellen ODER eine bestehende verwenden. |
+| 2 | **[Pruefung]** | Direkt-Einreichung pruefen (Kerberos-Ticket, DNS, `certutil -ping`). |
+| 3 | **[Tool]** | CSR -> direkt einreichen (als du) -> Zertifikat auf die VSC uebernehmen. |
 
 **Ergebnis:** VSC mit Logon-Zertifikat fuer dich, ohne Umweg.
 
-**Hinweis:** Scheitert Schritt 1 auf einem EJ-Client, ist meist CKT oder On-Prem-
-DNS das Problem (siehe Abschnitt "Direkt-Einreichung pruefen").
+**Hinweis:** Scheitert die Pruefung auf einem EJ-Client, ist meist CKT oder
+On-Prem-DNS das Problem (siehe Abschnitt "Direkt-Einreichung pruefen").
 
 ---
 
-## Szenario 04 - Cloud-Global-Admin: Smartcard + VSC (Entra)
+## Szenario 03 - VSC fuer Cloudonly-Adminkonto (Entra CBA)
 
-**Wann:** Ein Cloud-Konto (Entra Global Admin) soll phishing-resistent anmelden -
-mit einem portablen YubiKey **und** einer VSC als Alternative/Fallback.
+**Wann:** Ein CLOUD-ONLY-Konto (Entra, kein On-Prem-Pendant) soll ein Zertifikat
+fuer **Entra CBA** bekommen. Du reichst als DU (ein Enroll-berechtigtes AD-Konto)
+direkt bei der On-Prem-CA ein; die Ziel-UPN steht im CSR-SAN (Supply-in-request /
+Offline-Template). Die On-Prem-CA ist hier nur Zertifikatsfabrik.
 
-### Teil A - lokal (Tool)
+> **NUR Cloud/CBA - NICHT fuer On-Prem-Logon.** Ein Offline-Template bettet keine
+> Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt On-Prem-Smartcard-
+> Logon ab. Fuer On-Prem-Konten stattdessen Szenario 01 oder 05 (Build-from-AD
+> bettet die SID ein). Zusaetzlich ESC1: mit Supply-in-request + SAN ist jede UPN
+> praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).
 
 | # | Wer | Schritt |
 |---|---|---|
-| A1 | **[Tool]** | Zertifikat provisionieren: **YubiKey (PIV, geraetuebergreifend/portabel)** und/oder **VSC (maschinengebunden)** als Alternative. |
+| 1 | **[Du]** | Cloud-Zielkonto/UPN angeben (Entra). |
+| 2 | **[Du]** | Neue VSC erstellen ODER eine bestehende verwenden. |
+| 3 | **[Tool]** | CSR mit Ziel-UPN im SAN (Offline-Template). |
+| 4 | **[Pruefung]** | Als DU direkt bei der CA einreichen (Enroll-Recht auf dem Offline-Template). |
+| 5 | **[Tool]** | Zertifikat auf die VSC uebernehmen. |
+| 6 | **[Du]** | In Entra: ausstellende CA importieren; CBA aktivieren; Username-Binding auf UPN; CRL oeffentlich erreichbar. |
 
-### Teil B - Entra, Variante CBA (Du, Checkliste/Runbook)
+**Alternative (ohne PKI):** FIDO2/Passkey - der leichtere Cloud-Weg. CBA nur, wenn
+du bewusst dieselbe Zert-Identitaet on-prem und in der Cloud willst.
 
-| # | Wer | Schritt |
-|---|---|---|
-| B1 | **[Du]** | Ausstellende CA in den **Entra-Vertrauensspeicher** importieren (Certificate Authorities / PKI-based trust store). |
-| B2 | **[Du]** | **CBA** als Authentifizierungsmethode aktivieren; **Username-Binding** festlegen (z.B. SAN PUN oder SKI); Auth-Bindung = MFA. |
-| B3 | **[Du]** | **CRL-Endpunkte fuer Entra oeffentlich erreichbar** sicherstellen - haeufigster Stolperstein. |
-
-### Teil B (Alternative) - FIDO2/Passkey
-
-- **[Du]** FIDO2/Passkey auf demselben YubiKey registrieren - phishing-resistent,
-  **ohne** PKI-in-Entra-Klempnerei.
-- **Empfehlung:** FIDO2 ist der leichtere Cloud-Weg. **CBA** nur waehlen, wenn du
-  bewusst **dieselbe Zert-Identitaet** on-prem **und** in der Cloud willst.
-
-**Ergebnis:** Cloud-GA meldet sich per CBA (Smartcard/VSC) oder FIDO2 (Passkey)
-an; die VSC dient als Fallback zur physischen Karte.
-
-**Charakter:** Teil B ist ueberwiegend Checkliste mit Links - das Tool
-dokumentiert, was wo noetig ist, statt es zu automatisieren (Entra-Konfiguration
-ist Portal-/Graph-seitig).
+**Charakter:** Der Entra-Teil (Schritt 6) ist Checkliste mit Links - das Tool
+dokumentiert, was wo noetig ist, statt die Entra-Konfiguration zu automatisieren.
 
 ---
 
-## Szenario 05 - VSCs verwalten
+## Szenario 04 - VSCs verwalten
 
 **Wann:** Ueberblick vor Verlaengerung/Neuausstellung oder Aufraeumen.
 
@@ -176,7 +150,7 @@ ist Portal-/Graph-seitig).
 
 ---
 
-## Szenario 06 - Fuer ein anderes Konto ausstellen (EOBO) [Fortgeschritten]
+## Szenario 05 - Fuer ein anderes Konto ausstellen (EOBO) [Fortgeschritten]
 
 **Wann:** Direkt-Ausstellung fuer ein separates Konto ohne dessen Anmeldung -
 ueber ein Enrollment-Agent-Zertifikat (Enroll on Behalf Of).
@@ -292,5 +266,5 @@ Bekommt **nicht** die GUI-Exe, sondern die schlanke `VscWizard.Submit.ps1`
 | `VscNamePrefix` | Namenspraefix fuer virtuelle Smartcards |
 | `RdpJumpServer` | CA-naher Einreich-/Sprung-Host fuer den delegierten Weg |
 | `DiscoveryDomain` | AD-Domaene/DC fuer die PKI-Erkennung (v.a. EJ/Workgroup) |
-| `EATemplate` | Template fuer das Enrollment-Agent-Zertifikat (Szenario 06) |
+| `EATemplate` | Template fuer das Enrollment-Agent-Zertifikat (Szenario 05) |
 | `WorkingDir` | Arbeitsverzeichnis (leer = TEMP) |

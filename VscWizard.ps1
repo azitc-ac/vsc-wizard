@@ -301,7 +301,7 @@ function Set-TemplateComboItem {
 function Set-PlanATemplateForMode {
     # Bereitet die Template-Auswahl in Plan A auf den aktuellen Modus vor.
     #  - Normal/EOBO/Verlängern: fest vorausgewähltes Standard-Template ($config.Template).
-    #  - Offline-Direkt (Szenario 04, Cloud/Entra CBA): das OFFLINE-/Supply-in-request-Template. Ist in der
+    #  - Offline-Direkt (Szenario 03, Cloud/Entra CBA): das OFFLINE-/Supply-in-request-Template. Ist in der
     #    Konfiguration keins hinterlegt, wird die Combo editierbar, damit der Name getippt
     #    werden kann (das Standard-Template waere hier das falsche - Build-from-AD).
     if ($script:PlanA_OfflineDirect) {
@@ -408,11 +408,11 @@ $script:ActivePlan = $null
 # Woher der Plan-A/B-Ablauf betreten wurde - steuert, wohin "Zurück" aus dessen
 # Schritt 0 fuehrt: 'Scenario' (direkt aus einem Szenario) oder 'Mode' (klassische Moduswahl).
 $script:PlanEntryFrom = 'Scenario'
-# Verlängern (Szenario 02): Re-Enroll auf eine BESTEHENDE Karte - der Plan-A-
+# "Bestehende VSC verwenden": Re-Enroll auf eine BESTEHENDE Karte - der Plan-A-
 # "Anfordern"- bzw. Plan-B-"CSR"-Schritt wird wiederverwendet, das Erstellen uebersprungen.
 $script:PlanA_RenewMode = $false
 $script:PlanB_RenewMode = $false
-# Szenario 04 (Cloud-Konto / Entra CBA): Direkt-Ausstellung über ein Offline-/Supply-in-
+# Szenario 03 (Cloud-Konto / Entra CBA): Direkt-Ausstellung über ein Offline-/Supply-in-
 # request-Template (als DU einreichen, Ziel-UPN im CSR, kein EA/RDP). NUR Cloud/CBA.
 $script:PlanA_OfflineDirect = $false
 
@@ -658,49 +658,37 @@ $script:Scenarios = @(
     [pscustomobject]@{
         Id = 1; Title = 'VSC für onprem-Adminkonto'; Sub = 'GEFÜHRT   Separates On-Prem-Admin-Konto (nicht dein angemeldetes): EOBO (mit EA-Zertifikat) oder Bootstrap/RDP.'; Stripe = 'blue'
         Steps = @(
-            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto temporär auf Passwort-Anmeldung zulassen (SC-only kurz aus).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'VSC auf dieser Maschine erstellen, PIN vergeben.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'CSR erzeugen (Schlüssel auf der VSC).' }
-            [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt-Einreichung möglich? ja: direkt einreichen. nein: per RDP als Zielkonto auf Einreich-Host.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'Zertifikat auf die VSC übernehmen.' }
-            [pscustomobject]@{ T = 'Du';       X = 'Zielkonto wieder auf "Smartcard erforderlich" setzen.' }
+            [pscustomobject]@{ T = 'Du';       X = 'Separates Admin-Konto angeben (nicht dein angemeldetes).' }
+            [pscustomobject]@{ T = 'Du';       X = 'Neue VSC erstellen ODER eine bestehende verwenden.' }
+            [pscustomobject]@{ T = 'Prüfung'; X = 'Mit EA-Zertifikat: EOBO (ohne RDP). Sonst: Plan B - Einreichung ALS das Zielkonto per RDP (ggf. einmalig Passwort-Anmeldung erlauben).' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR erzeugen, einreichen, Zertifikat auf die VSC übernehmen.' }
         )
-        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Passwort ist einmaliger Bootstrap. VSC dort erstellen, wo sie genutzt wird.' }
+        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Bootstrap-Passwort (falls nötig) ist einmalig; danach Konto wieder auf "Smartcard erforderlich". VSC dort erstellen, wo sie genutzt wird.' }
     }
     [pscustomobject]@{
-        Id = 2; Title = 'Zertifikat erneuern (Neuausstellung auf bestehende VSC)'; Sub = 'GEFÜHRT   Frisches Zertifikat auf eine vorhandene VSC - technisch eine Neuausstellung, KEIN echtes Renewal.'; Stripe = 'blue'
+        Id = 2; Title = 'VSC für onprem- oder hybrid-Konto'; Sub = 'AUTOMATISIERT   Dein eigenes (on-prem oder hybrid synchronisiertes) Konto - Direkt-Ausstellung, wenn die CA erreichbar ist.'; Stripe = 'green'
         Steps = @(
-            [pscustomobject]@{ T = 'Tool'; X = 'Vorhandene VSC + Zertifikat erkennen, Restlaufzeit anzeigen. Konto wird aus dem Kartenzertifikat (SAN-UPN) abgeleitet.' }
-            [pscustomobject]@{ T = 'Tool'; X = 'Neuen Schlüssel auf der Karte + CSR erzeugen (certreq -new).' }
-            [pscustomobject]@{ T = 'Prüfung'; X = 'Einreichung als dieses Konto: eigenes Konto direkt/Smartcard, Fremdkonto per EOBO (EA-Cert) oder RDP.' }
-            [pscustomobject]@{ T = 'Tool'; X = 'Neues Zertifikat auf die bestehende VSC übernehmen; alte(s) danach optional entfernen.' }
-        )
-        Guard = [pscustomobject]@{ Kind = 'warn'; Text = 'Kein echtes Renewal (neuer Schlüssel/Cert). Funktioniert AUCH bei bereits abgelaufenem Zertifikat - die VSC selbst läuft nie ab, nur das Zertifikat darauf.' }
-    }
-    [pscustomobject]@{
-        Id = 3; Title = 'VSC für onprem- oder hybrid-Konto'; Sub = 'AUTOMATISIERT   Dein eigenes (on-prem oder hybrid synchronisiertes) Konto - Direkt-Ausstellung, wenn die CA erreichbar ist.'; Stripe = 'green'
-        Steps = @(
+            [pscustomobject]@{ T = 'Du';       X = 'Neue VSC erstellen ODER eine bestehende verwenden.' }
             [pscustomobject]@{ T = 'Prüfung'; X = 'Direkt-Einreichung prüfen (Kerberos, DNS, certutil -ping).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'VSC erstellen, PIN vergeben.' }
-            [pscustomobject]@{ T = 'Tool';     X = 'CSR -> direkt einreichen -> Zertifikat übernehmen.' }
+            [pscustomobject]@{ T = 'Tool';     X = 'CSR -> direkt einreichen (als du) -> Zertifikat auf die VSC übernehmen.' }
         )
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 4; Title = 'VSC für Cloudonly-Adminkonto'; Sub = 'NUR CLOUD   Cloud-only-Konto (Entra CBA): als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'; Stripe = 'blue'
+        Id = 3; Title = 'VSC für Cloudonly-Adminkonto'; Sub = 'NUR CLOUD   Cloud-only-Konto (Entra CBA): als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'; Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Du';       X = 'Cloud-Zielkonto/UPN angeben (Entra, z.B. gadmin@contoso.onmicrosoft.com).' }
-            [pscustomobject]@{ T = 'Tool';     X = 'VSC als Schlüsselträger erstellen, PIN vergeben.' }
+            [pscustomobject]@{ T = 'Du';       X = 'Neue VSC erstellen ODER eine bestehende verwenden.' }
             [pscustomobject]@{ T = 'Tool';     X = 'CSR mit Ziel-UPN im SAN erzeugen (Supply-in-request/Offline-Template).' }
             [pscustomobject]@{ T = 'Prüfung'; X = 'Als DU direkt bei der CA einreichen (Enroll-Recht auf dem Offline-Template).' }
             [pscustomobject]@{ T = 'Tool';     X = 'Ausgestelltes Zertifikat auf die VSC übernehmen.' }
             [pscustomobject]@{ T = 'Du';       X = 'In Entra: ausstellende CA importieren + CBA-Binding auf UPN, CRL öffentlich erreichbar (RUNBOOK).' }
             [pscustomobject]@{ T = 'Du';       X = 'Alternative ganz ohne PKI: FIDO2/Passkey (Sicherheitsschlüssel oder Passkey).' }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: EOBO (Szenario 06) oder Bootstrap/RDP (Szenario 01). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).' }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: onprem-Adminkonto (Szenario 01) bzw. EOBO (Szenario 05). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).' }
     }
     [pscustomobject]@{
-        Id = 5; Title = 'VSCs verwalten'; Sub = 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und löschen.'; Stripe = 'teal'
+        Id = 4; Title = 'VSCs verwalten'; Sub = 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und löschen.'; Stripe = 'teal'
         Steps = @(
             [pscustomobject]@{ T = 'Tool'; X = 'Inventar: Reader, Karten, Zertifikate mit Ablaufdatum.' }
             [pscustomobject]@{ T = 'Du';   X = 'Auswählen und löschen (tpmvscmgr destroy).' }
@@ -708,12 +696,12 @@ $script:Scenarios = @(
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 6; Title = 'Für ein anderes Konto ausstellen (EOBO)'; Sub = 'FORTGESCHRITTEN   Enroll on Behalf Of mit Enrollment-Agent-Zertifikat.'; Stripe = 'red'
+        Id = 5; Title = 'Für ein anderes Konto ausstellen (EOBO)'; Sub = 'FORTGESCHRITTEN   Enroll on Behalf Of mit Enrollment-Agent-Zertifikat.'; Stripe = 'red'
         Steps = @(
             [pscustomobject]@{ T = 'Tool'; X = 'EA-Zertifikat erkennen; EOBO-Antrag (RequesterName=Ziel, Build-from-AD).' }
             [pscustomobject]@{ T = 'Tool'; X = 'Antrag co-signieren, einreichen, auf VSC übernehmen.' }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-äquivalent. Für Admin-Ziele ist Self-Enrollment (01/02) sicherer.' }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = 'ESC3 - EA-Cert admin-äquivalent. Für Admin-Ziele ist Self-Enrollment (Szenario 01/02) sicherer.' }
     }
 )
 $script:SelectedScenario = $null
@@ -889,30 +877,25 @@ function Get-ScenarioAvailability {
     param($Caps, [int]$Id)
     switch ($Id) {
         2 {
-            if ($Caps.VscCount -lt 1) {
-                return [pscustomobject]@{ Available = $false; Reason = 'Auf diesem Gerät wurde keine virtuelle Smartcard gefunden - es gibt nichts zu verlängern. Für die Erstausstellung Szenario 01 (Bootstrap) oder 03 (direkt).' }
+            # onprem/hybrid-Konto (du selbst), Direkt-Einreichung: braucht eine
+            # authentifizierbare On-Prem-AD-Identität - ein TGT (klist) ODER ein
+            # AD-Domain-Join. Reiner Entra-ohne-CKT / Workgroup: nein.
+            if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
+                return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - ohne authentifizierbare AD-Identität kann von hier NICHT direkt bei der CA eingereicht werden. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus. Ohne das: von einem Rechner mit CA-Sicht bzw. Szenario 01 (per RDP).' }
             }
         }
         3 {
-            # Direkt-Einreichung braucht eine authentifizierbare On-Prem-AD-Identität:
-            # ein TGT (klist) ODER ein AD-Domain-Join (dort ist die Identität gesetzt,
-            # auch wenn klist gerade leer scheint). Reiner Entra-ohne-CKT / Workgroup: nein.
-            if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
-                return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - ohne authentifizierbare AD-Identität kann von hier NICHT direkt bei der CA eingereicht werden. Auf einem Entra-joined Client setzt das funktionierendes Cloud Kerberos Trust voraus. Ohne das: Bootstrap/RDP-Weg (Szenario 01).' }
-            }
-        }
-        4 {
             # Cloud-Konto/Entra CBA: DU reichst direkt bei der On-Prem-CA ein - dafür
-            # braucht DEIN Konto eine authentifizierbare On-Prem-AD-Identität (wie 03).
+            # braucht DEIN Konto eine authentifizierbare On-Prem-AD-Identität (wie 02).
             # (Das ZIEL ist ein Cloud-Konto; der EINREICHER bist du und musst die CA
             # erreichen.)
             if (-not $Caps.HasOnPremTgt -and $Caps.JoinMode -ne 'ADDomain') {
                 return [pscustomobject]@{ Available = $false; Reason = 'Kein On-Prem-Kerberos-Ticket (TGT) und kein AD-Domain-Join - du musst als du selbst bei der On-Prem-CA einreichen können. Entra-joined mit Cloud Kerberos Trust hat ein TGT. Ohne das: von einem Rechner mit CA-Sicht ausstellen.' }
             }
         }
-        6 {
+        5 {
             if ($Caps.EaCertCount -lt 1) {
-                return [pscustomobject]@{ Available = $false; Reason = 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (Bootstrap, per RDP als Zielkonto).' }
+                return [pscustomobject]@{ Available = $false; Reason = 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (onprem-Adminkonto, per RDP als Zielkonto).' }
             }
         }
     }
@@ -1037,14 +1020,14 @@ function Show-VscPickerDialog {
     # des (frühesten) Zertifikats auf der jeweiligen Karte.
     param($Readers, $Certs)
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = 'Karte für Verlängerung wählen'
+    $dlg.Text = 'Vorhandene virtuelle Smartcard wählen'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.StartPosition = 'CenterParent'
     $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
     $dlg.ClientSize = New-Object System.Drawing.Size(560, 320)
 
     $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text = 'Welche virtuelle Smartcard soll verlängert werden?'
+    $lbl.Text = 'Welche vorhandene virtuelle Smartcard verwenden?'
     $lbl.Location = New-Object System.Drawing.Point(12, 12)
     $lbl.Size = New-Object System.Drawing.Size(536, 20)
 
@@ -1064,7 +1047,7 @@ function Show-VscPickerDialog {
     if ($list.Items.Count -gt 0) { $list.SelectedIndex = 0 }
 
     $ok = New-Object System.Windows.Forms.Button
-    $ok.Text = 'Verlängern'; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $ok.Text = 'Verwenden'; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $ok.Location = New-Object System.Drawing.Point(372, 276); $ok.Size = New-Object System.Drawing.Size(90, 28)
     $cancel = New-Object System.Windows.Forms.Button
     $cancel.Text = 'Abbrechen'; $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -1080,9 +1063,10 @@ function Show-VscPickerDialog {
 }
 
 function Enter-PlanARenewal {
-    # Gemeinsamer Sprung in den Plan-A-"Anfordern"-Schritt (Index 2) fuer eine
-    # bestehende Karte - ohne Neuerstellung (analog zum Fortsetzen eines Antrags).
-    param($Reader, [string]$TargetAccount)
+    # Sprung in den Plan-A-"Anfordern"-Schritt fuer eine BESTEHENDE Karte - ohne
+    # Neuerstellung. Wird für "bestehende VSC verwenden" genutzt (Konto kommt vom
+    # Szenario, NICHT von der Karte). -OfflineDirect fuer den Cloud/CBA-Weg.
+    param($Reader, [string]$TargetAccount, [switch]$OfflineDirect)
     $script:TargetAccount = $TargetAccount   # $null = aktueller Benutzer
     $script:PlanA_VscCreated = $true
     $script:PlanA_CardName = $Reader.FriendlyName
@@ -1090,7 +1074,7 @@ function Enter-PlanARenewal {
     $script:PlanA_CertIssued = $false
     $script:PlanA_PendingRequestId = $null
     $script:PlanA_RenewMode = $true
-    $script:PlanA_OfflineDirect = $false
+    $script:PlanA_OfflineDirect = [bool]$OfflineDirect
     $script:PlanEntryFrom = 'Scenario'
     $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
@@ -1118,6 +1102,55 @@ function Enter-PlanBRenewal {
     $script:ActivePlan = 'B'
     $tabPlanB.Visible = $true
     Show-PlanBStep -Index 2
+}
+
+function Show-VscChoiceDialog {
+    # Fragt, ob eine NEUE virtuelle Smartcard erstellt oder eine BESTEHENDE verwendet
+    # werden soll. Gibt 'new', 'existing' oder $null (abgebrochen) zurueck.
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Virtuelle Smartcard'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
+    $dlg.ClientSize = New-Object System.Drawing.Size(460, 150)
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = 'Neue virtuelle Smartcard erstellen oder eine vorhandene verwenden?'
+    $lbl.Location = New-Object System.Drawing.Point(16, 16)
+    $lbl.Size = New-Object System.Drawing.Size(428, 40)
+    $dlg.Controls.Add($lbl)
+
+    $btnNew = New-Object System.Windows.Forms.Button
+    $btnNew.Text = 'Neue VSC erstellen'
+    $btnNew.Location = New-Object System.Drawing.Point(16, 68); $btnNew.Size = New-Object System.Drawing.Size(200, 34)
+    $btnExisting = New-Object System.Windows.Forms.Button
+    $btnExisting.Text = 'Bestehende verwenden'
+    $btnExisting.Location = New-Object System.Drawing.Point(228, 68); $btnExisting.Size = New-Object System.Drawing.Size(200, 34)
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = 'Abbrechen'; $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $btnCancel.Location = New-Object System.Drawing.Point(344, 112); $btnCancel.Size = New-Object System.Drawing.Size(100, 26)
+
+    $script:VscChoice = $null
+    $btnNew.Add_Click({ $script:VscChoice = 'new'; $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK })
+    $btnExisting.Add_Click({ $script:VscChoice = 'existing'; $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK })
+
+    $dlg.Controls.AddRange(@($btnNew, $btnExisting, $btnCancel))
+    $dlg.CancelButton = $btnCancel
+    if ($dlg.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { return $script:VscChoice }
+    return $null
+}
+
+function Select-ExistingVsc {
+    # Waehlt eine vorhandene VSC als Schluesseltraeger (fuer "bestehende verwenden").
+    # Gibt den gewaehlten Reader zurueck oder $null (keine vorhanden / abgebrochen).
+    $readers = @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName })
+    if ($readers.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show('Auf diesem Gerät wurde keine virtuelle Smartcard gefunden. Bitte stattdessen "Neue VSC erstellen" wählen.', 'Keine VSC vorhanden', 'OK', 'Information') | Out-Null
+        return $null
+    }
+    if ($readers.Count -eq 1) { return $readers[0] }
+    $certs = @(Get-SmartCardCertificates)
+    return (Show-VscPickerDialog -Readers $readers -Certs $certs)
 }
 
 function Invoke-RenewalCleanup {
@@ -1156,7 +1189,7 @@ function Invoke-RenewalCleanup {
     $list = ($old | ForEach-Object { "- $($_.Subject)`r`n   gültig bis $($_.NotAfter.ToString('yyyy-MM-dd')), Thumbprint $($_.Thumbprint)" }) -join "`r`n"
     $confirm = [System.Windows.Forms.MessageBox]::Show(
         "Auf der Karte liegen nach der Verlängerung noch $($old.Count) ältere(s) Zertifikat(e). Jetzt entfernen, damit nur das neue bleibt?`r`n`r`nBEHALTEN (neu):`r`n- $($keep.Subject)`r`n   gültig bis $($keep.NotAfter.ToString('yyyy-MM-dd'))`r`n`r`nENTFERNEN:`r`n$list`r`n`r`nJe Entfernung erscheint ggf. eine UAC-/PIN-Abfrage.",
-        'Verlängern - altes Zertifikat entfernen', 'YesNo', 'Question')
+        'Karte aufräumen - altes Zertifikat entfernen', 'YesNo', 'Question')
     if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
         Write-WizardLog -Message 'Aufräumen: vom Benutzer abgelehnt - ältere Zertifikate bleiben auf der Karte.' -Level Info
         return
@@ -1184,69 +1217,6 @@ function Invoke-RenewalCleanup {
     }
 }
 
-function Start-Renewal {
-    # Szenario 02: re-enrollt auf eine BESTEHENDE Karte - ohne Neuerstellung.
-    # WICHTIG: die Identitaet wird aus dem vorhandenen Zertifikat der Karte abgeleitet,
-    # NICHT vom angemeldeten Benutzer angenommen. Sonst wuerde (bei Build-from-AD-
-    # Templates) fuer den falschen Benutzer ausgestellt - z.B. ein Normaluser-Cert auf
-    # eine Admin-Karte.
-    $readers = @(Get-VirtualSmartCardReaders)
-    if ($readers.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show('Keine virtuelle Smartcard gefunden. Für eine Erstausstellung bitte Szenario 01 (Bootstrap) oder 03 (direkt) verwenden.', 'Verlängern', 'OK', 'Information') | Out-Null
-        return
-    }
-    $certs = @(Get-SmartCardCertificates)
-    if ($readers.Count -eq 1) {
-        $sel = $readers[0]
-    } else {
-        $sel = Show-VscPickerDialog -Readers $readers -Certs $certs
-        if (-not $sel) { return }
-    }
-
-    # Karten-Identitaet aus ihrem (neuesten) Zertifikat bestimmen.
-    $cardCerts = @($certs | Where-Object { $_.Reader -and $sel.PcscName -and $_.Reader -eq $sel.PcscName })
-    $cardCert = $cardCerts | Sort-Object NotAfter -Descending | Select-Object -First 1
-    $cardUpn = if ($cardCert) { $cardCert.Upn } else { $null }
-    $currentUpn = Get-CurrentUpn
-
-    if (-not $cardCert) {
-        [System.Windows.Forms.MessageBox]::Show("Auf der Karte '$($sel.FriendlyName)' wurde kein Zertifikat gefunden, aus dem sich das Konto ableiten liesse. Verlängern setzt ein vorhandenes Zertifikat voraus - für eine Erstausstellung bitte Szenario 01 (Bootstrap) oder 03 (direkt) verwenden.", 'Verlängern', 'OK', 'Warning') | Out-Null
-        return
-    }
-
-    $isSelf = $cardUpn -and $currentUpn -and ($cardUpn.Trim() -ieq $currentUpn.Trim())
-
-    if ($isSelf) {
-        # Karte gehoert dem aktuell angemeldeten Benutzer -> direktes Self-Renewal.
-        Write-WizardLog -Message "Verlängern (eigenes Konto '$cardUpn'): Re-Enroll auf '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" }). Im Kartenauswahl-Dialog dieselbe Karte wählen." -Level Info
-        Enter-PlanARenewal -Reader $sel -TargetAccount $null
-        return
-    }
-
-    # Karte gehoert einem ANDEREN Konto (z.B. Admin) -> NICHT als aktueller Benutzer
-    # ausstellen. Es muss fuer dieses Konto ausgestellt werden (EOBO bzw. Plan B).
-    $cardIdentity = if ($cardUpn) { $cardUpn } else { $cardCert.Subject }
-    $hasEa = (@(Get-EnrollmentAgentCertificates)).Count -gt 0
-
-    if (-not $hasEa) {
-        # Kein EA-Zertifikat -> geführter Plan-B-Renewal: CSR lokal auf die bestehende
-        # Karte, Einreichung als das Zielkonto (RDP-Schritt). So wird NICHT fälschlich
-        # für den angemeldeten Benutzer ausgestellt.
-        [System.Windows.Forms.MessageBox]::Show("Die Karte '$($sel.FriendlyName)' gehört dem Konto '$cardIdentity' (nicht deinem angemeldeten Benutzer '$currentUpn').`r`n`r`nDa kein Enrollment-Agent-Zertifikat vorliegt, wird per Plan B verlängert: Der CSR entsteht jetzt lokal auf der Karte; die Einreichung erfolgt anschließend ALS dieses Konto (RDP-Schritt - dort als '$cardIdentity' anmelden, z.B. mit der noch gültigen Karte). Danach wird das neue Zertifikat wieder lokal auf die Karte übernommen.`r`n`r`n(Alternativ: einmalig ein EA-Zertifikat beantragen - dann geht Verlängern ohne RDP.)", 'Verlängern über Plan B', 'OK', 'Information') | Out-Null
-        Write-WizardLog -Message "Verlängern (Fremdkonto '$cardIdentity', Plan B) auf Karte '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" })." -Level Info
-        Enter-PlanBRenewal -Reader $sel -TargetAccount $cardIdentity
-        return
-    }
-
-    # EA-Zertifikat vorhanden: per EOBO fuer das Kartenkonto ausstellen. Zielkonto
-    # bestaetigen/ergaenzen lassen (EOBO braucht moeglichst DOMAIN\Konto).
-    [System.Windows.Forms.MessageBox]::Show("Die Karte '$($sel.FriendlyName)' gehört dem Konto '$cardIdentity' (nicht deinem angemeldeten Benutzer '$currentUpn'). Die Verlängerung wird per Enroll on Behalf Of für dieses Konto ausgestellt - bitte im nächsten Dialog das Zielkonto bestätigen (DOMAIN\Konto bevorzugt).", 'Verlängern - anderes Konto', 'OK', 'Information') | Out-Null
-    $acct = Show-AccountInputDialog -Prefill $cardIdentity
-    if (-not $acct) { return }
-    Write-WizardLog -Message "Verlängern (Fremdkonto, EOBO) für '$acct' auf Karte '$($sel.FriendlyName)'$(if ($sel.PcscName) { " ($($sel.PcscName))" })." -Level Info
-    Enter-PlanARenewal -Reader $sel -TargetAccount $acct
-}
-
 function Invoke-ScenarioNextClick {
     if (-not $script:SelectedScenario) {
         $lblScnSub.Visible = $false
@@ -1263,42 +1233,64 @@ function Invoke-ScenarioNextClick {
     }
     switch ($script:SelectedScenario) {
         1 {
-            # Bootstrap: separates Konto. Mit EA-Zertifikat per EOBO (Plan A, ohne
-            # temporäres Passwort); sonst Plan B, der das einmalige Bootstrap-Passwort braucht.
+            # VSC für onprem-Adminkonto (separates Konto): mit EA-Zertifikat per EOBO
+            # (Plan A), sonst Plan B/Bootstrap (Einreichung ALS das Zielkonto per RDP).
+            # Identität = das eingegebene Zielkonto (NICHT von der Karte abgeleitet).
             $acct = Show-AccountInputDialog
             if (-not $acct) { return }
             $script:TargetAccount = $acct
-            $plan = Get-ScenarioPlanForSeparateAccount
+            $script:PlanA_OfflineDirect = $false
+            $plan = Get-ScenarioPlanForSeparateAccount   # 'A' (EOBO) / 'B'
             if ($plan -eq 'B') {
-                [System.Windows.Forms.MessageBox]::Show("Bootstrap für $acct (Plan B):`r`n`r`nDas Konto muss für die erste Ausstellung vorübergehend Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), damit der Submit als Zielkonto erfolgen kann. Nach erfolgreicher Übernahme das Konto wieder auf 'Smartcard erforderlich' setzen.", 'Bootstrap - Hinweis', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("Für $acct wird per Plan B ausgestellt:`r`n`r`nKein EA-Zertifikat vorhanden - die Einreichung erfolgt ALS das Zielkonto (RDP). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.", 'Onprem-Adminkonto - Plan B', 'OK', 'Information') | Out-Null
             } else {
-                [System.Windows.Forms.MessageBox]::Show("Bootstrap für $acct (Plan A / Enroll on Behalf Of):`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt. Ein temporäres Passwort ist dafür NICHT nötig.", 'Bootstrap - Hinweis', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("Für $acct wird per Enroll on Behalf Of (Plan A) ausgestellt:`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt, ohne RDP und ohne temporäres Passwort.", 'Onprem-Adminkonto - EOBO', 'OK', 'Information') | Out-Null
             }
-            Enter-Plan -Plan $plan
+            $choice = Show-VscChoiceDialog
+            if (-not $choice) { return }
+            if ($choice -eq 'existing') {
+                $card = Select-ExistingVsc
+                if (-not $card) { return }
+                if ($plan -eq 'A') { Enter-PlanARenewal -Reader $card -TargetAccount $acct }
+                else { Enter-PlanBRenewal -Reader $card -TargetAccount $acct }
+            } else {
+                Enter-Plan -Plan $plan
+            }
         }
         2 {
-            # Verlängern: Re-Enroll auf eine bestehende Karte (Kartenauswahl + Restlaufzeit,
-            # dann direkt in den Anfordern-Schritt, ohne Neuerstellung).
-            Start-Renewal
+            # VSC für onprem- oder hybrid-Konto: DEIN eigenes Konto, Direkt-Ausstellung.
+            $script:TargetAccount = $null
+            $script:PlanA_OfflineDirect = $false
+            $choice = Show-VscChoiceDialog
+            if (-not $choice) { return }
+            if ($choice -eq 'existing') {
+                $card = Select-ExistingVsc
+                if (-not $card) { return }
+                Enter-PlanARenewal -Reader $card -TargetAccount $null
+            } else {
+                Enter-Plan -Plan 'A'
+            }
         }
         3 {
-            # Direkt für dich: kein separates Konto, direkt in den Plan-A-Ablauf.
-            $script:TargetAccount = $null
-            Enter-Plan -Plan 'A'
-        }
-        4 {
-            # Cloud-Konto (Entra CBA): Zertifikat über das Offline-/Supply-in-request-
-            # Template ausstellen - als DU einreichen, Ziel-UPN im CSR. KEIN EA, KEIN RDP.
-            # NUR für Entra CBA/Cloud (kein On-Prem-Logon - SID/KB5014754, siehe Guard).
+            # VSC für Cloudonly-Adminkonto (Entra CBA): Offline-/Supply-in-request-Template,
+            # als DU einreichen, Ziel-UPN im CSR. NUR Cloud/CBA (kein On-Prem-Logon).
             $acct = Show-AccountInputDialog -Prompt 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):'
             if (-not $acct) { return }
             $script:TargetAccount = $acct
             $script:PlanA_OfflineDirect = $true
-            [System.Windows.Forms.MessageBox]::Show("Zertifikat für $acct über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n- Danach in Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe RUNBOOK). Alternative ganz ohne PKI: FIDO2/Passkey auf dem YubiKey.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID (starke Zuordnung, KB5014754). Für On-Prem-Konten stattdessen Szenario 06 (EOBO) oder 01 (Bootstrap/RDP).`r`n`r`nIn Schritt 3 das Offline-Template wählen/eintragen.", 'Cloud-Konto / Entra CBA', 'OK', 'Information') | Out-Null
-            Enter-Plan -Plan 'A'
+            [System.Windows.Forms.MessageBox]::Show("Zertifikat für $acct über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n- Danach in Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe RUNBOOK). Alternative ganz ohne PKI: FIDO2/Passkey.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID (starke Zuordnung, KB5014754). Für On-Prem-Konten stattdessen Szenario 01 (onprem-Adminkonto) oder 05 (EOBO).", 'Cloud-Konto / Entra CBA', 'OK', 'Information') | Out-Null
+            $choice = Show-VscChoiceDialog
+            if (-not $choice) { return }
+            if ($choice -eq 'existing') {
+                $card = Select-ExistingVsc
+                if (-not $card) { return }
+                Enter-PlanARenewal -Reader $card -TargetAccount $acct -OfflineDirect
+            } else {
+                Enter-Plan -Plan 'A'
+            }
         }
-        5 { Show-VscInventoryDialog -Owner $form }
-        6 {
+        4 { Show-VscInventoryDialog -Owner $form }
+        5 {
             # EOBO für ein anderes Konto: Zielkonto abfragen, dann Plan A (EA) bzw. Plan B.
             $acct = Show-AccountInputDialog
             if (-not $acct) { return }
@@ -1472,13 +1464,13 @@ $pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $btnRequ
 $btnRequestCertA.Add_Click({
     # Fuer ein separates Zielkonto gibt es zwei direkte Wege:
     #  - EOBO (Enroll on Behalf Of): braucht ein EA-Zertifikat, Build-from-AD.
-    #  - Offline-Direkt (Szenario 04, Cloud/Entra CBA): KEIN EA - du reichst als DU ein,
+    #  - Offline-Direkt (Szenario 03, Cloud/Entra CBA): KEIN EA - du reichst als DU ein,
     #    Subject/SAN des Ziels stehen im CSR (Supply-in-request). NUR Cloud, kein On-Prem.
     $eoboThumbprint = $null
     if ($script:TargetAccount -and -not $script:PlanA_OfflineDirect) {
         $eaCerts = @(Get-EnrollmentAgentCertificates)
         if ($eaCerts.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show('Für ein separates On-Prem-Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder Plan B (RDP als Zielkonto) verwenden. (Der Offline-Template-Weg aus Szenario 04 taugt nur für Cloud/Entra CBA, NICHT für On-Prem-Logon.)', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Für ein separates On-Prem-Konto ist hier ein Enrollment-Agent-Zertifikat nötig (Enroll on Behalf Of) - es wurde keins im Zertifikatsspeicher gefunden. Entweder in den Einstellungen ein EA-Zertifikat beantragen und diesen Schritt wiederholen, oder Plan B (RDP als Zielkonto) verwenden. (Der Offline-Template-Weg aus Szenario 03 taugt nur für Cloud/Entra CBA, NICHT für On-Prem-Logon.)', 'Separates Konto: EA-Zertifikat nötig', 'OK', 'Information') | Out-Null
             return
         }
         $eoboThumbprint = $eaCerts[0].Thumbprint
@@ -1638,7 +1630,7 @@ function Get-CardValiditySummaryText {
         $lines += "  $i) $($c.Subject)"
         $lines += "     gültig $($c.NotBefore.ToString('yyyy-MM-dd')) bis $($c.NotAfter.ToString('yyyy-MM-dd'))  (Thumbprint $($c.Thumbprint))"
     }
-    $lines += 'Hinweis: Beim Smartcard-Logon nutzt Windows i.d.R. das erste passende Zertifikat. Für "eine Karte = ein Zertifikat" die älteren entfernen (Aufräum-Abfrage nach dem Verlängern oder Szenario 05).'
+    $lines += 'Hinweis: Beim Smartcard-Logon nutzt Windows i.d.R. das erste passende Zertifikat. Für "eine Karte = ein Zertifikat" die älteren entfernen (Aufräum-Abfrage nach dem Erneuern oder Szenario 04).'
     return ($lines -join "`r`n")
 }
 

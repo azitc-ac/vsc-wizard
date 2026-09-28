@@ -100,6 +100,18 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Zuletzt erledigt (Ergänzung)
 
+- **Szenarien nach Kontotyp umgebaut, 02 (Erneuern) aufgelöst → jetzt fünf:**
+  01 „VSC für onprem-Adminkonto" (separat; EOBO/Bootstrap), 02 „VSC für onprem- oder
+  hybrid-Konto" (du selbst, direkt), 03 „VSC für Cloudonly-Adminkonto" (Entra CBA,
+  Offline), 04 „VSCs verwalten", 05 „EOBO". YubiKey-Begriff raus.
+  Das frühere „Erneuern" ist **keine** eigene Kachel mehr: in 01/02/03 fragt der
+  Wizard **„neue VSC erstellen ODER bestehende verwenden"** (Helfer
+  `Show-VscChoiceDialog` + `Select-ExistingVsc`; „bestehende" nutzt die
+  Enter-Plan(A/B)Renewal-Maschinerie). **Identität kommt IMMER aus dem Szenario/der
+  Kontowahl**, nicht mehr aus dem Kartenzertifikat (fixt die früheren Verwechslungen).
+  `Start-Renewal` entfernt; alle Szenario-Nummern in Routing/Availability/Guards/
+  Meldungen und im RUNBOOK durchgängig neu (Geschwister-Sweep).
+
 - **Start-Splash mit Fortschritt:** kleiner Splash beim Start (Modul laden →
   Konfiguration → Oberfläche → Umgebung erkennen → Fertig), schließt sich, sobald das
   Hauptfenster erscheint. Kein „Blackbox"-Start mehr.
