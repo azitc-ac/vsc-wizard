@@ -75,6 +75,31 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Backlog / offene Punkte
 
+0. **IDEE (2026-09-29): Rollout per Intune-Win32-App, „so einfach wie möglich“ für
+   Entra-joined Clients.** Noch nicht begonnen.
+   - **Teil 1 (Systemkontext, Intune-Win32-App/Skript):** VSC auf dem Ziel-PC anlegen,
+     Start-PIN = Computername. Erkennungsregel für Intune (z.B. VSC vorhanden oder
+     Registry-Marker).
+   - **Teil 2 (Benutzerkontext):** Ist ein Benutzer angemeldet, einen vereinfachten
+     Assistenten zeigen. EXE-Schalter z.B. `-Simple` (evtl. `-Silent` für Teil 1):
+     nur Szenario 02 bzw. direkt „Der folgende Assistent führt dich durch die
+     Erstellung einer virtuellen Smartcard“. Am Ende **erzwungene PIN-Änderung**
+     (Set-VscPin / Show-VscPinChangeDialog, alte PIN = Computername vorbelegt).
+   - Vorab zu klären:
+     - Intune-Win32-Apps laufen als SYSTEM. Die UI muss in der Benutzersitzung
+       erscheinen (Aufgabenplanung mit dem angemeldeten Benutzer, ServiceUI o.ä.).
+       Alternativ zwei Apps: Systemkontext (VSC) + Benutzerkontext (Assistent).
+     - Angemeldeten Benutzer erkennen (Besitzer von explorer.exe / WTS-Sitzungen).
+     - Die Start-PIN ist bekannt/erratbar → PIN-Änderung wirklich erzwingen (Assistent
+       erst beenden, wenn geändert; bis dahin keinen Nutzen aus der Karte ziehen lassen).
+       Die PIN-Richtlinie (Mindestlänge) muss zum Computernamen passen (NetBIOS max. 15
+       Zeichen, evtl. kürzer als die Mindestlänge → auffüllen oder Richtlinie anpassen).
+     - Szenario 02 auf einem EJ-Client braucht ein On-Prem-TGT (Cloud Kerberos Trust)
+       und eine erreichbare CA (Sichtverbindung/VPN), sonst Plan B.
+     - Alternative prüfen: Intune-SCEP/PKCS-Profile können nicht in den
+       Smartcard-KSP registrieren (nur TPM-/Software-KSP bzw. WHfB) → der Assistent
+       bleibt nötig.
+
 1. **GA-Zweig: Cloud-only automatisch erkennen/abfragen.** Der geführte Cloud-GA-Weg
    soll erkennen (oder fragen), ob das Zielkonto **cloud-only** ist (kein AD-Objekt /
    kein On-Prem-Pendant / kein CKT-TGT möglich) und dann automatisch auf den
