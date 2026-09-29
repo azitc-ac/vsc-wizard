@@ -67,16 +67,30 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   **Logon abgelehnt**. UPN-im-SAN allein reicht nicht mehr. → **On-Prem-Konten:
   EOBO (06) oder Bootstrap/RDP (01).** **Entra CBA (Cloud):** braucht keine AD-SID,
   mappt per UPN/Binding + vertraut der CA-Kette → Offline-Template ist DER Weg.
-  (Escape-Hatch für On-Prem-Offline-Certs: manuell **starke** `altSecurityIdentities`
-  am Zielkonto setzen — X509 Issuer+Serial / SKI / SHA1-PublicKey; noch nicht im Tool.)
+  (Escape-Hatch für On-Prem-Offline-Certs: **starke** `altSecurityIdentities` am
+  Zielkonto — X509 Issuer+Serial / SKI / SHA1-PublicKey. **Wird NICHT im Wizard gebaut**
+  (Entscheidung 2026-09-29): bei uns läuft das **server-seitig** — ein DC-Listener greift
+  das KDC-Weak-Mapping-Event (i.d.R. ID 39, Quelle *Kerberos-Key-Distribution-Center*)
+  ab und schreibt automatisch die starke Bindung, beim nächsten Logon wirkt sie.
+  Zentral, rechtekonform, kein Client-Schreibrecht nötig → dem Client-Feature überlegen.
+  Der bestehende Listener wird bei Gelegenheit gemeinsam reviewt. **Folge:** in einer
+  Umgebung mit solcher Auto-Remediation gilt „Offline = nur Cloud" faktisch nicht mehr
+  (Szenario-03-Cert wird on-prem beim 2. Versuch nutzbar) - der **allgemeine Guard im
+  Tool bleibt aber konservativ**, da nicht jede Org den Listener hat.)
 - **CBA-Stolperstein:** CRL/CDP muss für **Entra erreichbar** sein (On-Prem-CDP ist
   oft nur intern) → sonst kann der CBA-Login an der Sperrprüfung scheitern.
   Binding **UPN → userPrincipalName**, MFA-Stufe passend setzen.
 
 ## Backlog / offene Punkte
 
-0. **IDEE (2026-09-29): Rollout per Intune-Win32-App, „so einfach wie möglich“ für
-   Entra-joined Clients.** Noch nicht begonnen.
+0. **Rollout per Intune-Win32-App** — Design abgestimmt in **`docs/intune-rollout.md`**
+   (2026-09-29). Kurz: ZWEI Apps — App 1 (Device/SYSTEM) legt leere VSC mit Start-PIN aus
+   dem Computernamen an (silent); App 2 (User) `-Simple`-Assistent: PIN-Änderung ERZWINGEN,
+   dann Szenario-02-Ausstellung. Tool-seitig zu bauen: Startparameter `-Provision -Silent`
+   und `-Simple`, `New-VirtualSmartCard -Pin` (supplied-PIN, betrifft Helfer+ARM64 →
+   Hardware-Test), Registry-Marker. Reihenfolge: erst `-Simple` (ohne HW-Risiko), dann
+   supplied-PIN, dann Paketierung. Details/offene Punkte im Doc.
+   <!-- Alt-Outline unten bleibt als Detail; Doc ist maßgeblich. -->
    - **Teil 1 (Systemkontext, Intune-Win32-App/Skript):** VSC auf dem Ziel-PC anlegen,
      Start-PIN = Computername. Erkennungsregel für Intune (z.B. VSC vorhanden oder
      Registry-Marker).
