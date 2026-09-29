@@ -52,7 +52,7 @@ wertlos.
 
 ---
 
-## Szenario 01 - VSC fuer onprem-Adminkonto
+## Szenario 01 - VSC fuer fremdes onprem-/hybrid-Konto
 
 **Wann:** Eine VSC fuer ein SEPARATES On-Prem-Admin-Konto (nicht das gerade
 angemeldete). Ausstellung per **EOBO** (mit Enrollment-Agent-Zertifikat, ohne RDP)
@@ -86,7 +86,7 @@ also auch bei bereits abgelaufenem Zertifikat.
 
 ---
 
-## Szenario 02 - VSC fuer onprem- oder hybrid-Konto
+## Szenario 02 - VSC fuer eigenes onprem-/hybrid-Konto
 
 **Wann:** Fuer das AKTUELL angemeldete Konto (reines On-Prem-AD-Konto oder hybrid
 synchronisiert), wenn die CA von hier erreichbar ist (DJ-Client oder EJ-Client mit
@@ -108,7 +108,12 @@ On-Prem-DNS das Problem (siehe Abschnitt "Direkt-Einreichung pruefen").
 
 ---
 
-## Szenario 03 - VSC fuer Cloudonly-Adminkonto (Entra CBA)
+## Szenario 03 - VSC fuer fremdes Cloud-only-Konto (Entra CBA)
+
+> **Nur fuer reine Cloud-Konten.** Existiert das Konto auch im lokalen AD (Hybrid-Konto),
+> ist Szenario 01 (fremdes Konto) bzw. 02 (eigenes Konto) richtig: deren Zertifikat traegt
+> die Konto-SID und funktioniert fuer Entra CBA UND lokales Kerberos. Der Wizard prueft das
+> nach der UPN-Eingabe per LDAP (wenn das AD erreichbar ist) und bietet den Wechsel an.
 
 **Wann:** Ein CLOUD-ONLY-Konto (Entra, kein On-Prem-Pendant) soll ein Zertifikat
 fuer **Entra CBA** bekommen. Du reichst als DU (ein Enroll-berechtigtes AD-Konto)

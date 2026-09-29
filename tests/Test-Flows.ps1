@@ -71,6 +71,9 @@ $global:NextChoice = 'new'
 function Show-AccountInputDialog { param([string]$Prefill, [string]$Prompt) $global:Log.Add("    (Konto-Dialog -> jdoe@contoso.com)"); return 'jdoe@contoso.com' }
 function Show-VscChoiceDialog { $global:Log.Add("    (VSC-Wahl -> $($global:NextChoice))"); return $global:NextChoice }
 function Show-VscPickerDialog { param($Readers, $Certs) $r = @($Readers)[0]; $global:Log.Add("    (VSC-Picker -> $($r.FriendlyName))"); return $r }
+# Hybrid-Prüfung (Szenario 03) unabhängig vom erreichbaren AD: Standard "AD nicht erreichbar".
+$global:OnPremAnswer = $null
+function Find-OnPremAccountByUpn { param([string]$Upn, [string]$Domain) $global:Log.Add("    (AD-Suche $Upn -> $(if ($global:OnPremAnswer) { 'gefunden' } else { 'nicht erreichbar' }))"); return $global:OnPremAnswer }
 
 function Step([string]$Name, [scriptblock]$Action) {
     $before = $Error.Count
@@ -133,6 +136,29 @@ foreach ($scn in 1, 2, 3, 5) {
 $global:Log.Add('=== Szenario 4 ===')
 Reset-Run
 Step 'Szenario 4 wählen+Weiter' { Select-ScenarioById -Id 4; Invoke-ScenarioNextClick }
+
+# Szenario 03 mit Hybrid-Konto: "Ja" muss zu Szenario 01 wechseln (Zielkonto bleibt,
+# kein Offline-Template), "Nein" bleibt bei 03 (Offline-Template).
+$global:OnPremAnswer = [pscustomobject]@{ Found = $true; Domain = 'contoso.local'; DistinguishedName = 'CN=jdoe,OU=Tier2,DC=contoso,DC=local'; SamAccountName = 'jdoe' }
+foreach ($ans in 'Yes', 'No') {
+    $global:Log.Add("=== Szenario 3 Hybrid -> $ans ===")
+    $global:NextChoice = 'new'
+    Reset-Run
+    Select-ScenarioById -Id 3; $script:ScnAvailable[1] = $true; $script:ScnAvailable[3] = $true
+    $global:MsgAnswer = [System.Windows.Forms.DialogResult]::$ans
+    Step "Szenario 3 Hybrid ($ans)" { Invoke-ScenarioNextClick }
+    $global:MsgAnswer = [System.Windows.Forms.DialogResult]::No
+    $planOpen = (OwnVisible $tabPlanA) -or (OwnVisible $tabPlanB)
+    if ($ans -eq 'Yes') {
+        if ($script:SelectedScenario -ne 1) { $global:Errors.Add("[Hybrid Ja] nicht zu Szenario 01 gewechselt (SelectedScenario=$($script:SelectedScenario))") }
+        if ($script:PlanA_OfflineDirect) { $global:Errors.Add('[Hybrid Ja] Offline-Template (Szenario 03) noch aktiv') }
+    } else {
+        if ($script:SelectedScenario -ne 3 -or -not $script:PlanA_OfflineDirect) { $global:Errors.Add("[Hybrid Nein] nicht bei Szenario 03 geblieben (SelectedScenario=$($script:SelectedScenario), OfflineDirect=$($script:PlanA_OfflineDirect))") }
+    }
+    if (-not $planOpen) { $global:Errors.Add("[Hybrid $ans] kein Plan geöffnet") }
+    if ($script:TargetAccount -ne 'jdoe@contoso.com') { $global:Errors.Add("[Hybrid $ans] Zielkonto verloren: '$($script:TargetAccount)'") }
+}
+$global:OnPremAnswer = $null
 
 # Plan B für das eigene Konto (ohne Zielkonto) direkt
 $global:Log.Add('=== Plan B eigenes Konto ===')

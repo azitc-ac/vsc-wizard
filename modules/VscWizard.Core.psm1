@@ -750,6 +750,47 @@ function Get-EnvironmentCapabilities {
     }
 }
 
+function Find-OnPremAccountByUpn {
+    # Gibt es das (als Cloud-Konto gedachte) Zielkonto AUCH im lokalen AD? Dann ist es ein
+    # Hybrid-Konto, und Szenario 03 (Offline-Template ohne SID) ist der falsche Weg: die
+    # Smartcard-Anmeldung am lokalen DC scheitert (starke Zuordnung, KB5014754), SSO auf
+    # lokale Ressourcen fehlt. Richtig: Szenario 01 (fremdes on-prem/hybrid-Konto).
+    # Liefert $null, wenn das AD nicht erreichbar ist (dann KEIN Hinweis, nichts blockiert),
+    # sonst ein Objekt mit Found = $true/$false.
+    param([Parameter(Mandatory)][string]$Upn, [string]$Domain, [int]$TimeoutSeconds = 8)
+    if (-not $Domain) {
+        # Kerberos-Realm aus dem On-Prem-TGT (funktioniert auch auf Entra-joined Geräten
+        # mit Cloud Kerberos Trust), sonst die Domäne des Join-Status.
+        try {
+            $m = [regex]::Match(((& klist 2>$null) -join "`n"), 'krbtgt/([A-Za-z0-9._-]+)')
+            if ($m.Success) { $Domain = $m.Groups[1].Value }
+        } catch { }
+        if (-not $Domain) { try { $Domain = (Get-DomainJoinState).Domain } catch { } }
+    }
+    if (-not $Domain -or $Domain -eq 'WORKGROUP') { return $null }
+    $escaped = $Upn -replace '\\', '\5c' -replace '\*', '\2a' -replace '\(', '\28' -replace '\)', '\29'
+    Enter-WizardBusy -Text 'Prüfe, ob das Konto im lokalen AD existiert...'
+    try {
+        $root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Domain")
+        $ds = New-Object System.DirectoryServices.DirectorySearcher($root)
+        $ds.Filter = "(&(objectCategory=person)(objectClass=user)(userPrincipalName=$escaped))"
+        $ds.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $ds.ServerTimeLimit = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        [void]$ds.PropertiesToLoad.AddRange(@('distinguishedName', 'sAMAccountName'))
+        $hit = $ds.FindOne()
+        if (-not $hit) {
+            Write-WizardLog -Message "Konto '$Upn' im lokalen AD ($Domain) nicht gefunden - reines Cloud-Konto." -Level Info
+            return [pscustomobject]@{ Found = $false; Domain = $Domain }
+        }
+        $dn = "$($hit.Properties['distinguishedname'])"; $sam = "$($hit.Properties['samaccountname'])"
+        Write-WizardLog -Message "Konto '$Upn' existiert auch im lokalen AD: $dn (sAMAccountName $sam) - Hybrid-Konto." -Level Info
+        return [pscustomobject]@{ Found = $true; Domain = $Domain; DistinguishedName = $dn; SamAccountName = $sam }
+    } catch {
+        Write-WizardLog -Message "Lokales AD ($Domain) nicht abfragbar: $($_.Exception.Message) - Hybrid-Prüfung übersprungen." -Level Info
+        return $null
+    } finally { Exit-WizardBusy }
+}
+
 #endregion
 
 #region Virtuelle Smartcard

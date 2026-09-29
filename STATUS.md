@@ -252,6 +252,20 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   Richtlinie verletzt; sonst Fehler + Anleitung Strg+Alt+Entf.
   **Im Wizard (EXE) interaktiv bestätigt (2026-09-29): PIN geändert.**
   Verworfen: WinRT `RequestPinChangeAsync` — nur UWP, sonst 0x80070490.
+## Zuletzt erledigt (2026-09-29): Hybrid-Erkennung in Szenario 03
+- Systematik: **02 = eigenes on-prem/hybrid-Konto, 01 = fremdes on-prem/hybrid-Konto,
+  03 = fremdes Cloud-only-Konto.** Titel/Texte entsprechend (vorher "onprem-Adminkonto"
+  ohne "hybrid" -> Verwechslung).
+- `Find-OnPremAccountByUpn`: LDAP-Suche nach der UPN im lokalen AD (Realm aus klist,
+  8 s Timeout, Filter-Escaping). Gefunden -> Warnung "Hybrid-Konto erkannt" mit
+  Ja = Wechsel zu 01 (Konto vorausgefüllt) / Nein = trotzdem 03 / Abbrechen. AD nicht
+  erreichbar -> kein Hinweis. Test-Flows prüft beide Zweige (Gegenprobe ok).
+- Anlass: jdoe@contoso.com (Hybrid, OU=Tier2) mit Szenario 03 ausgestellt. Befund:
+  Entra-joined + RDP/Anmeldebildschirm mit VSC -> Entra CBA (SID S-1-12-1-..., Name
+  wird als home\<sam> angezeigt); `runas /smartcard` mit dem 03-Zertifikat -> 1326
+  (lokaler DC, keine SID/altSecId). UAC mit Smartcard für jdoe -> Fehler 740: noch
+  ungeklärt (Test als jdoe am Anmeldebildschirm steht aus).
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird

@@ -1217,7 +1217,7 @@ function Invoke-ModeSelectNextClick {
 # Szenario-Definitionen (Reihenfolge wie im Runbook). Steps: T = Tag, X = Text.
 $script:Scenarios = @(
     [pscustomobject]@{
-        Id = 1; Title = (T 'VSC für onprem-Adminkonto'); Sub = (T 'GEFÜHRT   Separates On-Prem-Admin-Konto (nicht dein angemeldetes): EOBO (mit EA-Zertifikat) oder Bootstrap/RDP.'); Stripe = 'blue'
+        Id = 1; Title = (T 'VSC für fremdes onprem-/hybrid-Konto'); Sub = (T 'GEFÜHRT   Fremdes On-Prem- oder Hybrid-Konto (nicht dein angemeldetes, z.B. Admin-Konto): EOBO (mit EA-Zertifikat) oder Bootstrap/RDP.'); Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Du';       X = (T 'Separates Admin-Konto angeben (nicht dein angemeldetes).') }
             [pscustomobject]@{ T = 'Du';       X = (T 'Neue VSC erstellen ODER eine bestehende verwenden.') }
@@ -1227,7 +1227,7 @@ $script:Scenarios = @(
         Guard = [pscustomobject]@{ Kind = 'warn'; Text = (T 'Bootstrap-Passwort (falls nötig) ist einmalig; danach Konto wieder auf "Smartcard erforderlich". VSC dort erstellen, wo sie genutzt wird.') }
     }
     [pscustomobject]@{
-        Id = 2; Title = (T 'VSC für onprem- oder hybrid-Konto'); Sub = (T 'AUTOMATISIERT   Dein eigenes (on-prem oder hybrid synchronisiertes) Konto - Direkt-Ausstellung, wenn die CA erreichbar ist.'); Stripe = 'green'
+        Id = 2; Title = (T 'VSC für eigenes onprem-/hybrid-Konto'); Sub = (T 'AUTOMATISIERT   Dein eigenes (on-prem oder hybrid synchronisiertes) Konto - Direkt-Ausstellung, wenn die CA erreichbar ist.'); Stripe = 'green'
         Steps = @(
             [pscustomobject]@{ T = 'Du';       X = (T 'Neue VSC erstellen ODER eine bestehende verwenden.') }
             [pscustomobject]@{ T = 'Prüfung'; X = (T 'Direkt-Einreichung prüfen (Kerberos, DNS, certutil -ping).') }
@@ -1236,7 +1236,7 @@ $script:Scenarios = @(
         Guard = $null
     }
     [pscustomobject]@{
-        Id = 3; Title = (T 'VSC für Cloudonly-Adminkonto'); Sub = (T 'NUR CLOUD   Cloud-only-Konto (Entra CBA): als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'); Stripe = 'blue'
+        Id = 3; Title = (T 'VSC für fremdes Cloud-only-Konto'); Sub = (T 'NUR CLOUD   Fremdes Cloud-only-Konto (Entra CBA, nicht im lokalen AD): als DU einreichen, Ziel-UPN im CSR (Offline-Template). NICHT für On-Prem-Logon.'); Stripe = 'blue'
         Steps = @(
             [pscustomobject]@{ T = 'Du';       X = (T 'Cloud-Zielkonto/UPN angeben (Entra, z.B. gadmin@contoso.onmicrosoft.com).') }
             [pscustomobject]@{ T = 'Du';       X = (T 'Neue VSC erstellen ODER eine bestehende verwenden.') }
@@ -1246,7 +1246,7 @@ $script:Scenarios = @(
             [pscustomobject]@{ T = 'Du';       X = (T 'In Entra: ausstellende CA importieren + CBA-Binding auf UPN, CRL öffentlich erreichbar (RUNBOOK).') }
             [pscustomobject]@{ T = 'Du';       X = (T 'Alternative ganz ohne PKI: FIDO2/Passkey (Sicherheitsschlüssel oder Passkey).') }
         )
-        Guard = [pscustomobject]@{ Kind = 'danger'; Text = (T 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: onprem-Adminkonto (Szenario 01) bzw. EOBO (Szenario 05). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).') }
+        Guard = [pscustomobject]@{ Kind = 'danger'; Text = (T 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem- oder Hybrid-Konten: Szenario 01 (fremdes Konto) bzw. 02 (eigenes Konto). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).') }
     }
     [pscustomobject]@{
         Id = 4; Title = (T 'VSCs verwalten'); Sub = (T 'WERKZEUG   Karten und Zertifikate ansehen, PIN ändern, löschen.'); Stripe = 'teal'
@@ -1528,7 +1528,7 @@ function Get-ScenarioAvailability {
         }
         5 {
             if ($Caps.EaCertCount -lt 1) {
-                return [pscustomobject]@{ Available = $false; Reason = (T 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (onprem-Adminkonto, per RDP als Zielkonto).') }
+                return [pscustomobject]@{ Available = $false; Reason = (T 'Kein Enrollment-Agent-Zertifikat vorhanden - Enroll on Behalf Of ist ohne EA-Zertifikat nicht möglich (in den Einstellungen beantragbar). Für ein separates Konto sonst Szenario 01 (fremdes onprem-/hybrid-Konto, per RDP als Zielkonto).') }
             }
         }
     }
@@ -1904,6 +1904,34 @@ function Invoke-RenewalCleanup {
     }
 }
 
+function Start-ForeignOnPremScenario {
+    # Szenario 01 - VSC für ein FREMDES on-prem- oder Hybrid-Konto (nicht das angemeldete):
+    # mit EA-Zertifikat per EOBO (Plan A), sonst Plan B/Bootstrap (Einreichung ALS das
+    # Zielkonto per RDP). Identität = das eingegebene Zielkonto (NICHT von der Karte).
+    # -Prefill: Wechsel aus Szenario 03, wenn das Konto dort als Hybrid-Konto erkannt wurde.
+    param([string]$Prefill)
+    $acct = if ($Prefill) { Show-AccountInputDialog -Prefill $Prefill } else { Show-AccountInputDialog }
+    if (-not $acct) { return }
+    $script:TargetAccount = $acct
+    $script:PlanA_OfflineDirect = $false
+    $plan = Get-ScenarioPlanForSeparateAccount   # 'A' (EOBO) / 'B'
+    if ($plan -eq 'B') {
+        [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Plan B ausgestellt:`r`n`r`nKein EA-Zertifikat vorhanden - die Einreichung erfolgt ALS das Zielkonto (RDP). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.") -f $acct), (T 'Fremdes Konto - Plan B'), 'OK', 'Information') | Out-Null
+    } else {
+        [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Enroll on Behalf Of (Plan A) ausgestellt:`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt, ohne RDP und ohne temporäres Passwort.") -f $acct), (T 'Fremdes Konto - EOBO'), 'OK', 'Information') | Out-Null
+    }
+    $choice = Show-VscChoiceDialog
+    if (-not $choice) { return }
+    if ($choice -eq 'existing') {
+        $card = Select-ExistingVsc
+        if (-not $card) { return }
+        if ($plan -eq 'A') { Enter-PlanARenewal -Reader $card -TargetAccount $acct }
+        else { Enter-PlanBRenewal -Reader $card -TargetAccount $acct }
+    } else {
+        Enter-Plan -Plan $plan
+    }
+}
+
 function Invoke-ScenarioNextClick {
     if (-not $script:SelectedScenario) {
         $lblScnSub.Visible = $false
@@ -1919,31 +1947,7 @@ function Invoke-ScenarioNextClick {
         return
     }
     switch ($script:SelectedScenario) {
-        1 {
-            # VSC für onprem-Adminkonto (separates Konto): mit EA-Zertifikat per EOBO
-            # (Plan A), sonst Plan B/Bootstrap (Einreichung ALS das Zielkonto per RDP).
-            # Identität = das eingegebene Zielkonto (NICHT von der Karte abgeleitet).
-            $acct = Show-AccountInputDialog
-            if (-not $acct) { return }
-            $script:TargetAccount = $acct
-            $script:PlanA_OfflineDirect = $false
-            $plan = Get-ScenarioPlanForSeparateAccount   # 'A' (EOBO) / 'B'
-            if ($plan -eq 'B') {
-                [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Plan B ausgestellt:`r`n`r`nKein EA-Zertifikat vorhanden - die Einreichung erfolgt ALS das Zielkonto (RDP). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.") -f $acct), (T 'Onprem-Adminkonto - Plan B'), 'OK', 'Information') | Out-Null
-            } else {
-                [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Enroll on Behalf Of (Plan A) ausgestellt:`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt, ohne RDP und ohne temporäres Passwort.") -f $acct), (T 'Onprem-Adminkonto - EOBO'), 'OK', 'Information') | Out-Null
-            }
-            $choice = Show-VscChoiceDialog
-            if (-not $choice) { return }
-            if ($choice -eq 'existing') {
-                $card = Select-ExistingVsc
-                if (-not $card) { return }
-                if ($plan -eq 'A') { Enter-PlanARenewal -Reader $card -TargetAccount $acct }
-                else { Enter-PlanBRenewal -Reader $card -TargetAccount $acct }
-            } else {
-                Enter-Plan -Plan $plan
-            }
-        }
+        1 { Start-ForeignOnPremScenario }
         2 {
             # VSC für onprem- oder hybrid-Konto: DEIN eigenes Konto, Direkt-Ausstellung.
             $script:TargetAccount = $null
@@ -1963,9 +1967,33 @@ function Invoke-ScenarioNextClick {
             # als DU einreichen, Ziel-UPN im CSR. NUR Cloud/CBA (kein On-Prem-Logon).
             $acct = Show-AccountInputDialog -Prompt (T 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):')
             if (-not $acct) { return }
+            # Hybrid-Falle: gibt es das Konto AUCH im lokalen AD, ist Szenario 01 richtig
+            # (Zertifikat mit SID: Entra CBA UND lokales Kerberos). Das Offline-Template
+            # hier hat keine SID -> Smartcard-Anmeldung am lokalen DC scheitert, kein SSO.
+            # AD nicht erreichbar -> keine Aussage möglich, kein Hinweis.
+            if ($acct -match '@') {
+                $onPrem = Find-OnPremAccountByUpn -Upn $acct
+                if ($onPrem -and $onPrem.Found) {
+                    $ans = [System.Windows.Forms.MessageBox]::Show(
+                        ((T "Das Konto {0} existiert auch im lokalen AD:`r`n{1}`r`n`r`nEs ist also ein HYBRID-Konto, kein reines Cloud-Konto. Dafür ist Szenario 01 vorgesehen: dessen Zertifikat enthält die Konto-SID und funktioniert für die Entra-Anmeldung UND für das lokale AD (Kerberos, SSO auf lokale Ressourcen, starke Zuordnung KB5014754). Das Zertifikat aus Szenario 03 hat keine SID - die Smartcard-Anmeldung am lokalen DC wird abgelehnt.`r`n`r`nJa = zu Szenario 01 wechseln (empfohlen)`r`nNein = trotzdem mit Szenario 03 fortfahren`r`nAbbrechen = zurück") -f $acct, $onPrem.DistinguishedName),
+                        (T 'Hybrid-Konto erkannt'), 'YesNoCancel', 'Warning')
+                    if ($ans -eq [System.Windows.Forms.DialogResult]::Cancel) { return }
+                    if ($ans -eq [System.Windows.Forms.DialogResult]::Yes) {
+                        if ($script:ScnAvailable.ContainsKey(1) -and -not $script:ScnAvailable[1]) {
+                            [System.Windows.Forms.MessageBox]::Show(((T 'Szenario 01 ist hier nicht möglich: {0}') -f $script:ScnReason[1]), (T 'Hybrid-Konto erkannt'), 'OK', 'Information') | Out-Null
+                            return
+                        }
+                        Write-WizardLog -Message "Szenario 03 -> 01: '$acct' ist ein Hybrid-Konto ($($onPrem.DistinguishedName))." -Level Info
+                        Select-ScenarioById -Id 1
+                        Start-ForeignOnPremScenario -Prefill $acct
+                        return
+                    }
+                    Write-WizardLog -Message "Szenario 03 trotz Hybrid-Konto '$acct' fortgesetzt (Benutzerwahl)." -Level Info
+                }
+            }
             $script:TargetAccount = $acct
             $script:PlanA_OfflineDirect = $true
-            [System.Windows.Forms.MessageBox]::Show(((T "Zertifikat für {0} über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n- Danach in Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe RUNBOOK). Alternative ganz ohne PKI: FIDO2/Passkey.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID (starke Zuordnung, KB5014754). Für On-Prem-Konten stattdessen Szenario 01 (onprem-Adminkonto) oder 05 (EOBO).") -f $acct), (T 'Cloud-Konto / Entra CBA'), 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show(((T "Zertifikat für {0} über das Offline-Template (NUR Entra CBA / Cloud):`r`n`r`n- Du reichst als DU ein (dein Konto braucht Enroll-Recht auf dem Supply-in-request-Template).`r`n- Die Ziel-UPN steht im CSR-SAN; Entra mappt darüber (Binding) und vertraut der hochgeladenen CA-Kette.`r`n- Danach in Entra: ausstellende CA importieren + CBA-Binding auf UPN (siehe RUNBOOK). Alternative ganz ohne PKI: FIDO2/Passkey.`r`n`r`nWICHTIG: Das taugt NICHT für On-Prem-AD-Smartcard-Logon - dafür fehlt die Konto-SID (starke Zuordnung, KB5014754). Für On-Prem- oder Hybrid-Konten stattdessen Szenario 01 (fremdes Konto) bzw. 02 (eigenes Konto).") -f $acct), (T 'Cloud-Konto / Entra CBA'), 'OK', 'Information') | Out-Null
             $choice = Show-VscChoiceDialog
             if (-not $choice) { return }
             if ($choice -eq 'existing') {
