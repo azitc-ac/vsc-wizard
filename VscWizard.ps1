@@ -582,19 +582,20 @@ $mainArea.BringToFront()
 # historisch (jetzt ein Panel).
 $script:BusyLabel = New-Object System.Windows.Forms.Panel
 $script:BusyLabel.Size = New-Object System.Drawing.Size(280, 140)
-$script:BusyLabel.BackColor = [System.Drawing.Color]::FromArgb(255, 248, 196)
+# Zurückhaltend (weiß, dezenter Rahmen) - mittig ist sie ohnehin gut sichtbar.
+$script:BusyLabel.BackColor = $script:UI.Surface
 $script:BusyLabel.Visible = $false
-Add-BorderPaint -Control $script:BusyLabel -Color ([System.Drawing.Color]::FromArgb(224, 196, 110))
+Add-BorderPaint -Control $script:BusyLabel -Color $script:UI.Control
 $busyIcon = New-Object System.Windows.Forms.Label
 $busyIcon.Text = [string][char]0x231B   # Sanduhr
 $busyIcon.Font = New-UiFont 22
-$busyIcon.ForeColor = [System.Drawing.Color]::FromArgb(90, 70, 0)
+$busyIcon.ForeColor = $script:UI.Accent
 $busyIcon.TextAlign = 'MiddleCenter'
 $busyIcon.Location = New-Object System.Drawing.Point(1, 16); $busyIcon.Size = New-Object System.Drawing.Size(278, 44)
 $script:BusyTextLabel = New-Object System.Windows.Forms.Label
 $script:BusyTextLabel.UseMnemonic = $false
 $script:BusyTextLabel.Font = New-UiFont 10 -Semibold
-$script:BusyTextLabel.ForeColor = [System.Drawing.Color]::FromArgb(90, 70, 0)
+$script:BusyTextLabel.ForeColor = $script:UI.Text
 $script:BusyTextLabel.TextAlign = 'TopCenter'
 $script:BusyTextLabel.AutoEllipsis = $true
 $script:BusyTextLabel.Location = New-Object System.Drawing.Point(16, 66); $script:BusyTextLabel.Size = New-Object System.Drawing.Size(248, 62)

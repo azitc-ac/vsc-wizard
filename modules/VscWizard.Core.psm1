@@ -1779,10 +1779,120 @@ function Complete-CertificateEnrollment {
     $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList @('-accept', $CerPath)
     if ($result.Success) {
         Write-WizardLog -Message 'Zertifikat wurde erfolgreich auf der Smartcard hinterlegt.' -Level Success
-    } else {
-        Write-WizardLog -Message 'Zertifikatsübernahme fehlgeschlagen.' -Level Error
+        return [pscustomobject]@{ Success = $true }
     }
-    return [pscustomobject]@{ Success = $result.Success }
+    # CRYPT_E_NOT_FOUND: certreq findet den offenen Antrag im Antragsspeicher
+    # (CurrentUser\REQUEST) nicht mehr - der Schlüssel liegt aber auf der Karte. Dann
+    # direkt installieren (Install-CertificateOnSmartCard) statt neu zu beantragen.
+    if ("$($result.StdOut) $($result.StdErr)" -match '0x80092004|CRYPT_E_NOT_FOUND') {
+        Write-WizardLog -Message 'certreq -accept: offener Antrag im Antragsspeicher nicht gefunden - installiere das Zertifikat direkt auf die passende Karte.' -Level Info
+        $direct = Install-CertificateOnSmartCard -CerPath $CerPath
+        if ($direct.Success) { return [pscustomobject]@{ Success = $true } }
+    }
+    Write-WizardLog -Message 'Zertifikatsübernahme fehlgeschlagen.' -Level Error
+    return [pscustomobject]@{ Success = $false }
+}
+
+function Install-CertificateOnSmartCard {
+    # Ersatzweg für certreq -accept ohne Antragsspeicher-Eintrag: sucht auf den
+    # virtuellen Karten den Schlüssel-Container mit demselben öffentlichen Schlüssel
+    # wie das Zertifikat, schreibt das Zertifikat AUF DIE KARTE (NCrypt-Eigenschaft
+    # "SmartCardKeyCertificate" - so macht es auch certreq; Windows fragt dabei die
+    # Karten-PIN ab) und verknüpft es im Benutzerspeicher (My) mit dem Kartenschlüssel
+    # (certutil -repairstore). Läuft als eigener Prozess mit Zeitlimit (Hänger-Schutz
+    # wie bei Get-SmartCardCngProviderInfoBatch).
+    param([Parameter(Mandatory)][string]$CerPath, [int]$TimeoutSeconds = 300,
+        # Nur den passenden Container suchen, nichts schreiben (Tests/Diagnose).
+        [switch]$DryRun)
+
+    $readers = @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName } | ForEach-Object { $_.PcscName })
+    if (-not $readers) { Write-WizardLog -Message 'Direkt-Installation: keine virtuelle Smartcard gefunden.' -Level Error; return [pscustomobject]@{ Success = $false } }
+
+    $scriptPath = Join-Path (Get-WizardWorkingDir) 'install-on-card.ps1'
+    $installScript = @'
+param([Parameter(Mandatory)][string]$CerPath, [Parameter(Mandatory)][string]$Readers, [switch]$DryRun)
+foreach ($m in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.Management')) {
+    $mp = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules\$m\$m.psd1"; if (Test-Path $mp) { Import-Module $mp -Force -ErrorAction SilentlyContinue }
+}
+Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class VscNcEnum {
+    [StructLayout(LayoutKind.Sequential)] public struct NCryptKeyName { public IntPtr pszName; public IntPtr pszAlgid; public int dwLegacyKeySpec; public int dwFlags; }
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)] static extern int NCryptOpenStorageProvider(out IntPtr phProvider, string pszProviderName, int dwFlags);
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)] static extern int NCryptEnumKeys(IntPtr hProvider, string pszScope, out IntPtr ppKeyName, ref IntPtr ppEnumState, int dwFlags);
+    [DllImport("ncrypt.dll")] static extern int NCryptFreeBuffer(IntPtr pvInput);
+    [DllImport("ncrypt.dll")] static extern int NCryptFreeObject(IntPtr hObject);
+    public static List<string> Enum(string provider, string scope) {
+        var list = new List<string>(); IntPtr hProv;
+        if (NCryptOpenStorageProvider(out hProv, provider, 0) != 0) return list;
+        IntPtr state = IntPtr.Zero;
+        while (true) {
+            IntPtr pName;
+            if (NCryptEnumKeys(hProv, scope, out pName, ref state, 0x40) != 0) break;
+            var kn = (NCryptKeyName)Marshal.PtrToStructure(pName, typeof(NCryptKeyName));
+            list.Add(Marshal.PtrToStringUni(kn.pszName)); NCryptFreeBuffer(pName);
+        }
+        if (state != IntPtr.Zero) NCryptFreeBuffer(state);
+        NCryptFreeObject(hProv); return list;
+    }
+}
+"@
+$provName = 'Microsoft Smart Card Key Storage Provider'
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CerPath
+$want = [Convert]::ToBase64String(([System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($cert)).ExportParameters($false).Modulus)
+$prov = New-Object System.Security.Cryptography.CngProvider($provName)
+$found = $null
+foreach ($r in ($Readers -split '\|')) {
+    $scope = "\\.\$r\"
+    foreach ($n in [VscNcEnum]::Enum($provName, $scope)) {
+        try {
+            $k = [System.Security.Cryptography.CngKey]::Open("$scope$n", $prov, [System.Security.Cryptography.CngKeyOpenOptions]::Silent)
+            $mod = [Convert]::ToBase64String((New-Object System.Security.Cryptography.RSACng($k)).ExportParameters($false).Modulus)
+            $k.Dispose()
+            if ($mod -eq $want) { $found = @{ Reader = $r; Name = $n; Full = "$scope$n" }; break }
+        } catch { }
+    }
+    if ($found) { break }
+}
+if (-not $found) { Write-Output 'Result=KeyNotFound'; exit 0 }
+Write-Output "Reader=$($found.Reader)"; Write-Output "Container=$($found.Name)"
+if ($DryRun) { Write-Output 'Result=DryRun'; exit 0 }   # nur suchen (Tests)
+# Zertifikat auf die Karte schreiben (nicht still: Windows fragt die Karten-PIN).
+try {
+    $k = [System.Security.Cryptography.CngKey]::Open($found.Full, $prov, [System.Security.Cryptography.CngKeyOpenOptions]::None)
+    $k.SetProperty((New-Object System.Security.Cryptography.CngProperty('SmartCardKeyCertificate', $cert.RawData, [System.Security.Cryptography.CngPropertyOptions]::None)))
+    $k.Dispose()
+    Write-Output 'WrittenToCard=True'
+} catch { Write-Output "Error=Schreiben auf die Karte fehlgeschlagen: $($_.Exception.Message -replace '[\r\n]+', ' ')"; exit 0 }
+# In den Benutzerspeicher und mit dem Kartenschlüssel verknüpfen.
+$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser')
+$store.Open('ReadWrite'); $store.Add($cert); $store.Close()
+$rep = & certutil.exe -user -silent -csp $provName -repairstore My $cert.SerialNumber 2>&1
+$linked = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $cert.Thumbprint } | Select-Object -First 1
+Write-Output "HasPrivateKey=$([bool]($linked -and $linked.HasPrivateKey))"
+Write-Output 'Result=Installed'
+'@
+    Set-Content -Path $scriptPath -Value $installScript -Encoding UTF8
+
+    Write-WizardLog -Message "Direkt-Installation auf die Karte (Suche über den öffentlichen Schlüssel auf: $($readers -join ', '))." -Level Command
+    $res = Invoke-ExternalCommand -FilePath 'powershell.exe' -ArgumentList @(
+        @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-CerPath', $CerPath, '-Readers', ($readers -join '|')) + $(if ($DryRun) { @('-DryRun') } else { @() })
+    ) -TimeoutSeconds $TimeoutSeconds -Silent
+    if ($DryRun) {
+        $o = @{}; foreach ($line in ("$($res.StdOut)" -split "`r?`n")) { $i = $line.IndexOf('='); if ($i -gt 0) { $o[$line.Substring(0, $i)] = $line.Substring($i + 1) } }
+        return [pscustomobject]@{ Success = ($o['Result'] -eq 'DryRun'); Reader = $o['Reader']; Container = $o['Container']; Raw = "$($res.StdOut) $($res.StdErr)".Trim() }
+    }
+    $out = @{}
+    foreach ($line in ("$($res.StdOut)" -split "`r?`n")) { $i = $line.IndexOf('='); if ($i -gt 0) { $out[$line.Substring(0, $i)] = $line.Substring($i + 1) } }
+    if ($out['Result'] -eq 'Installed') {
+        Write-WizardLog -Message "Zertifikat direkt auf '$($out['Reader'])' (Container $($out['Container'])) geschrieben und im Benutzerspeicher abgelegt (privater Schlüssel verknüpft: $($out['HasPrivateKey']))." -Level Success
+        return [pscustomobject]@{ Success = $true; Reader = $out['Reader']; Container = $out['Container'] }
+    }
+    $why = if ($res.StdErr -eq 'Timeout') { 'Zeitüberschreitung' } elseif ($out['Result'] -eq 'KeyNotFound') { 'kein passender Schlüssel auf den virtuellen Karten gefunden' } elseif ($out['Error']) { $out['Error'] } else { "$($res.StdErr)".Trim() }
+    Write-WizardLog -Message "Direkt-Installation fehlgeschlagen: $why" -Level Error
+    return [pscustomobject]@{ Success = $false }
 }
 
 function Get-IssuedCertificateSummary {
