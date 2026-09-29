@@ -43,17 +43,28 @@ SYSTEM legt die leere Karte an; der Benutzer stellt später sein Cert darauf aus
 > Reihenfolge **PIN-Änderung ZUERST**, dann Ausstellung: so entsteht das Cert nur unter
 > der privaten PIN des Benutzers, nie unter der bekannten Start-PIN.
 
-## Start-PIN aus dem Computernamen
+## Quell-/Start-PIN aus der Seriennummer (Aufkleber) + numerische Ziel-PIN
 
-- Muss die **PIN-Richtlinie** erfüllen (Mindestlänge `config.PinMinLength`, Default 6,
-  geklemmt 4–20) und den **erlaubten Zeichensatz** der VSC.
-- Deterministische Ableitung (Vorschlag): Computername nehmen, auf erlaubte Zeichen
-  reduzieren, auf Mindestlänge **auffüllen** (fixe, dokumentierte Regel), auf Maximallänge
-  kürzen. Muss reproduzierbar sein, damit App 2 die Start-PIN kennt (beide leiten sie
-  identisch aus `$env:COMPUTERNAME` ab).
-- **Auf Hardware zu verifizieren:** erlaubter PIN-Zeichensatz einer TPM-VSC (numerisch
-  vs. alphanumerisch je nach Policy). Notfalls Policy anpassen oder rein numerische
-  Ableitung (z.B. Hash des Computernamens → Ziffern).
+**Zwei PINs, klar getrennt:**
+
+- **Quell-/Start-PIN (App 1, alphanumerisch):** deterministisch aus der **Geräte-
+  Seriennummer** abgeleitet (`Win32_BIOS.SerialNumber`, `Get-VscBootstrapPin`). Grund:
+  pro Gerät verschieden UND auf dem **OEM-Aufkleber/Service-Tag** ablesbar. App 2 rechnet
+  sie identisch neu aus und belegt sie im PIN-Dialog vor → **kein Storage nötig**, der
+  Benutzer muss sie normalerweise nicht kennen (Aufkleber nur als Fallback/zur Kontrolle).
+  Bewusst **kein echtes Geheimnis** (Serie ist ohnehin sichtbar) → in App 2 sofort
+  zwingend ändern. Bereinigt auf `[A-Za-z0-9]`, mind. 1 Buchstabe + 1 Ziffer, auf
+  `max(config.PinMinLength, 8)` aufgefüllt (Basis-API verlangt ohne Manager2-Policy 8),
+  auf 63 gekürzt. Fallback auf den Computernamen, falls die Seriennummer fehlt/ein
+  OEM-Platzhalter ist (`To be filled by O.E.M.` etc.).
+- **Ziel-PIN (App 2, vom Benutzer):** **numerisch, mindestens 6 Stellen** (bzw. die
+  Karten-Mindestlänge, falls höher). Erzwungen im `Show-VscPinChangeDialog -NumericOnly
+  -MinNewLength`.
+
+- **Auf Hardware zu verifizieren:** Die VSC muss beim **Erstellen** eine alphanumerische
+  PIN (Quell-PIN) und bei der **Änderung** eine rein numerische PIN (Ziel-PIN) akzeptieren
+  — bei einer reinen Mindestlängen-Policy üblich, aber zu prüfen. Karten-Erstellungs-Policy
+  (Manager2) entsprechend auf Mindestlänge 6 (bzw. `config.PinMinLength`).
 
 ## Sicherheitsbetrachtung
 
@@ -97,9 +108,10 @@ SYSTEM legt die leere Karte an; der Benutzer stellt später sein Cert darauf aus
 
 ## Offene Punkte / vor der Umsetzung zu klären
 
-- **PIN-Zeichensatz/-länge** der VSC (numerisch vs. alphanumerisch) → Start-PIN-Ableitung
-  daran ausrichten. Auf Hardware prüfen.
-- **Supplied-PIN im Helfer** (COM + nativer ARM64) implementieren und testen.
+- **PIN-Zeichensatz/-länge** der VSC auf Hardware prüfen: Quell-PIN **alphanumerisch**
+  (aus Seriennummer) beim Erstellen, Ziel-PIN **numerisch min. 6** bei der Änderung —
+  beides muss die Karten-Policy akzeptieren (reine Mindestlängen-Policy sollte das).
+- **Supplied-PIN im Helfer** (COM + nativer ARM64) [implementiert] auf HW testen.
 - **Szenario 02 auf EJ-Clients** braucht On-Prem-TGT (Cloud Kerberos Trust) + erreichbare
   CA (Sichtverbindung/VPN). Ohne das schlägt die Ausstellung fehl → im `-Simple`-Modus
   klare Meldung „CA nicht erreichbar, später erneut / VPN".

@@ -106,9 +106,14 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
      - Registry-Marker `Set-VscProvisionMarker` (HKLM) / `Set-VscEnrollMarker` (HKCU, an
        beiden Plan-A-Erfolgspunkten wenn `-Simple`) für die Intune-Erkennung.
      - `VscWizard.bat` reicht jetzt Argumente durch (`%*`). EN-Strings ergänzt.
+   - **PIN-Modell (entschieden 2026-09-29):** Quell-/Start-PIN **alphanumerisch, aus der
+     Geräte-Seriennummer** abgeleitet (`Win32_BIOS.SerialNumber`, Aufkleber/Service-Tag →
+     pro Gerät verschieden, ablesbar, kein Storage; Fallback Computername). Ziel-PIN
+     **numerisch, min. 6** (erzwungen via `Show-VscPinChangeDialog -NumericOnly
+     -MinNewLength`).
    - **NOCH ZU TESTEN (HW/Intune-Session):** supplied-PIN im Helfer (COM **und** nativer
-     ARM64) auf ARM64/x64; PIN-Zeichensatz der VSC (numerisch vs. alphanumerisch →
-     `Get-VscBootstrapPin` ggf. numerisch); Szenario 02 auf EJ-Client (CKT-TGT + CA
+     ARM64) auf ARM64/x64; Karten-Policy muss alphanum. Quell-PIN (Erstellen) UND
+     numerische Ziel-PIN (Ändern) akzeptieren; Szenario 02 auf EJ-Client (CKT-TGT + CA
      erreichbar); Detection-Robustheit; `.intunewin`-Paketierung + Pilot.
    <!-- Alt-Outline unten bleibt als Detail; Doc ist maßgeblich. -->
    - **Teil 1 (Systemkontext, Intune-Win32-App/Skript):** VSC auf dem Ziel-PC anlegen,
@@ -349,6 +354,8 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   an den COM-Helfer (NIE Kommandozeile/Log), beidseitig sofort gelöscht; kein
   tpmvscmgr-Fallback im supplied-Modus. Helfer `CreateHelper.cs` um optionalen 4. Arg
   (PIN-Datei) erweitert — gilt für csc-FW **und** nativen ARM64.
+- **PIN-Modell:** Quell-PIN aus der **Seriennummer** (Aufkleber, alphanumerisch, kein
+  Storage; `Get-VscBootstrapPin`), Ziel-PIN **numerisch min. 6** (erzwungen im PIN-Dialog).
 - `VscWizard.bat` reicht Argumente durch (`%*`); EN-Strings ergänzt.
 - **Ungetestet (HW/Intune):** supplied-PIN auf ARM64/x64, PIN-Zeichensatz der VSC,
   Szenario 02 auf EJ-Client, `.intunewin`-Paketierung. Siehe Backlog #0 / `docs/intune-rollout.md`.

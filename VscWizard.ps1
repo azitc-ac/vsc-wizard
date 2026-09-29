@@ -3263,9 +3263,12 @@ function Show-VscPinChangeDialog {
     # Alte PIN, neue PIN, Wiederholung - Änderung über den Kartentreiber (Set-VscPin).
     # Bei falscher alter PIN bzw. abgelehnter neuer PIN bleibt der Dialog offen.
     # -PrefillCurrentPin: die aktuelle PIN vorbelegen (Intune-/Simple-Modus, wo die
-    #   Start-PIN aus dem Computernamen abgeleitet und daher bekannt ist). Gibt $true
+    #   Start-PIN aus der Seriennummer abgeleitet und daher bekannt ist). Gibt $true
     #   zurueck, wenn die PIN tatsaechlich geaendert wurde, sonst $false (Abbruch/Sperre).
-    param([Parameter(Mandatory)]$Reader, [System.Windows.Forms.Form]$Owner, [string]$PrefillCurrentPin)
+    # -NumericOnly / -MinNewLength: die NEUE PIN muss nur aus Ziffern bestehen bzw. eine
+    #   Mindestlaenge erfuellen (Simple-/Intune-Ziel-PIN: numerisch, min. 6).
+    param([Parameter(Mandatory)]$Reader, [System.Windows.Forms.Form]$Owner, [string]$PrefillCurrentPin,
+        [switch]$NumericOnly, [int]$MinNewLength = 4)
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = (T 'PIN ändern')
     $dlg.FormBorderStyle = 'FixedDialog'; $dlg.StartPosition = 'CenterParent'
@@ -3299,6 +3302,7 @@ function Show-VscPinChangeDialog {
     } else {
         (T 'Die neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Eine falsche aktuelle PIN zählt als Fehlversuch.')
     }
+    if ($NumericOnly) { $msg.Text += ' ' + ((T 'Die neue PIN muss aus mindestens {0} Ziffern bestehen (nur Zahlen).') -f $MinNewLength) }
     $msg.Location = New-Object System.Drawing.Point(18, 172); $msg.Size = New-Object System.Drawing.Size(424, 64)
     $dlg.Controls.Add($msg)
 
@@ -3316,8 +3320,17 @@ function Show-VscPinChangeDialog {
         if (-not $cur -or -not $new) { & $showMsg (T 'Bitte alle Felder ausfüllen.') $script:UI.Danger; return }
         if ($new -ne $boxes[2].Text) { & $showMsg (T 'Die neuen PINs stimmen nicht überein.') $script:UI.Danger; $boxes[2].Text = ''; $boxes[2].Focus(); return }
         # Karten-PINs sind druckbare ASCII-Zeichen - Umlaute o.ä. würden anders kodiert ankommen.
-        if ($new -notmatch '^[\x20-\x7E]+$' -or $cur -notmatch '^[\x20-\x7E]+$') { & $showMsg (T 'Die PIN darf nur Buchstaben ohne Umlaute, Ziffern und gängige Sonderzeichen enthalten.') $script:UI.Danger; return }
-        if ($new.Length -lt 4) { & $showMsg (T 'Die neue PIN ist zu kurz (mindestens 4 Zeichen, die Karte kann mehr verlangen).') $script:UI.Danger; return }
+        # Die aktuelle (alte) PIN ist immer druckbares ASCII (Quell-PIN alphanumerisch).
+        if ($cur -notmatch '^[\x20-\x7E]+$') { & $showMsg (T 'Die PIN darf nur Buchstaben ohne Umlaute, Ziffern und gängige Sonderzeichen enthalten.') $script:UI.Danger; return }
+        if ($NumericOnly) {
+            if ($new -notmatch '^[0-9]+$') { & $showMsg (T 'Die neue PIN darf nur aus Ziffern bestehen.') $script:UI.Danger; $boxes[1].Text = ''; $boxes[2].Text = ''; $boxes[1].Focus(); return }
+        } elseif ($new -notmatch '^[\x20-\x7E]+$') {
+            & $showMsg (T 'Die PIN darf nur Buchstaben ohne Umlaute, Ziffern und gängige Sonderzeichen enthalten.') $script:UI.Danger; return
+        }
+        if ($new.Length -lt $MinNewLength) {
+            $tooShort = if ($NumericOnly) { (T 'Die neue PIN ist zu kurz (mindestens {0} Ziffern).') -f $MinNewLength } else { (T 'Die neue PIN ist zu kurz (mindestens {0} Zeichen, die Karte kann mehr verlangen).') -f $MinNewLength }
+            & $showMsg $tooShort $script:UI.Danger; return
+        }
         $ok.Enabled = $false; $dlg.Cursor = 'WaitCursor'; $dlg.Refresh()
         try {
             $res = Set-VscPin -PcscName $Reader.PcscName -CurrentPin ([Text.Encoding]::ASCII.GetBytes($cur)) -NewPin ([Text.Encoding]::ASCII.GetBytes($new))
@@ -4324,8 +4337,9 @@ function Enter-SimpleFlow {
         return
     }
 
-    # Start-PIN identisch zur Device-App ableiten (Get-VscBootstrapPin), damit sie im
-    # PIN-Dialog vorbelegt werden kann. Mindestlänge wie in Invoke-VscProvision.
+    # Start-/Quell-PIN identisch zur Device-App aus der Seriennummer ableiten
+    # (Get-VscBootstrapPin), damit sie im PIN-Dialog vorbelegt werden kann. Mindestlänge
+    # wie in Invoke-VscProvision (Karten-Erstellungs-Policy).
     $minLen = 6
     if ($config.PinMinLength) { $minLen = [int]$config.PinMinLength }
     if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
@@ -4334,8 +4348,10 @@ function Enter-SimpleFlow {
         Write-WizardLog -Message "Simple-Modus: Start-PIN konnte nicht abgeleitet werden: $($_.Exception.Message)" -Level Warn
     }
 
-    # PIN-Änderung ERZWINGEN: erst nach erfolgreicher Änderung geht es weiter.
-    $changed = Show-VscPinChangeDialog -Reader $card -Owner $form -PrefillCurrentPin $startPin
+    # PIN-Änderung ERZWINGEN: erst nach erfolgreicher Änderung geht es weiter. Die ZIEL-PIN
+    # ist NUMERISCH und mindestens 6-stellig (bzw. die Karten-Mindestlänge, falls höher).
+    $targetMin = [Math]::Max(6, $minLen)
+    $changed = Show-VscPinChangeDialog -Reader $card -Owner $form -PrefillCurrentPin $startPin -NumericOnly -MinNewLength $targetMin
     if (-not $changed) {
         Write-WizardLog -Message 'Simple-Modus: PIN-Änderung abgebrochen - Zertifikatsausstellung wird nicht gestartet.' -Level Warn
         [System.Windows.Forms.MessageBox]::Show(

@@ -2276,19 +2276,42 @@ function Open-WizardFolder {
 # ============================================================================
 
 function Get-VscBootstrapPin {
-    # Deterministische Start-PIN aus dem Computernamen fuer die STILLE Provisionierung.
-    # App 1 (SYSTEM) legt die Karte damit an; App 2 (Benutzer) leitet dieselbe PIN ab und
-    # belegt sie als "alte PIN" fuer die ERZWUNGENE Aenderung vor. Bewusst KEIN Geheimnis
-    # (aus dem sichtbaren Computernamen) - deshalb sofort erzwingen zu aendern.
+    # Deterministische QUELL-/Start-PIN aus der GERAETE-SERIENNUMMER fuer die STILLE
+    # Provisionierung. App 1 (SYSTEM) legt die Karte damit an; App 2 (Benutzer) leitet
+    # DIESELBE PIN ab und belegt sie als "alte PIN" fuer die ERZWUNGENE Aenderung vor -
+    # deshalb muss sie reproduzierbar sein, OHNE etwas zu speichern.
     #
-    # Regel: alphanumerische Zeichen des Computernamens, auf Mindestlaenge auffuellen;
-    # mindestens ein Buchstabe UND eine Ziffer (deckt uebliche Zeichenklassen-Policies).
-    # Mindestlaenge = max(MinLength, 8): ohne Manager2-PIN-Policy verlangt die Basis-API 8.
-    # HINWEIS: setzt einen ALPHANUMERISCHEN PIN-Zeichensatz voraus (Default-Policy erlaubt
-    # das). Bei rein NUMERISCHER Policy muss die Ableitung numerisch werden -> auf der
+    # Warum die Seriennummer: sie ist pro Geraet verschieden UND steht auf dem
+    # OEM-Aufkleber/Service-Tag (der Benutzer kann sie notfalls ablesen). Sie ist
+    # bewusst KEIN echtes Geheimnis (ohnehin sichtbar) -> in App 2 sofort zwingend
+    # aendern. Die vom Benutzer gesetzte ZIEL-PIN ist dagegen NUMERISCH (siehe
+    # Enter-SimpleFlow / Show-VscPinChangeDialog -NumericOnly).
+    #
+    # Regel: alphanumerische Zeichen der Seriennummer, mindestens ein Buchstabe UND eine
+    # Ziffer, auf Mindestlaenge auffuellen (max(MinLength, 8): ohne Manager2-Policy
+    # verlangt die Basis-API 8), auf 63 kappen. HINWEIS: setzt einen ALPHANUMERISCHEN
+    # PIN-Zeichensatz beim ERSTELLEN voraus (Default-Policy erlaubt das) -> auf der
     # Zielhardware pruefen (siehe docs/intune-rollout.md).
-    param([string]$ComputerName = $env:COMPUTERNAME, [int]$MinLength = 6)
-    $clean = ($ComputerName -replace '[^A-Za-z0-9]', '')
+    #
+    # -Source erlaubt das Uebersteuern (Tests); leer => Seriennummer (WMI), sonst
+    # Fallback auf den Computernamen, falls die Seriennummer fehlt/ein OEM-Platzhalter ist.
+    param([string]$Source = '', [int]$MinLength = 6)
+
+    $seed = $Source
+    if (-not $seed) {
+        try {
+            $seed = "$((Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).SerialNumber)".Trim()
+        } catch {
+            try { $seed = "$((Get-WmiObject -Class Win32_BIOS -ErrorAction Stop).SerialNumber)".Trim() } catch { $seed = '' }
+        }
+    }
+    # Unbrauchbare/Platzhalter-Seriennummern -> Fallback Computername (bleibt deterministisch).
+    $junk = @('', 'To be filled by O.E.M.', 'Default string', 'System Serial Number', 'None', '0', 'Not Applicable', 'Not Specified', 'Unknown')
+    if ($junk -contains $seed) {
+        Write-WizardLog -Message "Bootstrap-PIN: Seriennummer unbrauchbar ('$seed') - Fallback auf den Computernamen." -Level Warn
+        $seed = $env:COMPUTERNAME
+    }
+    $clean = ($seed -replace '[^A-Za-z0-9]', '')
     if (-not $clean) { $clean = 'Vsc' }
     if ($clean -notmatch '[A-Za-z]') { $clean += 'A' }
     if ($clean -notmatch '[0-9]')    { $clean += '0' }
