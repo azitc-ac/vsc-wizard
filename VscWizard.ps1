@@ -3298,13 +3298,7 @@ function Show-VscInventoryDialog {
     $btnChangePin = New-InvButton (T 'PIN ändern...')
     $btnDeleteReader = New-InvButton (T 'Karte löschen...')
     $btnChangePin.Enabled = $false; $btnDeleteReader.Enabled = $false
-    # Hinweiszeile IM Dialog: der zentrale Warte-Hinweis liegt im Hauptfenster und wäre
-    # hinter diesem modalen Dialog verdeckt.
-    $lblCardHint = New-Object System.Windows.Forms.Label
-    $lblCardHint.AutoSize = $true; $lblCardHint.UseMnemonic = $false
-    $lblCardHint.ForeColor = $script:UI.Muted
-    $lblCardHint.Margin = New-Object System.Windows.Forms.Padding(6, 8, 0, 0)
-    $cardBar.Controls.AddRange(@($btnChangePin, $btnDeleteReader, $lblCardHint))
+    $cardBar.Controls.AddRange(@($btnChangePin, $btnDeleteReader))
     $dlgLayout.Controls.Add($cardBar, 0, 2)
 
     # --- Zertifikate der gewählten Karte --------------------------------------------
@@ -3339,7 +3333,6 @@ function Show-VscInventoryDialog {
     function Update-CertListForSelection {
         $lvCerts.Items.Clear()
         $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
-        $lblCardHint.Text = ''
         $sel =if ($lvReaders.SelectedItems.Count -gt 0) { $lvReaders.SelectedItems[0].Tag } else { $null }
         $btnChangePin.Enabled = Test-IsVirtualCard $sel
         $btnDeleteReader.Enabled = Test-IsVirtualCard $sel
@@ -3400,28 +3393,19 @@ function Show-VscInventoryDialog {
     $btnShowCert.Add_Click($showCert)
     $lvCerts.Add_DoubleClick($showCert)
 
+    # PIN ändern: Windows bietet Desktop-Programmen dafür KEINE API - der WinRT-Weg
+    # (SmartCardProvisioning.RequestPinChangeAsync) ist nur für UWP-Apps freigegeben und
+    # liefert sonst 0x80070490 "Element nicht gefunden" (auch nativ ARM64 getestet). Der
+    # eingebaute, sichere Weg ist der Windows-Sicherheitsbildschirm - der Wizard sagt
+    # genau, welche Karte dort zu wählen ist, und sieht die PIN nie.
     $btnChangePin.Add_Click({
         if ($lvReaders.SelectedItems.Count -eq 0) { return }
         $r = $lvReaders.SelectedItems[0].Tag
         if (-not (Test-IsVirtualCard $r)) { return }
-        $btnChangePin.Enabled = $false; $btnDeleteReader.Enabled = $false
-        $lblCardHint.ForeColor = $script:UI.Muted
-        $lblCardHint.Text = (T 'Bitte im Windows-Dialog die alte und zweimal die neue PIN eingeben...')
-        $dlg.Cursor = 'WaitCursor'; $dlg.Refresh()
-        try {
-            $res = Invoke-VscPinChange -PcscName $r.PcscName
-        } finally {
-            $dlg.Cursor = 'Default'
-            $btnChangePin.Enabled = $true; $btnDeleteReader.Enabled = $true
-        }
-        switch ($res.Status) {
-            'Changed'   { $lblCardHint.ForeColor = $script:UI.Success; $lblCardHint.Text = ((T 'PIN von {0} geändert.') -f $r.FriendlyName) }
-            'Cancelled' { $lblCardHint.Text = (T 'PIN-Änderung abgebrochen - die bisherige PIN gilt weiter.') }
-            default {
-                $lblCardHint.ForeColor = $script:UI.Danger; $lblCardHint.Text = (T 'PIN ändern fehlgeschlagen - Details siehe Log.')
-                [System.Windows.Forms.MessageBox]::Show(((T 'PIN ändern fehlgeschlagen: {0} Details siehe Log.') -f $res.Message), (T 'Fehler'), 'OK', 'Error') | Out-Null
-            }
-        }
+        Write-WizardLog -Message "PIN ändern: Anleitung für '$($r.FriendlyName)' ($($r.PcscName)) angezeigt." -Level Info
+        [System.Windows.Forms.MessageBox]::Show(
+            ((T "Die PIN einer Smartcard ändert Windows über den Sicherheitsbildschirm:`r`n`r`n1. Strg+Alt+Entf drücken (in einer Remotedesktop-Sitzung: Strg+Alt+Ende).`r`n2. 'Kennwort ändern' wählen.`r`n3. Unter 'Anmeldeoptionen' das Smartcard-Symbol wählen.`r`n4. Die Karte `"{0}`" wählen (= '{1}').`r`n5. Alte PIN und zweimal die neue PIN eingeben.`r`n`r`nDie neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Der Wizard sieht die PIN dabei nie.") -f $r.PcscName, $r.FriendlyName),
+            (T 'PIN ändern'), 'OK', 'Information') | Out-Null
     })
 
     $btnDeleteReader.Add_Click({

@@ -1,4 +1,4 @@
-# Projektstand & Backlog (VSC-Wizard)
+﻿# Projektstand & Backlog (VSC-Wizard)
 
 > Kurzes „wo stehen wir"-Dokument, damit der Faden zwischen Testrunden nicht reißt.
 > Ergänzt das RUNBOOK.md (das die Szenarien/Abläufe beschreibt).
@@ -241,13 +241,14 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   Karte (Ausgestellt für · Gültig bis · Status · Fingerabdruck) mit „Anzeigen…"
   (auch Doppelklick; Windows-Zertifikatsdialog) und „Von Karte entfernen…".
   Geräte-ID-/GUID-Spalte entfällt; Szenario 04 ohne Tool/Du-Schritte.
-- **PIN ändern** (`Invoke-VscPinChange`): WinRT `SmartCardProvisioning.
-  RequestPinChangeAsync` im Kindprozess — Windows zeigt seinen eigenen PIN-Dialog, der
-  Wizard sieht die PIN nie. Der Kindprozess beendet sich hart (`Process.Kill()`),
-  weil ein reguläres Ende nach WinRT-Smartcard-Objekten ~20 s hängt (gemessen).
-  **Offen:** interaktiver Test mit echter PIN-Eingabe (Dialog erscheint vor dem
-  Wizard? Ergebnis „geändert"/„abgebrochen" korrekt?).
-
+- **PIN ändern** = Anleitung für die gewählte Karte (Strg+Alt+Entf → Kennwort ändern →
+  Smartcard → Karte „Microsoft Virtual Smart Card N"). **Kein API-Weg:**
+  `SmartCardProvisioning.RequestPinChangeAsync` ist nur für UWP-Apps freigegeben und
+  liefert in Desktop-Programmen 0x80070490 „Element nicht gefunden" — getestet sowohl
+  emuliert (PowerShell 5.1) als auch in einer nativen .NET-8-ARM64-App. Bis zum
+  Aufruf klappt alles (Leser, Karte, Provisioning, Karten-ID). Einzige Alternative wäre
+  der Minitreiber direkt (`CardAcquireContext` + `CardChangeAuthenticatorEx`, eigener
+  PIN-Dialog) — aufwendig/riskant (CARD_DATA-Layout), bewusst nicht umgesetzt.
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird
