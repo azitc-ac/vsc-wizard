@@ -52,9 +52,11 @@ function Test-Layout($root, [string]$Context) {
             $txt = "$($c.Text)"
             # 1) Abgeschnittener Text (Label/Button/CheckBox/RadioButton ohne AutoSize)
             if ($txt -and -not $c.AutoSize -and -not ($c -is [System.Windows.Forms.Label] -and $c.AutoEllipsis) -and ($c -is [System.Windows.Forms.Label] -or $c -is [System.Windows.Forms.ButtonBase])) {
+                # Buttons: flache Buttons brauchen gemessen ~10 px mehr als MeasureText ('Abbrechen' 71 px -> ab 81 px
+                # vollständig; bei 80 px 'Abbreche'). 12 px = kleine Reserve.
                 $isBtn = $c -is [System.Windows.Forms.Button]
                 # Innenabstand (Hinweisboxen) abziehen - der Text hat nur die Innenfläche.
-                $avail = $c.ClientSize.Width - $c.Padding.Horizontal - $(if ($isBtn) { 8 } elseif ($c -is [System.Windows.Forms.CheckBox] -or $c -is [System.Windows.Forms.RadioButton]) { 20 } else { 0 })
+                $avail = $c.ClientSize.Width - $c.Padding.Horizontal - $(if ($isBtn) { 12 } elseif ($c -is [System.Windows.Forms.CheckBox] -or $c -is [System.Windows.Forms.RadioButton]) { 20 } else { 0 })
                 $availH = $c.ClientSize.Height - $c.Padding.Vertical
                 if ($avail -gt 0) {
                     $flags = if ($isBtn) { [System.Windows.Forms.TextFormatFlags]::SingleLine } else { [System.Windows.Forms.TextFormatFlags]::WordBreak }

@@ -1756,7 +1756,10 @@ function Submit-CertificateSigningRequest {
 
     if (-not (Test-Path $OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
     $cerPath = Join-Path $OutputDirectory 'certnew.cer'
-    if (Test-Path $cerPath) { Remove-Item $cerPath -Force }
+    # Beide Ausgabedateien eines früheren Laufs entfernen - sonst fragt certreq per
+    # MessageBox "Soll die Datei ... certnew.rsp überschrieben werden?" (z.B. beim
+    # erneuten Antrag auf dieselbe VSC; gleiches Verzeichnis PlanA-<Karte>).
+    Remove-Item -LiteralPath $cerPath, ([IO.Path]::ChangeExtension($cerPath, '.rsp')) -Force -ErrorAction SilentlyContinue
 
     $submitArgs = @('-submit', '-config', $CAConfig)
     if ($TemplateName) { $submitArgs += @('-attrib', "CertificateTemplate:$TemplateName") }

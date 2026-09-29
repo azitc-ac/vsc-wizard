@@ -1700,10 +1700,10 @@ function Show-VscPickerDialog {
 
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = (T 'Verwenden'); $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
-    $ok.Location = New-Object System.Drawing.Point(372, 276); $ok.Size = New-Object System.Drawing.Size(90, 28)
+    $ok.Location = New-Object System.Drawing.Point(344, 276); $ok.Size = New-Object System.Drawing.Size(100, 30)
     $cancel = New-Object System.Windows.Forms.Button
     $cancel.Text = (T 'Abbrechen'); $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-    $cancel.Location = New-Object System.Drawing.Point(468, 276); $cancel.Size = New-Object System.Drawing.Size(80, 28)
+    $cancel.Location = New-Object System.Drawing.Point(452, 276); $cancel.Size = New-Object System.Drawing.Size(96, 30)
 
     $dlg.Controls.AddRange(@($lbl, $list, $ok, $cancel))
     $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
@@ -3067,14 +3067,12 @@ function Show-PlanBStep {
         2 {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N" -
-            # deshalb prominent (fett/grün) hervorheben.
+            # deshalb auffällig hervorheben (gemeinsamer Stil, siehe Set-CardHintLook).
             if ($script:PlanB_PcscName) {
-                $lblCsrInfoB.ForeColor = [System.Drawing.Color]::ForestGreen
-                $lblCsrInfoB.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+                Set-CardHintLook -Label $lblCsrInfoB -Active $true
                 $lblCsrInfoB.Text = ((T "➜ Im Windows-Kartenauswahl-Dialog die Karte `"{0}`" wählen  (= '{1}'). Danach ggf. PIN-Dialog.") -f $script:PlanB_PcscName, $script:PlanB_CardName)
             } else {
-                $lblCsrInfoB.ForeColor = [System.Drawing.SystemColors]::ControlText
-                $lblCsrInfoB.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+                Set-CardHintLook -Label $lblCsrInfoB -Active $false
                 $lblCsrInfoB.Text = (T 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.')
             }
         }
@@ -3946,13 +3944,37 @@ function Register-StatusLabel {
 }
 foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB)) { Register-StatusLabel $l }
 
-# Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" als blaue Info-Box.
-$lblCardHintA.Font = New-UiFont 9.5 -Semibold
-$lblCardHintA.ForeColor = $script:UI.AccentText
-$lblCardHintA.Add_TextChanged({
-    $lblCardHintA.BackColor = if ($lblCardHintA.Text) { $script:UI.AccentWeak } else { [System.Drawing.Color]::Transparent }
-    $lblCardHintA.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5)
-})
+# Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" (Plan A und Plan B, EIN Stil):
+# Die falsche Karte zu wählen landet das Zertifikat auf der falschen VSC - deshalb
+# auffällig als bernsteinfarbene Warnbox mit kräftigem Balken links, größer und fett.
+$script:CardHintActive = New-Object 'System.Collections.Generic.HashSet[object]'
+function Set-CardHintLook {
+    param([Parameter(Mandatory)][System.Windows.Forms.Label]$Label, [bool]$Active)
+    if ($Active) {
+        [void]$script:CardHintActive.Add($Label)
+        $Label.BackColor = $script:UI.WarnWeak
+        $Label.ForeColor = $script:UI.Warn
+        $Label.Font = New-UiFont 11 -Semibold
+        $Label.Padding = New-Object System.Windows.Forms.Padding(16, 9, 12, 9)
+    } else {
+        [void]$script:CardHintActive.Remove($Label)
+        $Label.BackColor = [System.Drawing.Color]::Transparent
+        $Label.ForeColor = $script:UI.Text
+        $Label.Font = New-UiFont 9
+        $Label.Padding = New-Object System.Windows.Forms.Padding(0)
+    }
+    $Label.Invalidate()
+}
+foreach ($l in @($lblCardHintA, $lblCsrInfoB)) {
+    $l.Add_Paint({
+        param($s, $e)
+        if (-not $script:CardHintActive.Contains($s)) { return }
+        $brush = New-Object System.Drawing.SolidBrush($script:UI.Warn)
+        $e.Graphics.FillRectangle($brush, 0, 0, 5, $s.Height)
+        $brush.Dispose()
+    })
+}
+$lblCardHintA.Add_TextChanged({ Set-CardHintLook -Label $lblCardHintA -Active ([bool]$lblCardHintA.Text) })
 
 # Jede Schritt-Seite wird eine weiße Karte in Inhaltsgröße mit FLIESSLAYOUT:
 # Die Seiten sind historisch mit festen Pixel-Positionen gebaut (Breite 780 usw.) - das
