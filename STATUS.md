@@ -250,6 +250,7 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   (2) PIN prüfen; (3) PIN ändern (vom Benutzer ausgeführt, neue = alte PIN). Läuft im
   emulierten x64-Prozess. Rückmeldung: falsche PIN (+ Restversuche), gesperrt,
   Richtlinie verletzt; sonst Fehler + Anleitung Strg+Alt+Entf.
+  **Im Wizard (EXE) interaktiv bestätigt (2026-09-29): PIN geändert.**
   Verworfen: WinRT `RequestPinChangeAsync` — nur UWP, sonst 0x80070490.
 ## Betriebs-Reminder
 
