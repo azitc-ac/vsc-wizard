@@ -20,6 +20,18 @@
 
 #Requires -Version 5.1
 
+# Automatisierungs-/Rollout-Schalter (siehe docs/intune-rollout.md). Ohne Schalter
+# startet der normale interaktive Wizard - das Verhalten ist unverändert.
+param(
+    [switch]$Provision,   # nur VSC anlegen (Systemkontext / Intune-App 1), KEINE GUI
+    [switch]$Silent,      # zusammen mit -Provision: bewusst ohne Fenster (Default für Provision)
+    [switch]$Simple,      # schlanker Assistent (Benutzerkontext / Intune-App 2): PIN ändern -> ausstellen
+    [string]$CardName,    # optionaler VSC-Name (Default: VscNamePrefix + Computername)
+    [string]$Pin          # optionale Start-PIN (Default: aus Computername abgeleitet); nur mit -Provision
+)
+
+$script:SimpleMode = [bool]$Simple
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -132,7 +144,7 @@ function Close-Splash {
     $script:Splash = $null
 }
 
-$null = Show-SplashScreen
+if (-not $Provision) { $null = Show-SplashScreen }
 
 Update-Splash -Text (L 'Kernmodul laden...' 'Loading core module...') -Percent 25
 $script:ModulePath = Join-Path $script:BaseDir 'modules\VscWizard.Core.psm1'
@@ -164,6 +176,50 @@ try {
 }
 # Sprache der Oberfläche: die EINE Entscheidung vom Skriptanfang ($script:StartLang).
 Set-WizardLanguage -Language $script:StartLang
+
+# --- Provisionierungs-Modus (Intune-App 1, Systemkontext): still eine leere VSC anlegen
+#     und beenden - OHNE die GUI zu bauen. Muss VOR dem Fensteraufbau stehen. ------------
+function Invoke-VscProvision {
+    # Legt eine leere VSC mit einer aus dem Computernamen abgeleiteten Start-PIN an.
+    # Exit-Codes: 0 ok, 1 Erstellung fehlgeschlagen, 3 nicht eleviert. Log zusätzlich in
+    # C:\ProgramData\VSC-Wizard\provision.log (für die Intune-Diagnose).
+    $logDir = Join-Path $env:ProgramData 'VSC-Wizard'
+    try { if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null } } catch { }
+    $logFile = Join-Path $logDir 'provision.log'
+    $plog = { param($m) try { Add-Content -Path $logFile -Value ("{0}  {1}" -f (Get-Date -Format 'o'), $m) -Encoding UTF8 } catch { } }
+    try { Initialize-WizardLog -LogBox $null } catch { }   # Kernmodul-Logs in die Tagesdatei
+
+    $prefix = if ($config.VscNamePrefix) { $config.VscNamePrefix } else { 'VSC-' }
+    $name = if ($CardName) { $CardName } else { "$prefix$env:COMPUTERNAME" }
+    $minLen = 6
+    if ($config.PinMinLength) { $minLen = [int]$config.PinMinLength }
+    if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
+    $startPin = if ($Pin) { $Pin } else { Get-VscBootstrapPin -MinLength $minLen }
+
+    & $plog "Provision start: Karte='$name', MinPinLen=$minLen, Simple-Folgeschritt via App 2."
+    if (-not (Test-IsElevated)) {
+        & $plog 'FEHLER: nicht eleviert - Provisionierung muss als Admin/SYSTEM laufen (Intune-Device-App).'
+        return 3
+    }
+    try {
+        $res = New-VirtualSmartCard -CardName $name -PinPolicyMinLength $minLen -Pin $startPin
+    } catch {
+        & $plog "AUSNAHME: $($_.Exception.Message)"
+        return 1
+    }
+    if ($res -and $res.Success) {
+        Set-VscProvisionMarker -InstanceId "$($res.InstanceId)" | Out-Null
+        & $plog "OK: VSC '$name' erstellt (InstanceId $($res.InstanceId), PC/SC '$($res.PcscName)'). Marker HKLM gesetzt."
+        return 0
+    }
+    & $plog "FEHLER: VSC-Erstellung fehlgeschlagen: $(if ($res) { $res.Message } else { 'kein Ergebnis' })"
+    return 1
+}
+
+if ($Provision) {
+    exit (Invoke-VscProvision)
+}
+
 Update-Splash -Text (T 'Oberfläche wird aufgebaut...') -Percent 55
 
 function New-WizardLabel {
@@ -2286,6 +2342,7 @@ $btnRequestCertA.Add_Click({
     $complete = Complete-CertificateEnrollment -CerPath $submit.CerPath
     if ($complete.Success) {
         $script:PlanA_CertIssued = $true
+        if ($script:SimpleMode) { Set-VscEnrollMarker | Out-Null }   # Intune-Erkennung App 2
         Clear-WizardResumeState
         $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblCertResultA.Text = (T 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.')
@@ -2321,6 +2378,7 @@ function Invoke-PlanARetrieve {
         $complete = Complete-CertificateEnrollment -CerPath $recv.CerPath
         if ($complete.Success) {
             $script:PlanA_CertIssued = $true
+            if ($script:SimpleMode) { Set-VscEnrollMarker | Out-Null }   # Intune-Erkennung App 2
             Clear-WizardResumeState
             $btnRetrieveA.Visible = $false
             $lblCertResultA.ForeColor = [System.Drawing.Color]::ForestGreen
@@ -3204,7 +3262,10 @@ Update-Splash -Text (T 'Dialoge vorbereiten...') -Percent 76
 function Show-VscPinChangeDialog {
     # Alte PIN, neue PIN, Wiederholung - Änderung über den Kartentreiber (Set-VscPin).
     # Bei falscher alter PIN bzw. abgelehnter neuer PIN bleibt der Dialog offen.
-    param([Parameter(Mandatory)]$Reader, [System.Windows.Forms.Form]$Owner)
+    # -PrefillCurrentPin: die aktuelle PIN vorbelegen (Intune-/Simple-Modus, wo die
+    #   Start-PIN aus dem Computernamen abgeleitet und daher bekannt ist). Gibt $true
+    #   zurueck, wenn die PIN tatsaechlich geaendert wurde, sonst $false (Abbruch/Sperre).
+    param([Parameter(Mandatory)]$Reader, [System.Windows.Forms.Form]$Owner, [string]$PrefillCurrentPin)
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = (T 'PIN ändern')
     $dlg.FormBorderStyle = 'FixedDialog'; $dlg.StartPosition = 'CenterParent'
@@ -3228,9 +3289,16 @@ function Show-VscPinChangeDialog {
         $dlg.Controls.AddRange(@($lb, $tb)); $boxes += $tb
         $y += 38
     }
+    # Simple-/Intune-Modus: die bekannte Start-PIN vorbelegen, damit der Benutzer nur
+    # noch die neue (private) PIN vergeben muss.
+    if ($PrefillCurrentPin) { $boxes[0].Text = $PrefillCurrentPin }
     $msg = New-Object System.Windows.Forms.Label
     $msg.UseMnemonic = $false; $msg.ForeColor = $script:UI.Muted
-    $msg.Text = (T 'Die neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Eine falsche aktuelle PIN zählt als Fehlversuch.')
+    $msg.Text = if ($PrefillCurrentPin) {
+        (T 'Die aktuelle PIN ist bereits vorausgefüllt (vom Rollout gesetzt). Bitte jetzt eine eigene, nur Ihnen bekannte PIN vergeben.')
+    } else {
+        (T 'Die neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Eine falsche aktuelle PIN zählt als Fehlversuch.')
+    }
     $msg.Location = New-Object System.Drawing.Point(18, 172); $msg.Size = New-Object System.Drawing.Size(424, 64)
     $dlg.Controls.Add($msg)
 
@@ -3280,11 +3348,13 @@ function Show-VscPinChangeDialog {
             }
         }
     })
-    $dlg.Add_Shown({ $boxes[0].Focus() })
+    # Bei vorbelegter aktueller PIN direkt in das Feld "Neue PIN" springen.
+    if ($PrefillCurrentPin) { $dlg.Add_Shown({ $boxes[1].Focus() }) } else { $dlg.Add_Shown({ $boxes[0].Focus() }) }
     Set-DialogStyle -Dialog $dlg
-    if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
+    $result = if ($Owner) { $dlg.ShowDialog($Owner) } else { $dlg.ShowDialog() }
     foreach ($b in $boxes) { $b.Text = '' }
     $dlg.Dispose()
+    return ($result -eq [System.Windows.Forms.DialogResult]::OK)
 }
 
 function Show-VscInventoryDialog {
@@ -3513,7 +3583,7 @@ function Show-VscInventoryDialog {
         if ($lvReaders.SelectedItems.Count -eq 0) { return }
         $r = $lvReaders.SelectedItems[0].Tag
         if (-not (Test-IsVirtualCard $r)) { return }
-        Show-VscPinChangeDialog -Reader $r -Owner $dlg
+        Show-VscPinChangeDialog -Reader $r -Owner $dlg | Out-Null
     })
 
     $btnDeleteReader.Add_Click({
@@ -4224,8 +4294,67 @@ function Invoke-WizardResume {
     Write-WizardLog -Message "Begonnener Antrag fortgesetzt (Plan $($state['Plan']), Stand: $stageText)." -Level Info
 }
 
+function Enter-SimpleFlow {
+    # Schlanker Ablauf für die Intune-Benutzer-App (VscWizard.exe -Simple), siehe
+    # docs/intune-rollout.md. Läuft im Benutzerkontext auf einer bereits von der
+    # Device-App (-Provision) angelegten, leeren VSC:
+    #   1. PIN-Änderung ERZWINGEN (alte PIN = aus dem Computernamen abgeleitete
+    #      Start-PIN, vorbelegt) -> erst danach existiert eine nur dem Benutzer
+    #      bekannte PIN. Ohne Änderung geht es NICHT weiter (Sicherheit).
+    #   2. Zertifikat für das EIGENE on-prem/hybrid-Konto direkt bei der CA ausstellen
+    #      (entspricht Szenario 02, Enter-PlanARenewal -TargetAccount $null).
+    # Fällt bei fehlender Konfiguration / fehlender VSC bewusst auf den normalen
+    # Assistenten zurück (der Benutzer sieht dann die reguläre Startseite).
+
+    # Ohne CA/Template kann nichts ausgestellt werden (im gepflegten Rollout liegt die
+    # config.psd1 der App bei). Nicht still scheitern: Hinweis + normaler Assistent.
+    if ([string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)) {
+        Write-WizardLog -Message 'Simple-Modus: Konfiguration unvollständig (CAConfig/Template) - Rückfall auf den normalen Assistenten.' -Level Warn
+        [System.Windows.Forms.MessageBox]::Show(
+            (T 'Die Konfiguration (Zertifizierungsstelle/Vorlage) ist unvollständig. Der Einrichtungsassistent kann so kein Zertifikat ausstellen. Bitte die Einstellungen prüfen oder den Administrator kontaktieren.'),
+            (T 'Einrichtung'), 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    # Bereits von der Device-App angelegte VSC wählen. Keine vorhanden -> normaler
+    # Assistent (dort kann eine neue erstellt werden).
+    $card = Select-ExistingVsc
+    if (-not $card) {
+        Write-WizardLog -Message 'Simple-Modus: keine vorhandene VSC gefunden/gewählt - Rückfall auf den normalen Assistenten.' -Level Warn
+        return
+    }
+
+    # Start-PIN identisch zur Device-App ableiten (Get-VscBootstrapPin), damit sie im
+    # PIN-Dialog vorbelegt werden kann. Mindestlänge wie in Invoke-VscProvision.
+    $minLen = 6
+    if ($config.PinMinLength) { $minLen = [int]$config.PinMinLength }
+    if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
+    $startPin = ''
+    try { $startPin = Get-VscBootstrapPin -MinLength $minLen } catch {
+        Write-WizardLog -Message "Simple-Modus: Start-PIN konnte nicht abgeleitet werden: $($_.Exception.Message)" -Level Warn
+    }
+
+    # PIN-Änderung ERZWINGEN: erst nach erfolgreicher Änderung geht es weiter.
+    $changed = Show-VscPinChangeDialog -Reader $card -Owner $form -PrefillCurrentPin $startPin
+    if (-not $changed) {
+        Write-WizardLog -Message 'Simple-Modus: PIN-Änderung abgebrochen - Zertifikatsausstellung wird nicht gestartet.' -Level Warn
+        [System.Windows.Forms.MessageBox]::Show(
+            (T 'Die Einrichtung kann erst fortgesetzt werden, nachdem Sie eine eigene PIN vergeben haben. Bitte starten Sie die Einrichtung erneut.'),
+            (T 'Einrichtung'), 'OK', 'Information') | Out-Null
+        return
+    }
+
+    # Zertifikat für das eigene Konto direkt bei der CA ausstellen (Szenario 02).
+    Write-WizardLog -Message "Simple-Modus: PIN gesetzt, starte Zertifikatsausstellung für die Karte '$($card.FriendlyName)'." -Level Info
+    Enter-PlanARenewal -Reader $card -TargetAccount $null
+}
+
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
-if ($configIncomplete) {
+if ($script:SimpleMode) {
+    # Intune-Benutzer-App (-Simple): direkt in den schlanken Ablauf (PIN erzwingen ->
+    # Zertifikat ausstellen). Erst nach dem Shown-Event (modale Dialoge, siehe unten).
+    $form.Add_Shown({ Enter-SimpleFlow })
+} elseif ($configIncomplete) {
     # Erst öffnen, sobald das Hauptfenster tatsächlich angezeigt wird (Shown-Event) -
     # ein modaler Dialog mit -Owner vor dem ersten Show() des Owners führt sonst zu
     # unzuverlässigem Fensterverhalten.

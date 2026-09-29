@@ -302,10 +302,14 @@ namespace VscWizardHelper
         [STAThread]
         public static int Main(string[] args)
         {
-            // Aufruf: CreateHelper.exe "<CardName>" <MinPinLength> "<ResultPath>"
+            // Aufruf: CreateHelper.exe "<CardName>" <MinPinLength> "<ResultPath>" ["<PinFile>"]
+            // Optionaler 4. Parameter = Pfad einer Datei mit der PIN (Supplied-PIN-Modus,
+            // z.B. stille Provisionierung). Ist er gesetzt, wird die PIN aus der Datei
+            // gelesen statt per Dialog abgefragt; die Datei wird sofort geloescht.
             if (args.Length < 3) { return 2; }
             string cardName = args[0];
             string resultPath = args[2];
+            string pinFile = (args.Length >= 4) ? args[3] : null;
             int minPinLength;
             if (!int.TryParse(args[1], out minPinLength)) { minPinLength = 6; }
             // Zulaessiger Bereich laut Plattform: 4-127 (Basis-API ohne Policy: 8).
@@ -324,14 +328,40 @@ namespace VscWizardHelper
                 if (!policySupported && minPinLength < 8) { minPinLength = 8; }
 
                 string pin;
-                using (PinDialog dlg = new PinDialog(cardName, minPinLength))
+                if (!string.IsNullOrEmpty(pinFile))
                 {
-                    if (dlg.ShowDialog() != DialogResult.OK || string.IsNullOrEmpty(dlg.Pin))
+                    // Supplied-PIN-Modus: PIN aus der Datei lesen, Datei sofort loeschen.
+                    string supplied = null;
+                    try
                     {
-                        WriteResult(resultPath, false, "", "", "Vom Benutzer abgebrochen.", false, true);
-                        return 0;
+                        if (File.Exists(pinFile)) { supplied = File.ReadAllText(pinFile); }
                     }
-                    pin = dlg.Pin;
+                    catch (Exception) { }
+                    try { File.Delete(pinFile); } catch (Exception) { }
+                    if (supplied != null) { supplied = supplied.Trim(); }
+                    if (string.IsNullOrEmpty(supplied))
+                    {
+                        WriteResult(resultPath, false, "", "", "Keine PIN in der uebergebenen Datei.", false);
+                        return 1;
+                    }
+                    if (supplied.Length < minPinLength)
+                    {
+                        WriteResult(resultPath, false, "", "", "Gelieferte PIN ist kuerzer als die Mindestlaenge (" + minPinLength + ").", false);
+                        return 1;
+                    }
+                    pin = supplied;
+                }
+                else
+                {
+                    using (PinDialog dlg = new PinDialog(cardName, minPinLength))
+                    {
+                        if (dlg.ShowDialog() != DialogResult.OK || string.IsNullOrEmpty(dlg.Pin))
+                        {
+                            WriteResult(resultPath, false, "", "", "Vom Benutzer abgebrochen.", false, true);
+                            return 0;
+                        }
+                        pin = dlg.Pin;
+                    }
                 }
 
                 // Zufaelliger 24-Byte-3DES-Admin-Key (entspricht tpmvscmgr /AdminKey RANDOM).

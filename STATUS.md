@@ -83,13 +83,33 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Backlog / offene Punkte
 
-0. **Rollout per Intune-Win32-App** — Design abgestimmt in **`docs/intune-rollout.md`**
-   (2026-09-29). Kurz: ZWEI Apps — App 1 (Device/SYSTEM) legt leere VSC mit Start-PIN aus
-   dem Computernamen an (silent); App 2 (User) `-Simple`-Assistent: PIN-Änderung ERZWINGEN,
-   dann Szenario-02-Ausstellung. Tool-seitig zu bauen: Startparameter `-Provision -Silent`
-   und `-Simple`, `New-VirtualSmartCard -Pin` (supplied-PIN, betrifft Helfer+ARM64 →
-   Hardware-Test), Registry-Marker. Reihenfolge: erst `-Simple` (ohne HW-Risiko), dann
-   supplied-PIN, dann Paketierung. Details/offene Punkte im Doc.
+0. **Rollout per Intune-Win32-App** — Design in **`docs/intune-rollout.md`** (2026-09-29).
+   Kurz: ZWEI Apps — App 1 (Device/SYSTEM) legt leere VSC mit Start-PIN aus dem
+   Computernamen an (silent); App 2 (User) `-Simple`-Assistent: PIN-Änderung ERZWINGEN,
+   dann Szenario-02-Ausstellung.
+   - **[ERLEDIGT — tool-seitiger erster Wurf, 2026-09-29, NICHT auf HW getestet]:**
+     - `VscWizard.ps1` param-Block ganz oben: `-Provision -Silent -Simple -CardName -Pin`;
+       `$script:SimpleMode`. Ohne Schalter unverändertes Verhalten (rein additiv).
+     - `Invoke-VscProvision` (headless, `if ($Provision){exit …}` VOR dem GUI-Aufbau):
+       Log nach `C:\ProgramData\VSC-Wizard\provision.log`, Name = `VscNamePrefix`+Computername,
+       Start-PIN via `Get-VscBootstrapPin`, Elevations-Check (Exit 3), `New-VirtualSmartCard
+       -Pin`, bei Erfolg `Set-VscProvisionMarker` (Exit 0) sonst 1.
+     - `New-VirtualSmartCard -Pin` (supplied-PIN): PIN über kurzlebige Datei an den Helfer
+       (NIE Kommandozeile/Log), beidseitig sofort gelöscht; im supplied-Modus KEIN
+       tpmvscmgr-Fallback (kann keine PIN annehmen) → sauberer Fehler.
+       Betrifft `VscWizard.CreateHelper.cs` (optionaler 4. Arg = PIN-Datei) — derselbe
+       Quelltext für csc-FW **und** nativen ARM64-Helfer.
+     - `Enter-SimpleFlow` (`-Simple`, Benutzerkontext): vorhandene VSC wählen → PIN-Änderung
+       ERZWINGEN (Start-PIN vorbelegt via `Show-VscPinChangeDialog -PrefillCurrentPin`; ohne
+       Änderung KEINE Ausstellung) → Szenario 02 (`Enter-PlanARenewal -TargetAccount $null`).
+       Bei fehlender Config/VSC sauberer Rückfall auf den normalen Assistenten.
+     - Registry-Marker `Set-VscProvisionMarker` (HKLM) / `Set-VscEnrollMarker` (HKCU, an
+       beiden Plan-A-Erfolgspunkten wenn `-Simple`) für die Intune-Erkennung.
+     - `VscWizard.bat` reicht jetzt Argumente durch (`%*`). EN-Strings ergänzt.
+   - **NOCH ZU TESTEN (HW/Intune-Session):** supplied-PIN im Helfer (COM **und** nativer
+     ARM64) auf ARM64/x64; PIN-Zeichensatz der VSC (numerisch vs. alphanumerisch →
+     `Get-VscBootstrapPin` ggf. numerisch); Szenario 02 auf EJ-Client (CKT-TGT + CA
+     erreichbar); Detection-Robustheit; `.intunewin`-Paketierung + Pilot.
    <!-- Alt-Outline unten bleibt als Detail; Doc ist maßgeblich. -->
    - **Teil 1 (Systemkontext, Intune-Win32-App/Skript):** VSC auf dem Ziel-PC anlegen,
      Start-PIN = Computername. Erkennungsregel für Intune (z.B. VSC vorhanden oder
@@ -316,6 +336,22 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   geholt". Warten jetzt immer mit asynchronem Pipe-Lesen (auch ohne Timeout).
 - **Offen:** interaktiv bestätigen (tritt sporadisch auf; im Log erkennbar, wenn der
   Wizard eingreifen musste).
+
+## Zuletzt erledigt (2026-09-29): Intune-Rollout — tool-seitiger erster Wurf
+- Rein additiv: ohne die neuen Schalter startet weiterhin der normale Wizard.
+- **App 1 (Device/SYSTEM):** `VscWizard.exe -Provision -Silent` → `Invoke-VscProvision`
+  legt leere VSC mit Start-PIN aus dem Computernamen an (`Get-VscBootstrapPin`),
+  Log `C:\ProgramData\VSC-Wizard\provision.log`, HKLM-Marker; Exit 0/1/3.
+- **App 2 (User):** `VscWizard.exe -Simple` → `Enter-SimpleFlow`: vorhandene VSC wählen,
+  PIN-Änderung ERZWINGEN (Start-PIN vorbelegt, ohne Änderung keine Ausstellung), dann
+  Szenario 02 (`Enter-PlanARenewal`). HKCU-Marker an den Plan-A-Erfolgspunkten.
+- **supplied-PIN:** `New-VirtualSmartCard -Pin` gibt die PIN über eine kurzlebige Datei
+  an den COM-Helfer (NIE Kommandozeile/Log), beidseitig sofort gelöscht; kein
+  tpmvscmgr-Fallback im supplied-Modus. Helfer `CreateHelper.cs` um optionalen 4. Arg
+  (PIN-Datei) erweitert — gilt für csc-FW **und** nativen ARM64.
+- `VscWizard.bat` reicht Argumente durch (`%*`); EN-Strings ergänzt.
+- **Ungetestet (HW/Intune):** supplied-PIN auf ARM64/x64, PIN-Zeichensatz der VSC,
+  Szenario 02 auf EJ-Client, `.intunewin`-Paketierung. Siehe Backlog #0 / `docs/intune-rollout.md`.
 
 ## Betriebs-Reminder
 

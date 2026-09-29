@@ -988,14 +988,22 @@ function New-VirtualSmartCard {
         # Wird über ITpmVirtualSmartCardManager2::CreateVirtualSmartCardWithPinPolicy
         # durchgesetzt (siehe CreateHelper); ohne diese Schnittstelle faellt der Helfer
         # auf die Basis-API mit Minimum 8 zurück und passt den PIN-Dialog entsprechend an.
-        [int]$PinPolicyMinLength = 6
+        [int]$PinPolicyMinLength = 6,
+        # Optional: PIN NICHT interaktiv abfragen, sondern diese verwenden (Silent-/
+        # Provisionierungsweg, z.B. Intune-SYSTEM mit Start-PIN aus dem Computernamen).
+        # Die PIN wird dem Helfer über eine kurzlebige Datei übergeben (NIE über die
+        # Kommandozeile) und beidseitig sofort gelöscht. Nur mit dem COM-Helfer möglich -
+        # der tpmvscmgr-Fallback kann keine PIN entgegennehmen.
+        [string]$Pin = ''
     )
 
+    $supplyPin = -not [string]::IsNullOrEmpty($Pin)
     Clear-SmartCardInfoCache   # Kartenbestand ändert sich (PC/SC-Nummern werden wiederverwendet)
     $publicDir = Join-Path $env:SystemDrive 'Users\Public'
     $token = [guid]::NewGuid().ToString('N')
     $helperExe = Join-Path $publicDir "vscwizard-createhelper-$token.exe"
     $resultPath = Join-Path $publicDir "vscwizard-createresult-$token.txt"
+    $pinFile = Join-Path $publicDir "vscwizard-pin-$token.txt"
 
     # ARM64: .NET Framework hat KEINE native ARM64-Laufzeit - ein AnyCPU-FW-Exe
     # laeuft dort emuliert, und der ARM64-Proxy/Stub des TPM-VSC-COM-Servers laesst
@@ -1006,6 +1014,11 @@ function New-VirtualSmartCard {
     if ((Get-NativeOsArchitecture) -eq 'ARM64') {
         $nativeHelper = Get-NativeCreateHelperPath -Architecture 'arm64'
         if (-not $nativeHelper) {
+            if ($supplyPin) {
+                $msg = 'ARM64 ohne nativen COM-Helfer: die stille Bereitstellung mit gelieferter PIN ist nur mit dem COM-Helfer möglich (tpmvscmgr kann keine PIN entgegennehmen). Bitte den nativen Helfer bauen (build.ps1 mit .NET SDK).'
+                Write-WizardLog -Message $msg -Level Error
+                return [pscustomobject]@{ Success = $false; InstanceId = $null; Message = $msg }
+            }
             Write-WizardLog -Message 'ARM64 erkannt, nativer COM-Helfer (helper-arm64\VscCreateHelper.exe) nicht vorhanden - verwende tpmvscmgr.exe.' -Level Info
             return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
         }
@@ -1047,10 +1060,23 @@ function New-VirtualSmartCard {
 
     # Argumente als fertig quotierter String (Start-Process quotiert Array-Elemente
     # in Windows PowerShell 5.1 NICHT selbst - Kartennamen mit Leerzeichen würden
-    # sonst zerfallen).
+    # sonst zerfallen). Optionaler 4. Parameter = PIN-Datei (Supplied-PIN-Modus).
     $exeArgs = "`"$CardName`" $PinPolicyMinLength `"$resultPath`""
+    if ($supplyPin) {
+        # PIN in eine kurzlebige Datei schreiben (NICHT auf die Kommandozeile). ASCII,
+        # ohne Zeilenende. Der Helfer liest sie und löscht sie sofort; wir löschen unten
+        # zusätzlich. Die Start-PIN wird ohnehin aus dem Computernamen abgeleitet und
+        # direkt danach vom Benutzer zwingend geändert.
+        Set-Content -Path $pinFile -Value $Pin -Encoding Ascii -NoNewline -ErrorAction SilentlyContinue
+        $exeArgs += " `"$pinFile`""
+    }
 
-    Write-WizardLog -Message "Erstelle virtuelle Smartcard '$CardName' über die COM-API (elevierter Helfer ohne Konsolenfenster, PIN-Dialog dort)." -Level Command
+    $createLog = if ($supplyPin) {
+        "Erstelle virtuelle Smartcard '$CardName' über die COM-API (elevierter Helfer, PIN geliefert - kein Dialog)."
+    } else {
+        "Erstelle virtuelle Smartcard '$CardName' über die COM-API (elevierter Helfer ohne Konsolenfenster, PIN-Dialog dort)."
+    }
+    Write-WizardLog -Message $createLog -Level Command
 
     try {
         if (Test-IsElevated) {
@@ -1078,7 +1104,7 @@ function New-VirtualSmartCard {
     } else {
         $res.Message = T 'Kein Ergebnis vom elevierten Helfer erhalten (Prozess evtl. abgebrochen).'
     }
-    Remove-Item $helperExe, $resultPath -ErrorAction SilentlyContinue
+    Remove-Item $helperExe, $resultPath, $pinFile -ErrorAction SilentlyContinue
 
     # Abbruch im PIN-Dialog ist KEIN Fehler: kein Fallback auf tpmvscmgr (sonst
     # folgte sofort eine zweite PIN-Abfrage in der Konsole).
@@ -1102,8 +1128,14 @@ function New-VirtualSmartCard {
         $pcscNote = if ($pcscName) { "; erscheint in Windows-Kartendialogen als '$pcscName'" } else { '' }
         Write-WizardLog -Message "Virtuelle Smartcard '$CardName' erstellt (InstanceId $($res.InstanceId); $policyNote$pcscNote)." -Level Success
     } else {
-        # COM-Weg fehlgeschlagen (z.B. 0x800700C1 bei Architektur-Mismatch) -
-        # auf den nativen tpmvscmgr.exe zurueckfallen, der arch-unabhaengig laeuft.
+        # COM-Weg fehlgeschlagen (z.B. 0x800700C1 bei Architektur-Mismatch).
+        if ($supplyPin) {
+            # Kein tpmvscmgr-Fallback im Supplied-PIN-Modus (tpmvscmgr kann keine PIN
+            # entgegennehmen und würde interaktiv nachfragen).
+            Write-WizardLog -Message "COM-Erstellung mit gelieferter PIN fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" })." -Level Error
+            return [pscustomobject]@{ Success = $false; InstanceId = $null; HResult = $res.HResult; Message = $res.Message }
+        }
+        # Interaktiv: auf den nativen tpmvscmgr.exe zurueckfallen, der arch-unabhaengig laeuft.
         Write-WizardLog -Message "COM-Erstellung fehlgeschlagen: $($res.Message) $(if ($res.HResult) { "(HRESULT $($res.HResult))" }) - Fallback über tpmvscmgr.exe." -Level Error
         return New-VirtualSmartCardViaTpmVscMgr -CardName $CardName -PinPolicyMinLength $PinPolicyMinLength
     }
@@ -2234,6 +2266,65 @@ function Open-WizardFolder {
     if (Test-Path $Path) {
         $dir = if (Test-Path $Path -PathType Leaf) { Split-Path $Path -Parent } else { $Path }
         Start-Process explorer.exe -ArgumentList "`"$dir`""
+    }
+}
+
+#endregion
+
+# ============================================================================
+#region INTUNE-/PROVISIONIERUNG-HELFER (siehe docs/intune-rollout.md)
+# ============================================================================
+
+function Get-VscBootstrapPin {
+    # Deterministische Start-PIN aus dem Computernamen fuer die STILLE Provisionierung.
+    # App 1 (SYSTEM) legt die Karte damit an; App 2 (Benutzer) leitet dieselbe PIN ab und
+    # belegt sie als "alte PIN" fuer die ERZWUNGENE Aenderung vor. Bewusst KEIN Geheimnis
+    # (aus dem sichtbaren Computernamen) - deshalb sofort erzwingen zu aendern.
+    #
+    # Regel: alphanumerische Zeichen des Computernamens, auf Mindestlaenge auffuellen;
+    # mindestens ein Buchstabe UND eine Ziffer (deckt uebliche Zeichenklassen-Policies).
+    # Mindestlaenge = max(MinLength, 8): ohne Manager2-PIN-Policy verlangt die Basis-API 8.
+    # HINWEIS: setzt einen ALPHANUMERISCHEN PIN-Zeichensatz voraus (Default-Policy erlaubt
+    # das). Bei rein NUMERISCHER Policy muss die Ableitung numerisch werden -> auf der
+    # Zielhardware pruefen (siehe docs/intune-rollout.md).
+    param([string]$ComputerName = $env:COMPUTERNAME, [int]$MinLength = 6)
+    $clean = ($ComputerName -replace '[^A-Za-z0-9]', '')
+    if (-not $clean) { $clean = 'Vsc' }
+    if ($clean -notmatch '[A-Za-z]') { $clean += 'A' }
+    if ($clean -notmatch '[0-9]')    { $clean += '0' }
+    $target = [Math]::Max($MinLength, 8)
+    while ($clean.Length -lt $target) { $clean += '0' }
+    if ($clean.Length -gt 63) { $clean = $clean.Substring(0, 63) }
+    return $clean
+}
+
+function Set-VscProvisionMarker {
+    # HKLM-Marker fuer die Intune-Erkennung von App 1 (Device/SYSTEM). Braucht Adminrechte.
+    param([string]$InstanceId = '')
+    try {
+        $key = 'HKLM:\SOFTWARE\VSC-Wizard'
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+        New-ItemProperty -Path $key -Name 'Provisioned'   -Value '1' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'ProvisionedAt' -Value (Get-Date -Format 'o') -PropertyType String -Force | Out-Null
+        if ($InstanceId) { New-ItemProperty -Path $key -Name 'InstanceId' -Value $InstanceId -PropertyType String -Force | Out-Null }
+        return $true
+    } catch {
+        Write-WizardLog -Message "Provision-Marker (HKLM) konnte nicht gesetzt werden: $($_.Exception.Message)" -Level Warn
+        return $false
+    }
+}
+
+function Set-VscEnrollMarker {
+    # HKCU-Marker fuer die Intune-Erkennung von App 2 (Benutzerkontext).
+    try {
+        $key = 'HKCU:\SOFTWARE\VSC-Wizard'
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+        New-ItemProperty -Path $key -Name 'Enrolled'   -Value '1' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'EnrolledAt' -Value (Get-Date -Format 'o') -PropertyType String -Force | Out-Null
+        return $true
+    } catch {
+        Write-WizardLog -Message "Enroll-Marker (HKCU) konnte nicht gesetzt werden: $($_.Exception.Message)" -Level Warn
+        return $false
     }
 }
 
