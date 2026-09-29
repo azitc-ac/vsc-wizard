@@ -187,6 +187,7 @@ $fakeReaders = @(1..3 | ForEach-Object { [pscustomobject]@{ FriendlyName = "$lon
 $fakeCerts = @(1..3 | ForEach-Object { [pscustomobject]@{ Subject = 'CN=administrator.langername@contoso.onmicrosoft.com'; Upn = 'administrator.langername@contoso.onmicrosoft.com'; Thumbprint = '0123456789ABCDEF0123456789ABCDEF0123456' + $_; NotBefore = (Get-Date); NotAfter = (Get-Date).AddYears(2); Provider = 'Microsoft Smart Card Key Storage Provider'; Reader = "Microsoft Virtual Smart Card $_"; KeyContainerName = 'x'; IsSmartCard = $true; DetectionError = $null } })
 try { $null = Show-VscPickerDialog -Readers $fakeReaders -Certs $fakeCerts } catch { $global:Findings.Add("Show-VscPickerDialog Fehler: $($_.Exception.Message)") }
 try { $null = Show-VscChoiceDialog } catch { $global:Findings.Add("Show-VscChoiceDialog Fehler: $($_.Exception.Message)") }
+try { Show-VscPinChangeDialog -Reader $fakeReaders[0] -Owner $form } catch { $global:Findings.Add("Show-VscPinChangeDialog Fehler: $($_.Exception.Message)") }
 try { Show-VscInventoryDialog -Owner $form } catch { $global:Findings.Add("Show-VscInventoryDialog Fehler: $($_.Exception.Message)") }
 try { Show-SettingsDialog -Owner $form } catch { $global:Findings.Add("Show-SettingsDialog Fehler: $($_.Exception.Message)") }
 

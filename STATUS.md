@@ -241,14 +241,16 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   Karte (Ausgestellt für · Gültig bis · Status · Fingerabdruck) mit „Anzeigen…"
   (auch Doppelklick; Windows-Zertifikatsdialog) und „Von Karte entfernen…".
   Geräte-ID-/GUID-Spalte entfällt; Szenario 04 ohne Tool/Du-Schritte.
-- **PIN ändern** = Anleitung für die gewählte Karte (Strg+Alt+Entf → Kennwort ändern →
-  Smartcard → Karte „Microsoft Virtual Smart Card N"). **Kein API-Weg:**
-  `SmartCardProvisioning.RequestPinChangeAsync` ist nur für UWP-Apps freigegeben und
-  liefert in Desktop-Programmen 0x80070490 „Element nicht gefunden" — getestet sowohl
-  emuliert (PowerShell 5.1) als auch in einer nativen .NET-8-ARM64-App. Bis zum
-  Aufruf klappt alles (Leser, Karte, Provisioning, Karten-ID). Einzige Alternative wäre
-  der Minitreiber direkt (`CardAcquireContext` + `CardChangeAuthenticatorEx`, eigener
-  PIN-Dialog) — aufwendig/riskant (CARD_DATA-Layout), bewusst nicht umgesetzt.
+- **PIN ändern** (`Show-VscPinChangeDialog` → `Set-VscPin`): eigener Dialog (aktuelle
+  PIN, neue PIN, Wiederholung), Änderung über den **Kartentreiber** (`msclmd.dll`:
+  `CardAcquireContext` + `CardChangeAuthenticator`, danach Gegenprüfung mit der neuen
+  PIN, Karte wird zurückgesetzt). Derselbe Weg wie Strg+Alt+Entf → Kennwort ändern.
+  CARD_DATA-Layout (v7, 64 Bit) am Gerät in 3 Stufen verifiziert: (1) nur lesen —
+  reservierte Felder leer, alle Funktionen im Treiber, `cardid` = WinRT-Karten-ID;
+  (2) PIN prüfen; (3) PIN ändern (vom Benutzer ausgeführt, neue = alte PIN). Läuft im
+  emulierten x64-Prozess. Rückmeldung: falsche PIN (+ Restversuche), gesperrt,
+  Richtlinie verletzt; sonst Fehler + Anleitung Strg+Alt+Entf.
+  Verworfen: WinRT `RequestPinChangeAsync` — nur UWP, sonst 0x80070490.
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird

@@ -1110,6 +1110,165 @@ function Get-VirtualSmartCardReaders {
     } finally { Exit-WizardBusy }
 }
 
+$script:VscPinSource = @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+
+// PIN einer (virtuellen) Smartcard über ihren Kartentreiber (Minitreiber, z.B. msclmd.dll)
+// ändern: CardAcquireContext + CardChangeAuthenticator - derselbe Weg, den Windows'
+// Sicherheitsbildschirm (Strg+Alt+Entf > Kennwort ändern) über den Base-CSP nimmt.
+// Der WinRT-Weg (SmartCardProvisioning.RequestPinChangeAsync) ist nur für UWP-Apps frei.
+// CARD_DATA-Layout (cardmod.h, Version 7, 64 Bit) am Gerät verifiziert: reservierte Felder
+// leer, alle Treiberfunktionen im Modul, CardReadFile("cardid") = WinRT-Karten-ID.
+// Schutz: jeder Funktionszeiger wird vor dem Aufruf auf "liegt im Treiber" geprüft; die
+// Struktur ist großzügig überdimensioniert (4 KB).
+public static class VscWizardPin {
+    [DllImport("winscard.dll")] static extern int SCardEstablishContext(uint scope, IntPtr r1, IntPtr r2, out IntPtr ctx);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardConnectW(IntPtr ctx, string reader, uint share, uint proto, out IntPtr card, out uint active);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardStatusW(IntPtr card, StringBuilder names, ref uint len, out uint state, out uint proto, byte[] atr, ref uint atrLen);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardListCardsW(IntPtr ctx, byte[] atr, IntPtr guids, uint cguids, char[] cards, ref uint len);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardGetCardTypeProviderNameW(IntPtr ctx, string card, uint provId, StringBuilder prov, ref uint len);
+    [DllImport("winscard.dll")] static extern int SCardDisconnect(IntPtr card, uint disp);
+    [DllImport("winscard.dll")] static extern int SCardReleaseContext(IntPtr ctx);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryW(string name);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr mod, string name);
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate IntPtr AllocFn(UIntPtr size);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate IntPtr ReAllocFn(IntPtr p, UIntPtr size);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate void FreeFn(IntPtr p);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate uint CacheAddFn(IntPtr ctx, IntPtr name, uint flags, IntPtr data, UIntPtr cb);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate uint CacheLookupFn(IntPtr ctx, IntPtr name, uint flags, IntPtr ppData, IntPtr pcb);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate uint CacheDeleteFn(IntPtr ctx, IntPtr name, uint flags);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint AcquireFn(IntPtr cardData, uint flags);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint DeleteCtxFn(IntPtr cardData);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi, CharSet = CharSet.Unicode)] delegate uint AuthPinFn(IntPtr cardData, string userId, byte[] pin, uint cbPin, out uint attempts);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi, CharSet = CharSet.Unicode)] delegate uint ChangeAuthFn(IntPtr cardData, string userId, byte[] cur, uint cbCur, byte[] neu, uint cbNew, uint retryCount, uint flags, out uint attempts);
+
+    // Statisch gehalten, damit der GC die an den Treiber übergebenen Rückrufe nicht einsammelt.
+    static AllocFn sAlloc = s => Marshal.AllocHGlobal((IntPtr)(long)s.ToUInt64());
+    static ReAllocFn sReAlloc = (p, s) => Marshal.ReAllocHGlobal(p, (IntPtr)(long)s.ToUInt64());
+    static FreeFn sFree = p => { if (p != IntPtr.Zero) Marshal.FreeHGlobal(p); };
+    static CacheAddFn sAdd = (c, n, f, d, cb) => 0;
+    static CacheLookupFn sLookup = (c, n, f, pp, pcb) => 0x80100024; // SCARD_E_FILE_NOT_FOUND -> Treiber liest von der Karte
+    static CacheDeleteFn sDelete = (c, n, f) => 0;
+
+    public const uint E_SETUP = 0xE0000001;      // eigener Code: Vorbereitung/Treiber unerwartet
+
+    // Rückgabe 0 = geändert (und mit neuer PIN gegengeprüft); sonst SCARD-Code bzw. E_SETUP.
+    public static uint Change(string reader, byte[] cur, byte[] neu, out uint attempts, out string detail) {
+        attempts = 0xFFFFFFFF; detail = "";
+        if (IntPtr.Size != 8) { detail = "nur 64-Bit"; return E_SETUP; }
+        IntPtr ctx = IntPtr.Zero, card = IntPtr.Zero, cd = IntPtr.Zero, nameW = IntPtr.Zero, atrMem = IntPtr.Zero;
+        try {
+            uint active;
+            int rc = SCardEstablishContext(0, IntPtr.Zero, IntPtr.Zero, out ctx);
+            if (rc != 0) { detail = "SCardEstablishContext"; return (uint)rc; }
+            rc = SCardConnectW(ctx, reader, 2 /*SHARED*/, 3 /*T0|T1*/, out card, out active);
+            if (rc != 0) { detail = "SCardConnect"; return (uint)rc; }
+            uint nl = 512, st, pr, al = 36; var names = new StringBuilder(512); var atr = new byte[36];
+            rc = SCardStatusW(card, names, ref nl, out st, out pr, atr, ref al);
+            if (rc != 0) { detail = "SCardStatus"; return (uint)rc; }
+            Array.Resize(ref atr, (int)al);
+            uint cl = 1024; var cards = new char[1024];
+            rc = SCardListCardsW(ctx, atr, IntPtr.Zero, 0, cards, ref cl);
+            if (rc != 0) { detail = "SCardListCards"; return (uint)rc; }
+            string cardName = new string(cards, 0, (int)cl).Split('\0')[0];
+            uint pl = 512; var prov = new StringBuilder(512);
+            rc = SCardGetCardTypeProviderNameW(ctx, cardName, 0x80000001 /*CARD_MODULE*/, prov, ref pl);
+            if (rc != 0) { detail = "SCardGetCardTypeProviderName"; return (uint)rc; }
+            IntPtr mod = LoadLibraryW(prov.ToString());
+            if (mod == IntPtr.Zero) { detail = "LoadLibrary " + prov; return E_SETUP; }
+            long modBase = mod.ToInt64(), modEnd = modBase;
+            foreach (ProcessModule pm in Process.GetCurrentProcess().Modules)
+                if (pm.BaseAddress == mod) modEnd = modBase + pm.ModuleMemorySize;
+            Func<IntPtr, bool> inModule = p => p.ToInt64() >= modBase && p.ToInt64() < modEnd;
+            IntPtr acq = GetProcAddress(mod, "CardAcquireContext");
+            if (!inModule(acq)) { detail = "CardAcquireContext fehlt in " + prov; return E_SETUP; }
+
+            cd = Marshal.AllocHGlobal(4096);
+            for (int i = 0; i < 4096; i += 8) Marshal.WriteInt64(cd, i, 0);
+            nameW = Marshal.StringToHGlobalUni(cardName);
+            atrMem = Marshal.AllocHGlobal(atr.Length); Marshal.Copy(atr, 0, atrMem, atr.Length);
+            Marshal.WriteInt32(cd, 0, 7);                 // dwVersion
+            Marshal.WriteIntPtr(cd, 8, atrMem);           // pbAtr
+            Marshal.WriteInt32(cd, 16, atr.Length);       // cbAtr
+            Marshal.WriteIntPtr(cd, 24, nameW);           // pwszCardName
+            Marshal.WriteIntPtr(cd, 32, Marshal.GetFunctionPointerForDelegate(sAlloc));
+            Marshal.WriteIntPtr(cd, 40, Marshal.GetFunctionPointerForDelegate(sReAlloc));
+            Marshal.WriteIntPtr(cd, 48, Marshal.GetFunctionPointerForDelegate(sFree));
+            Marshal.WriteIntPtr(cd, 56, Marshal.GetFunctionPointerForDelegate(sAdd));
+            Marshal.WriteIntPtr(cd, 64, Marshal.GetFunctionPointerForDelegate(sLookup));
+            Marshal.WriteIntPtr(cd, 72, Marshal.GetFunctionPointerForDelegate(sDelete));
+            Marshal.WriteIntPtr(cd, 96, ctx);             // hSCardCtx
+            Marshal.WriteIntPtr(cd, 104, card);           // hScard
+            uint r = ((AcquireFn)Marshal.GetDelegateForFunctionPointer(acq, typeof(AcquireFn)))(cd, 0);
+            if (r != 0) { detail = "CardAcquireContext"; return r; }
+            IntPtr pDel = Marshal.ReadIntPtr(cd, 120), pAuth = Marshal.ReadIntPtr(cd, 160), pChange = Marshal.ReadIntPtr(cd, 192);
+            try {
+                if (!inModule(pAuth) || !inModule(pChange)) { detail = "Treiberfunktionen nicht wie erwartet"; return E_SETUP; }
+                r = ((ChangeAuthFn)Marshal.GetDelegateForFunctionPointer(pChange, typeof(ChangeAuthFn)))(
+                    cd, "user", cur, (uint)cur.Length, neu, (uint)neu.Length, 0, 2 /*CARD_AUTHENTICATE_PIN_PIN*/, out attempts);
+                if (r != 0) { detail = "CardChangeAuthenticator"; return r; }
+                uint a2;
+                r = ((AuthPinFn)Marshal.GetDelegateForFunctionPointer(pAuth, typeof(AuthPinFn)))(cd, "user", neu, (uint)neu.Length, out a2);
+                if (r != 0) { detail = "Gegenprüfung mit neuer PIN"; return r; }
+                return 0;
+            } finally {
+                if (inModule(pDel)) ((DeleteCtxFn)Marshal.GetDelegateForFunctionPointer(pDel, typeof(DeleteCtxFn)))(cd);
+            }
+        } finally {
+            Array.Clear(cur, 0, cur.Length); Array.Clear(neu, 0, neu.Length);
+            if (card != IntPtr.Zero) SCardDisconnect(card, 1 /*RESET: Anmeldung verwerfen*/);
+            if (ctx != IntPtr.Zero) SCardReleaseContext(ctx);
+            if (cd != IntPtr.Zero) Marshal.FreeHGlobal(cd);
+            if (nameW != IntPtr.Zero) Marshal.FreeHGlobal(nameW);
+            if (atrMem != IntPtr.Zero) Marshal.FreeHGlobal(atrMem);
+        }
+    }
+}
+'@
+
+function Set-VscPin {
+    # PIN einer virtuellen Smartcard ändern (Kartentreiber-Weg, siehe $script:VscPinSource).
+    # Die PINs kommen als Byte-Arrays (ASCII) und werden nach dem Aufruf gelöscht; sie
+    # erscheinen nie im Log. Ergebnis.Status: Changed | WrongPin | Blocked | InvalidNewPin | Error.
+    param(
+        [Parameter(Mandatory)][string]$PcscName,
+        [Parameter(Mandatory)][byte[]]$CurrentPin,
+        [Parameter(Mandatory)][byte[]]$NewPin
+    )
+    if (-not ('VscWizardPin' -as [type])) { Add-Type -TypeDefinition $script:VscPinSource }
+    $attempts = [uint32]0; $detail = ''
+    Write-WizardLog -Message "PIN ändern: '$PcscName' (Kartentreiber)." -Level Command
+    try {
+        $rc = [VscWizardPin]::Change($PcscName, $CurrentPin, $NewPin, [ref]$attempts, [ref]$detail)
+    } catch {
+        Write-WizardLog -Message "PIN ändern: Ausnahme $($_.Exception.Message)" -Level Error
+        return [pscustomobject]@{ Status = 'Error'; Attempts = $null; Code = $null; Message = $_.Exception.Message }
+    } finally {
+        [Array]::Clear($CurrentPin, 0, $CurrentPin.Length); [Array]::Clear($NewPin, 0, $NewPin.Length)
+    }
+    $code = '0x{0:X8}' -f $rc
+    # Über den Code-Text: PowerShell 5.1 liest 0x8010006B als NEGATIVES Int32 - ein
+    # Zahlenvergleich mit dem uint-Rückgabewert griffe nie.
+    $status = switch ($code) {
+        '0x00000000' { 'Changed' }
+        '0x8010006B' { 'WrongPin' }        # SCARD_W_WRONG_CHV
+        '0x8010006C' { 'Blocked' }         # SCARD_W_CHV_BLOCKED
+        '0x8010002A' { 'InvalidNewPin' }   # SCARD_E_INVALID_CHV (z.B. Richtlinie/Länge)
+        default      { 'Error' }
+    }
+    $left = if ($status -eq 'WrongPin' -and $attempts -ne [uint32]::MaxValue) { [int]$attempts } else { $null }
+    switch ($status) {
+        'Changed' { Write-WizardLog -Message "PIN von '$PcscName' geändert und mit der neuen PIN gegengeprüft." -Level Success }
+        'WrongPin' { Write-WizardLog -Message "PIN ändern: aktuelle PIN falsch ($code), verbleibende Versuche: $left." -Level Error }
+        default { Write-WizardLog -Message "PIN ändern: $status ($code) bei '$detail'." -Level Error }
+    }
+    return [pscustomobject]@{ Status = $status; Attempts = $left; Code = $code; Message = "$detail $code".Trim() }
+}
+
 function Remove-VirtualSmartCard {
     # tpmvscmgr destroy /instance <InstanceId> - die InstanceId ist dieselbe
     # PnP-Gerätepfad-Kennung, die auch Get-VirtualSmartCardReaders liefert

@@ -3173,6 +3173,92 @@ $btnBackShared.Add_Click({
 # ============================================================================
 Update-Splash -Text (T 'Dialoge vorbereiten...') -Percent 76
 
+function Show-VscPinChangeDialog {
+    # Alte PIN, neue PIN, Wiederholung - Änderung über den Kartentreiber (Set-VscPin).
+    # Bei falscher alter PIN bzw. abgelehnter neuer PIN bleibt der Dialog offen.
+    param([Parameter(Mandatory)]$Reader, [System.Windows.Forms.Form]$Owner)
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = (T 'PIN ändern')
+    $dlg.FormBorderStyle = 'FixedDialog'; $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
+    $dlg.ClientSize = New-Object System.Drawing.Size(460, 300)
+    $dlg.BackColor = $script:UI.Surface; $dlg.Font = New-UiFont 9.5
+
+    $head = New-Object System.Windows.Forms.Label
+    $head.UseMnemonic = $false; $head.Font = New-UiFont 10.5 -Semibold
+    $head.Text = ((T 'Karte {0}  ({1})') -f $Reader.FriendlyName, $Reader.PcscName)
+    $head.Location = New-Object System.Drawing.Point(18, 16); $head.Size = New-Object System.Drawing.Size(424, 22); $head.AutoEllipsis = $true
+    $dlg.Controls.Add($head)
+
+    $boxes = @()
+    $y = 54
+    foreach ($cap in @((T 'Aktuelle PIN:'), (T 'Neue PIN:'), (T 'Neue PIN wiederholen:'))) {
+        $lb = New-Object System.Windows.Forms.Label
+        $lb.Text = $cap; $lb.Location = New-Object System.Drawing.Point(18, ($y + 4)); $lb.Size = New-Object System.Drawing.Size(170, 22)
+        $tb = New-Object System.Windows.Forms.TextBox
+        $tb.UseSystemPasswordChar = $true; $tb.Location = New-Object System.Drawing.Point(192, $y); $tb.Size = New-Object System.Drawing.Size(250, 26)
+        $dlg.Controls.AddRange(@($lb, $tb)); $boxes += $tb
+        $y += 38
+    }
+    $msg = New-Object System.Windows.Forms.Label
+    $msg.UseMnemonic = $false; $msg.ForeColor = $script:UI.Muted
+    $msg.Text = (T 'Die neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Eine falsche aktuelle PIN zählt als Fehlversuch.')
+    $msg.Location = New-Object System.Drawing.Point(18, 172); $msg.Size = New-Object System.Drawing.Size(424, 64)
+    $dlg.Controls.Add($msg)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = (T 'PIN ändern'); $ok.Location = New-Object System.Drawing.Point(222, 252); $ok.Size = New-Object System.Drawing.Size(116, 32)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = (T 'Abbrechen'); $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancel.Location = New-Object System.Drawing.Point(346, 252); $cancel.Size = New-Object System.Drawing.Size(96, 32)
+    $dlg.Controls.AddRange(@($ok, $cancel))
+    $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
+
+    $showMsg = { param($Text, $Color) $msg.ForeColor = $Color; $msg.Text = $Text }
+    $ok.Add_Click({
+        $cur = $boxes[0].Text; $new = $boxes[1].Text
+        if (-not $cur -or -not $new) { & $showMsg (T 'Bitte alle Felder ausfüllen.') $script:UI.Danger; return }
+        if ($new -ne $boxes[2].Text) { & $showMsg (T 'Die neuen PINs stimmen nicht überein.') $script:UI.Danger; $boxes[2].Text = ''; $boxes[2].Focus(); return }
+        # Karten-PINs sind druckbare ASCII-Zeichen - Umlaute o.ä. würden anders kodiert ankommen.
+        if ($new -notmatch '^[\x20-\x7E]+$' -or $cur -notmatch '^[\x20-\x7E]+$') { & $showMsg (T 'Die PIN darf nur Buchstaben ohne Umlaute, Ziffern und gängige Sonderzeichen enthalten.') $script:UI.Danger; return }
+        if ($new.Length -lt 4) { & $showMsg (T 'Die neue PIN ist zu kurz (mindestens 4 Zeichen, die Karte kann mehr verlangen).') $script:UI.Danger; return }
+        $ok.Enabled = $false; $dlg.Cursor = 'WaitCursor'; $dlg.Refresh()
+        try {
+            $res = Set-VscPin -PcscName $Reader.PcscName -CurrentPin ([Text.Encoding]::ASCII.GetBytes($cur)) -NewPin ([Text.Encoding]::ASCII.GetBytes($new))
+        } finally { $cur = $null; $new = $null; $dlg.Cursor = 'Default'; $ok.Enabled = $true }
+        switch ($res.Status) {
+            'Changed' {
+                foreach ($b in $boxes) { $b.Text = '' }
+                [System.Windows.Forms.MessageBox]::Show(((T 'Die PIN von {0} wurde geändert.') -f $Reader.FriendlyName), (T 'PIN ändern'), 'OK', 'Information') | Out-Null
+                $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            }
+            'WrongPin' {
+                $boxes[0].Text = ''; $boxes[0].Focus()
+                $t = if ($null -ne $res.Attempts) { (T 'Die aktuelle PIN ist falsch - noch {0} Versuch(e), danach ist die Karte gesperrt.') -f $res.Attempts } else { T 'Die aktuelle PIN ist falsch.' }
+                & $showMsg $t $script:UI.Danger
+            }
+            'InvalidNewPin' {
+                $boxes[1].Text = ''; $boxes[2].Text = ''; $boxes[1].Focus()
+                & $showMsg (T 'Die Karte hat die neue PIN abgelehnt - sie erfüllt die PIN-Richtlinie der Karte nicht (z.B. zu kurz). Die bisherige PIN gilt weiter.') $script:UI.Danger
+            }
+            'Blocked' {
+                [System.Windows.Forms.MessageBox]::Show((T 'Die Karte ist gesperrt (zu viele falsche PIN-Eingaben). Eine virtuelle Smartcard ohne bekannten Administratorschlüssel lässt sich nicht entsperren - Karte löschen und neu anlegen.'), (T 'Fehler'), 'OK', 'Error') | Out-Null
+                $dlg.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+            }
+            default {
+                [System.Windows.Forms.MessageBox]::Show(((T 'PIN ändern fehlgeschlagen ({0}). Details siehe Log.') -f $res.Message) + "`r`n`r`n" +
+                    ((T "Die PIN einer Smartcard ändert Windows über den Sicherheitsbildschirm:`r`n`r`n1. Strg+Alt+Entf drücken (in einer Remotedesktop-Sitzung: Strg+Alt+Ende).`r`n2. 'Kennwort ändern' wählen.`r`n3. Unter 'Anmeldeoptionen' das Smartcard-Symbol wählen.`r`n4. Die Karte `"{0}`" wählen (= '{1}').`r`n5. Alte PIN und zweimal die neue PIN eingeben.`r`n`r`nDie neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Der Wizard sieht die PIN dabei nie.") -f $Reader.PcscName, $Reader.FriendlyName),
+                    (T 'Fehler'), 'OK', 'Error') | Out-Null
+            }
+        }
+    })
+    $dlg.Add_Shown({ $boxes[0].Focus() })
+    Set-DialogStyle -Dialog $dlg
+    if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
+    foreach ($b in $boxes) { $b.Text = '' }
+    $dlg.Dispose()
+}
+
 function Show-VscInventoryDialog {
     # "VSCs verwalten" (Szenario 04): oben die Karten, unten die Zertifikate der
     # gewählten Karte; Aktionen jeweils direkt darunter. Selbsterklärend - die frühere
@@ -3393,19 +3479,13 @@ function Show-VscInventoryDialog {
     $btnShowCert.Add_Click($showCert)
     $lvCerts.Add_DoubleClick($showCert)
 
-    # PIN ändern: Windows bietet Desktop-Programmen dafür KEINE API - der WinRT-Weg
-    # (SmartCardProvisioning.RequestPinChangeAsync) ist nur für UWP-Apps freigegeben und
-    # liefert sonst 0x80070490 "Element nicht gefunden" (auch nativ ARM64 getestet). Der
-    # eingebaute, sichere Weg ist der Windows-Sicherheitsbildschirm - der Wizard sagt
-    # genau, welche Karte dort zu wählen ist, und sieht die PIN nie.
+    # PIN ändern über den Kartentreiber (Set-VscPin, Core) - eigener Dialog, siehe
+    # Show-VscPinChangeDialog. (Der WinRT-Weg RequestPinChangeAsync ist nur für UWP frei.)
     $btnChangePin.Add_Click({
         if ($lvReaders.SelectedItems.Count -eq 0) { return }
         $r = $lvReaders.SelectedItems[0].Tag
         if (-not (Test-IsVirtualCard $r)) { return }
-        Write-WizardLog -Message "PIN ändern: Anleitung für '$($r.FriendlyName)' ($($r.PcscName)) angezeigt." -Level Info
-        [System.Windows.Forms.MessageBox]::Show(
-            ((T "Die PIN einer Smartcard ändert Windows über den Sicherheitsbildschirm:`r`n`r`n1. Strg+Alt+Entf drücken (in einer Remotedesktop-Sitzung: Strg+Alt+Ende).`r`n2. 'Kennwort ändern' wählen.`r`n3. Unter 'Anmeldeoptionen' das Smartcard-Symbol wählen.`r`n4. Die Karte `"{0}`" wählen (= '{1}').`r`n5. Alte PIN und zweimal die neue PIN eingeben.`r`n`r`nDie neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Der Wizard sieht die PIN dabei nie.") -f $r.PcscName, $r.FriendlyName),
-            (T 'PIN ändern'), 'OK', 'Information') | Out-Null
+        Show-VscPinChangeDialog -Reader $r -Owner $dlg
     })
 
     $btnDeleteReader.Add_Click({
