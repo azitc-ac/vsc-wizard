@@ -241,6 +241,72 @@ function Test-IsElevated {
     return $p.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 }
 
+$script:ForegroundHelperReady = $false
+function Initialize-ForegroundHelper {
+    # Einmalig kompiliert; schlägt das fehl, laufen externe Aufrufe wie bisher (ohne Hilfe).
+    if ($script:ForegroundHelperReady -or $script:ForegroundHelperFailed) { return }
+    try {
+        if (-not ('VscWizardForeground' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+
+// PIN-/Sicherheitsdialoge externer Programme (certreq, tpmvscmgr, ...) nach vorn holen.
+// Sie gehören dem Kindprozess oder CredentialUIBroker ("Credential Dialog Xaml Host") -
+// wegen der Windows-Fokussperre erschienen sie je nach Timing HINTER dem Wizard.
+public static class VscWizardForeground {
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+
+    static readonly uint Self = (uint)Process.GetCurrentProcess().Id;
+
+    public static void AllowAny() { AllowSetForegroundWindow(-1); }   // ASFW_ANY
+
+    // Holt ein sichtbares Fenster des Kindprozesses bzw. einen Windows-Sicherheitsdialog
+    // nach vorn - NUR solange der Wizard selbst vorn ist (wer zu einer anderen App
+    // gewechselt hat, bekommt den Fokus nicht weggenommen). Rückgabe: Beschreibung des
+    // nach vorn geholten Fensters, sonst null.
+    public static string PromoteDialogs(int childPid) {
+        uint fgPid;
+        GetWindowThreadProcessId(GetForegroundWindow(), out fgPid);
+        if (fgPid != Self) return null;
+        IntPtr target = IntPtr.Zero; string desc = null;
+        EnumWindows((h, l) => {
+            if (!IsWindowVisible(h)) return true;
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            var cls = new StringBuilder(256); GetClassNameW(h, cls, 256);
+            if (pid == (uint)childPid || cls.ToString() == "Credential Dialog Xaml Host") {
+                var title = new StringBuilder(256); GetWindowTextW(h, title, 256);
+                target = h; desc = "'" + title + "' (" + cls + ")";
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        if (target == IntPtr.Zero) return null;
+        if (IsIconic(target)) ShowWindow(target, 9 /*SW_RESTORE*/);
+        return SetForegroundWindow(target) ? desc : null;
+    }
+}
+'@
+        }
+        $script:ForegroundHelperReady = $true
+    } catch {
+        $script:ForegroundHelperFailed = $true
+        Write-WizardLog -Message "Vordergrund-Hilfe nicht verfügbar: $($_.Exception.Message)" -Level Info
+    }
+}
+
 function Invoke-ExternalCommand {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -274,32 +340,45 @@ function Invoke-ExternalCommand {
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
 
+    Initialize-ForegroundHelper
     Enter-WizardBusy -Text ((T '{0} läuft...') -f [System.IO.Path]::GetFileNameWithoutExtension($FilePath))
     try {
+        # PIN-/Sicherheitsdialoge gehören dem Kindprozess bzw. CredentialUIBroker - die
+        # Windows-Fokussperre ließ sie je nach Timing HINTER dem Wizard erscheinen. Der
+        # Wizard (nach dem Klick im Vordergrund) gibt den Vordergrund frei und holt solche
+        # Dialoge beim Warten aktiv nach vorn (siehe VscWizardForeground).
+        if ($script:ForegroundHelperReady) { [VscWizardForeground]::AllowAny() }
         [void]$proc.Start()
 
-        if ($TimeoutSeconds -gt 0) {
-            # Asynchrones Lesen startet VOR WaitForExit, damit die Pipes laufend geleert werden
-            # und ein volles Output-Puffer nicht zum Deadlock mit dem Kindprozess führt.
-            $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-            $stderrTask = $proc.StandardError.ReadToEndAsync()
-            $exited = $proc.WaitForExit($TimeoutSeconds * 1000)
-            if (-not $exited) {
-                try { $proc.Kill() } catch { }
-                if (-not $Silent) { Write-WizardLog -Message "$FilePath $quotedArgs (Zeitüberschreitung nach $TimeoutSeconds s)" -Level Error }
-                # Bis zum Kill bereits geschriebene Ausgabe separat mitgeben (StdOut bleibt
-                # leer wie bisher) - z.B. für Sammel-Lookups, die abgeschlossene Teile nutzen.
-                $partial = ''
-                try { if ($stdoutTask.Wait(2000)) { $partial = $stdoutTask.Result } } catch { }
-                return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false; PartialStdOut = $partial }
+        # Asynchrones Lesen startet VOR dem Warten, damit die Pipes laufend geleert werden
+        # und ein volles Output-Puffer nicht zum Deadlock mit dem Kindprozess führt.
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $exited = $false
+        while (-not $exited) {
+            $exited = $proc.WaitForExit(250)
+            if ($exited) { break }
+            if ($script:ForegroundHelperReady) {
+                try {
+                    $promoted = [VscWizardForeground]::PromoteDialogs($proc.Id)
+                    if ($promoted) { Write-WizardLog -Message "Dialog in den Vordergrund geholt: $promoted" -Level Info }
+                } catch { }
             }
-            $stdout = $stdoutTask.Result
-            $stderr = $stderrTask.Result
-        } else {
-            $stdout = $proc.StandardOutput.ReadToEnd()
-            $stderr = $proc.StandardError.ReadToEnd()
-            $proc.WaitForExit()
+            if ($TimeoutSeconds -gt 0 -and $sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) { break }
         }
+        if (-not $exited) {
+            try { $proc.Kill() } catch { }
+            if (-not $Silent) { Write-WizardLog -Message "$FilePath $quotedArgs (Zeitüberschreitung nach $TimeoutSeconds s)" -Level Error }
+            # Bis zum Kill bereits geschriebene Ausgabe separat mitgeben (StdOut bleibt
+            # leer wie bisher) - z.B. für Sammel-Lookups, die abgeschlossene Teile nutzen.
+            $partial = ''
+            try { if ($stdoutTask.Wait(2000)) { $partial = $stdoutTask.Result } } catch { }
+            return [pscustomobject]@{ ExitCode = -1; StdOut = ''; StdErr = 'Timeout'; Success = $false; PartialStdOut = $partial }
+        }
+        $proc.WaitForExit()   # nach WaitForExit(ms) sicherstellen, dass die Ausgabe-Pipes fertig sind
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
     } finally { Exit-WizardBusy }
 
     if (-not $Silent) {

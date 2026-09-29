@@ -266,6 +266,18 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   (lokaler DC, keine SID/altSecId). UAC mit Smartcard für jdoe -> Fehler 740: noch
   ungeklärt (Test als jdoe am Anmeldebildschirm steht aus).
 
+## Zuletzt erledigt (2026-09-29): PIN-Dialoge nicht mehr im Hintergrund
+- Ursache: Windows-Fokussperre. PIN-/Sicherheitsdialoge beim Anfordern gehören
+  certreq (unsichtbar gestartet) bzw. CredentialUIBroker ("Credential Dialog Xaml
+  Host"), nicht dem Wizard - je nach Timing erschienen sie dahinter.
+- `Invoke-ExternalCommand`: vor dem Start `AllowSetForegroundWindow(ASFW_ANY)`; beim
+  Warten alle 250 ms `VscWizardForeground.PromoteDialogs` - holt ein sichtbares Fenster
+  des Kindprozesses bzw. einen Sicherheitsdialog nach vorn, NUR solange der Wizard selbst
+  vorn ist (kein Fokusdiebstahl bei App-Wechsel). Log-Eintrag "Dialog in den Vordergrund
+  geholt". Warten jetzt immer mit asynchronem Pipe-Lesen (auch ohne Timeout).
+- **Offen:** interaktiv bestätigen (tritt sporadisch auf; im Log erkennbar, wenn der
+  Wizard eingreifen musste).
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird
