@@ -1249,11 +1249,9 @@ $script:Scenarios = @(
         Guard = [pscustomobject]@{ Kind = 'danger'; Text = (T 'NUR Entra CBA/Cloud - NICHT für On-Prem-Smartcard-Logon! Das Offline-Template bettet keine Konto-SID ein (starke Zuordnung, KB5014754) -> der KDC lehnt den On-Prem-Logon ab. Für On-Prem-Konten: onprem-Adminkonto (Szenario 01) bzw. EOBO (Szenario 05). Zusaetzlich ESC1: SAN frei praegbar -> Template zusperren (enge Enroll-ACL, ggf. Manager-Approval).') }
     }
     [pscustomobject]@{
-        Id = 4; Title = (T 'VSCs verwalten'); Sub = (T 'WERKZEUG   Vorhandene Karten und Zertifikate ansehen und löschen.'); Stripe = 'teal'
-        Steps = @(
-            [pscustomobject]@{ T = 'Tool'; X = (T 'Inventar: Reader, Karten, Zertifikate mit Ablaufdatum.') }
-            [pscustomobject]@{ T = 'Du';   X = (T 'Auswählen und löschen (tpmvscmgr destroy).') }
-        )
+        Id = 4; Title = (T 'VSCs verwalten'); Sub = (T 'WERKZEUG   Karten und Zertifikate ansehen, PIN ändern, löschen.'); Stripe = 'teal'
+        # Keine Ablaufschritte: der Verwaltungsdialog erklärt sich selbst.
+        Steps = @()
         Guard = $null
     }
     [pscustomobject]@{
@@ -3178,178 +3176,264 @@ $btnBackShared.Add_Click({
 Update-Splash -Text (T 'Dialoge vorbereiten...') -Percent 76
 
 function Show-VscInventoryDialog {
+    # "VSCs verwalten" (Szenario 04): oben die Karten, unten die Zertifikate der
+    # gewählten Karte; Aktionen jeweils direkt darunter. Selbsterklärend - die frühere
+    # Ablaufbeschreibung ("Tool: Inventar ... / Du: Auswählen und löschen") entfällt.
     param([System.Windows.Forms.Form]$Owner)
 
-    # Die Zertifikatserkennung kann durch den Timeout-Schutz gegen hängende
-    # CNG-Schlüsselzugriffe (siehe Get-SmartCardCngProviderInfo in Core.psm1) je nach
-    # Anzahl der Zertifikate und ggf. verwaisten VSC-Verweisen mehrere Sekunden bis
-    # niedrige zweistellige Sekunden dauern - Wartecursor als sichtbares Feedback,
-    # sonst wirkt die App in dieser Zeit eingefroren.
+    # Die Zertifikatserkennung kann (Hänger-Schutz, siehe Get-SmartCardCngProviderInfoBatch)
+    # einige Sekunden dauern - die Kernfunktionen zeigen dafür selbst den Warte-Hinweis.
     Set-Busy -Text (T 'Lese virtuelle Smartcards und Zertifikate...')
     try {
-        $readers = Get-VirtualSmartCardReaders
-        $certs = Get-SmartCardCertificates
+        $readers = @(Get-VirtualSmartCardReaders)
+        $certs = @(Get-SmartCardCertificates)
     } finally { Clear-Busy }
     Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegerät(e), $($certs.Count) Zertifikat(e) mit privatem Schlüssel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
-    foreach ($rd in $readers) { Write-WizardLog -Message "  Leser '$($rd.FriendlyName)' PcscName='$($rd.PcscName)'" -Level Info }
-    foreach ($ct in @($certs | Where-Object IsSmartCard)) { Write-WizardLog -Message "  SC-Cert Reader='$($ct.Reader)' Subject='$($ct.Subject.Substring(0,[Math]::Min(40,$ct.Subject.Length)))'" -Level Info }
+
+    $now = Get-Date
+    function Get-ExpiryState([datetime]$NotAfter) {
+        if ($NotAfter -lt $now) { return 'expired' }
+        if ($NotAfter -lt $now.AddDays(30)) { return 'soon' }
+        return 'ok'
+    }
+    function Get-ExpiryColor([string]$State) {
+        switch ($State) { 'expired' { $script:UI.Danger } 'soon' { $script:UI.Warn } default { $script:UI.Text } }
+    }
 
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = (T 'Vorhandene virtuelle Smartcards')
-    $dlg.Size = New-Object System.Drawing.Size(920, 680)
-    $dlg.MinimumSize = New-Object System.Drawing.Size(700, 500)
+    $dlg.Text = (T 'Virtuelle Smartcards verwalten')
+    $dlg.Size = New-Object System.Drawing.Size(940, 700)
+    $dlg.MinimumSize = New-Object System.Drawing.Size(760, 540)
     $dlg.StartPosition = 'CenterParent'
     $dlg.MinimizeBox = $false
+    $dlg.BackColor = $script:UI.Ground
+    $dlg.Font = New-UiFont 9.5
 
     $dlgLayout = New-Object System.Windows.Forms.TableLayoutPanel
-    $dlgLayout.Dock = 'Fill'
-    $dlgLayout.RowCount = 6
-    $dlgLayout.ColumnCount = 1
-    $dlgLayout.Padding = New-Object System.Windows.Forms.Padding(10)
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 35)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 40)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 65)))
-    [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 46)))
+    $dlgLayout.Dock = 'Fill'; $dlgLayout.ColumnCount = 1; $dlgLayout.RowCount = 7
+    $dlgLayout.Padding = New-Object System.Windows.Forms.Padding(18, 14, 18, 10)
+    foreach ($rs in @(@('AutoSize', 0), @('Percent', 42), @('AutoSize', 0), @('AutoSize', 0), @('Percent', 58), @('AutoSize', 0), @('AutoSize', 0))) {
+        [void]$dlgLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::($rs[0]), $rs[1])))
+    }
     $dlg.Controls.Add($dlgLayout)
 
-    $lblReadersHeader = New-Object System.Windows.Forms.Label
-    $lblReadersHeader.Text = ((T 'Erkannte Smartcard-Lesegeräte (inkl. virtueller TPM-Smartcards): {0}') -f $readers.Count)
-    $lblReadersHeader.AutoSize = $true
-    $lblReadersHeader.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
-    $dlgLayout.Controls.Add($lblReadersHeader, 0, 0)
+    function New-InvHeader([string]$Text) {
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $Text; $l.AutoSize = $true; $l.UseMnemonic = $false
+        $l.Font = New-UiFont 10.5 -Semibold; $l.ForeColor = $script:UI.Text
+        $l.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 6)
+        return $l
+    }
+    function New-InvList {
+        $lv = New-Object System.Windows.Forms.ListView
+        $lv.Dock = 'Fill'; $lv.View = 'Details'; $lv.FullRowSelect = $true; $lv.MultiSelect = $false
+        $lv.HideSelection = $false; $lv.GridLines = $false; $lv.BorderStyle = 'FixedSingle'
+        $lv.Font = New-UiFont 9.5
+        $lv.ShowItemToolTips = $true   # abgeschnittene Namen (z.B. lange Leser-Namen) per Tooltip
+        # Letzte Spalte füllt die Restbreite (sonst bleibt rechts ein leerer Streifen).
+        $lv.Add_Resize({
+            param($s, $e)
+            if ($s.Columns.Count -lt 2) { return }
+            $used = 0; for ($i = 0; $i -lt $s.Columns.Count - 1; $i++) { $used += $s.Columns[$i].Width }
+            $s.Columns[$s.Columns.Count - 1].Width = [Math]::Max(120, $s.ClientSize.Width - $used - 2)
+        })
+        return $lv
+    }
+    function New-InvActionBar {
+        $f = New-Object System.Windows.Forms.FlowLayoutPanel
+        $f.AutoSize = $true; $f.Dock = 'Fill'; $f.FlowDirection = 'LeftToRight'; $f.WrapContents = $false
+        $f.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 8)
+        return $f
+    }
+    function New-InvButton([string]$Text, [int]$Width = 190) {
+        $b = New-Object System.Windows.Forms.Button
+        $b.Text = $Text; $b.Size = New-Object System.Drawing.Size($Width, 32)
+        $b.Margin = New-Object System.Windows.Forms.Padding(0, 0, 10, 0)
+        return $b
+    }
 
-    $lvReaders = New-Object System.Windows.Forms.ListView
-    $lvReaders.Dock = 'Fill'
-    $lvReaders.View = 'Details'
-    $lvReaders.FullRowSelect = $true
-    $lvReaders.MultiSelect = $false
-    $lvReaders.GridLines = $true
-    $lvReaders.HideSelection = $false
-    [void]$lvReaders.Columns.Add((T 'Lesegerät'), 340)
-    [void]$lvReaders.Columns.Add((T 'Status'), 90)
-    [void]$lvReaders.Columns.Add((T 'Geräte-ID'), 300)
+    # --- Karten ---------------------------------------------------------------------
+    $dlgLayout.Controls.Add((New-InvHeader ((T 'Smartcards auf diesem Gerät ({0})') -f $readers.Count)), 0, 0)
+    $lvReaders = New-InvList
+    [void]$lvReaders.Columns.Add((T 'Karte'), 250)
+    [void]$lvReaders.Columns.Add((T 'In Windows-Dialogen'), 250)
+    [void]$lvReaders.Columns.Add((T 'Zertifikate'), 100)
+    [void]$lvReaders.Columns.Add((T 'Nächster Ablauf'), 150)
     $dlgLayout.Controls.Add($lvReaders, 0, 1)
 
     $unmatchedSmartCardMarker = [pscustomobject]@{ IsMarker = $true; Kind = 'unmatched' }
     $nonSmartCardMarker = [pscustomobject]@{ IsMarker = $true; Kind = 'other' }
 
     foreach ($reader in $readers) {
-        $readerItem = New-Object System.Windows.Forms.ListViewItem($reader.FriendlyName)
-        [void]$readerItem.SubItems.Add([string]$reader.Status)
-        [void]$readerItem.SubItems.Add($reader.InstanceId)
-        $readerItem.Tag = $reader
-        [void]$lvReaders.Items.Add($readerItem)
+        $cardCerts = @($certs | Where-Object { $_.Reader -and $reader.PcscName -and $_.Reader -eq $reader.PcscName })
+        $item = New-Object System.Windows.Forms.ListViewItem($reader.FriendlyName)
+        $item.UseItemStyleForSubItems = $false
+        [void]$item.SubItems.Add($(if ($reader.PcscName) { $reader.PcscName } else { '-' }))
+        [void]$item.SubItems.Add("$($cardCerts.Count)")
+        if ($cardCerts.Count -gt 0) {
+            $soonest = ($cardCerts | Sort-Object NotAfter | Select-Object -First 1).NotAfter
+            $sub = $item.SubItems.Add($soonest.ToString('yyyy-MM-dd'))
+            $sub.ForeColor = Get-ExpiryColor (Get-ExpiryState $soonest)
+        } else { [void]$item.SubItems.Add('-') }
+        $item.Tag = $reader
+        [void]$lvReaders.Items.Add($item)
     }
 
-    # Zuordnung Zertifikat -> Lesegerät über den PC/SC-Namen ("Microsoft Virtual
-    # Smart Card N"): das Zertifikat meldet ihn als .Reader, das Lesegerät trägt ihn
-    # als .PcscName (siehe Get-VirtualSmartCardReaders / Get-SmartCardCngProviderInfo).
+    # Zertifikate ohne zuordenbare Karte bzw. ohne Smartcard-Schlüssel: als gedämpfte
+    # Zusatzzeilen (zur Diagnose), ohne Karten-Aktionen.
     $readerPcscNames = @($readers | ForEach-Object { $_.PcscName } | Where-Object { $_ })
     $unmatchedSmartCardCerts = @($certs | Where-Object { $_.IsSmartCard -and (-not $_.Reader -or ($readerPcscNames -notcontains $_.Reader)) })
-    if ($unmatchedSmartCardCerts.Count -gt 0) {
-        $markerItem = New-Object System.Windows.Forms.ListViewItem("Weitere smartcard-gebundene Zertifikate (Lesegerät nicht zuordenbar, $($unmatchedSmartCardCerts.Count))")
-        $markerItem.Tag = $unmatchedSmartCardMarker
-        [void]$lvReaders.Items.Add($markerItem)
-    }
-
     $otherCerts = @($certs | Where-Object { -not $_.IsSmartCard })
-    if ($otherCerts.Count -gt 0) {
-        $markerItem = New-Object System.Windows.Forms.ListViewItem("Sonstige Zertifikate mit privatem Schlüssel (nicht als Smartcard erkannt, $($otherCerts.Count))")
-        $markerItem.Tag = $nonSmartCardMarker
-        [void]$lvReaders.Items.Add($markerItem)
+    foreach ($m in @(@($unmatchedSmartCardCerts, $unmatchedSmartCardMarker, (T 'Smartcard-Zertifikate ohne Karte')), @($otherCerts, $nonSmartCardMarker, (T 'Sonstige Zertifikate (keine Smartcard)')))) {
+        if ($m[0].Count -eq 0) { continue }
+        $item = New-Object System.Windows.Forms.ListViewItem($m[2])
+        $item.ForeColor = $script:UI.Muted
+        [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add("$($m[0].Count)"); [void]$item.SubItems.Add('')
+        $item.Tag = $m[1]
+        [void]$lvReaders.Items.Add($item)
     }
-
     if ($lvReaders.Items.Count -eq 0) {
-        [void]$lvReaders.Items.Add((New-Object System.Windows.Forms.ListViewItem('Keine Smartcard-Lesegeräte und keine smartcard-gebundenen Zertifikate gefunden.')))
+        [void]$lvReaders.Items.Add((New-Object System.Windows.Forms.ListViewItem((T 'Keine Smartcards gefunden.'))))
     }
 
-    $readerButtonPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-    $readerButtonPanel.Dock = 'Fill'
-    $readerButtonPanel.FlowDirection = 'LeftToRight'
-    $dlgLayout.Controls.Add($readerButtonPanel, 0, 2)
+    $cardBar = New-InvActionBar
+    $btnChangePin = New-InvButton (T 'PIN ändern...')
+    $btnDeleteReader = New-InvButton (T 'Karte löschen...')
+    $btnChangePin.Enabled = $false; $btnDeleteReader.Enabled = $false
+    # Hinweiszeile IM Dialog: der zentrale Warte-Hinweis liegt im Hauptfenster und wäre
+    # hinter diesem modalen Dialog verdeckt.
+    $lblCardHint = New-Object System.Windows.Forms.Label
+    $lblCardHint.AutoSize = $true; $lblCardHint.UseMnemonic = $false
+    $lblCardHint.ForeColor = $script:UI.Muted
+    $lblCardHint.Margin = New-Object System.Windows.Forms.Padding(6, 8, 0, 0)
+    $cardBar.Controls.AddRange(@($btnChangePin, $btnDeleteReader, $lblCardHint))
+    $dlgLayout.Controls.Add($cardBar, 0, 2)
 
-    $btnDeleteReader = New-Object System.Windows.Forms.Button
-    $btnDeleteReader.Text = (T 'Ausgewählte Smartcard löschen...')
-    $btnDeleteReader.Size = New-Object System.Drawing.Size(240, 30)
-    $btnDeleteReader.Enabled = $false
-    $readerButtonPanel.Controls.Add($btnDeleteReader)
-
-    $lblCertsHeader = New-Object System.Windows.Forms.Label
-    $lblCertsHeader.Text = (T 'Zertifikate: (Lesegerät oben auswählen)')
-    $lblCertsHeader.AutoSize = $true
-    $lblCertsHeader.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 4)
+    # --- Zertifikate der gewählten Karte --------------------------------------------
+    $lblCertsHeader = New-InvHeader (T 'Zertifikate')
     $dlgLayout.Controls.Add($lblCertsHeader, 0, 3)
-
-    $lvCerts = New-Object System.Windows.Forms.ListView
-    $lvCerts.Dock = 'Fill'
-    $lvCerts.View = 'Details'
-    $lvCerts.FullRowSelect = $true
-    $lvCerts.MultiSelect = $false
-    $lvCerts.GridLines = $true
-    $lvCerts.HideSelection = $false
-    [void]$lvCerts.Columns.Add((T 'Subject'), 300)
-    [void]$lvCerts.Columns.Add((T 'Gültig bis'), 90)
-    [void]$lvCerts.Columns.Add((T 'Thumbprint'), 220)
-    [void]$lvCerts.Columns.Add((T 'Provider'), 200)
+    $lvCerts = New-InvList
+    [void]$lvCerts.Columns.Add((T 'Ausgestellt für'), 330)
+    [void]$lvCerts.Columns.Add((T 'Gültig bis'), 110)
+    [void]$lvCerts.Columns.Add((T 'Status'), 130)
+    [void]$lvCerts.Columns.Add((T 'Fingerabdruck'), 300)
     $dlgLayout.Controls.Add($lvCerts, 0, 4)
+
+    $certBar = New-InvActionBar
+    $btnShowCert = New-InvButton (T 'Anzeigen...') 150
+    $btnDeleteCert = New-InvButton (T 'Von Karte entfernen...')
+    $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
+    $certBar.Controls.AddRange(@($btnShowCert, $btnDeleteCert))
+    $dlgLayout.Controls.Add($certBar, 0, 5)
+
+    $dlgBtnPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $dlgBtnPanel.AutoSize = $true; $dlgBtnPanel.Dock = 'Fill'; $dlgBtnPanel.FlowDirection = 'RightToLeft'
+    $btnCloseInventory = New-InvButton (T 'Schließen') 120
+    $btnRefreshInventory = New-InvButton (T 'Aktualisieren') 120
+    $dlgBtnPanel.Controls.AddRange(@($btnCloseInventory, $btnRefreshInventory))
+    $dlgLayout.Controls.Add($dlgBtnPanel, 0, 6)
+    $dlg.CancelButton = $btnCloseInventory
+
+    function Test-IsVirtualCard($Reader) {
+        return [bool]($Reader -and -not $Reader.PSObject.Properties['IsMarker'] -and $Reader.PcscName -and "$($Reader.InstanceId)" -like 'ROOT\SMARTCARDREADER\*')
+    }
 
     function Update-CertListForSelection {
         $lvCerts.Items.Clear()
-        if ($lvReaders.SelectedItems.Count -eq 0) {
-            $lblCertsHeader.Text = (T 'Zertifikate: (Lesegerät oben auswählen)')
-            $btnDeleteReader.Enabled = $false
-            return
-        }
-
-        $selectedTag = $lvReaders.SelectedItems[0].Tag
+        $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
+        $lblCardHint.Text = ''
+        $sel =if ($lvReaders.SelectedItems.Count -gt 0) { $lvReaders.SelectedItems[0].Tag } else { $null }
+        $btnChangePin.Enabled = Test-IsVirtualCard $sel
+        $btnDeleteReader.Enabled = Test-IsVirtualCard $sel
+        if (-not $sel) { $lblCertsHeader.Text = (T 'Zertifikate (oben eine Karte auswählen)'); return }
         $matching = @()
-        if ($selectedTag -and $selectedTag.PSObject.Properties['IsMarker']) {
-            $btnDeleteReader.Enabled = $false
-            if ($selectedTag.Kind -eq 'unmatched') {
-                $lblCertsHeader.Text = (T 'Zertifikate: weitere smartcard-gebundene (Lesegerät nicht zuordenbar)')
-                $matching = $unmatchedSmartCardCerts
-            } else {
-                $lblCertsHeader.Text = (T 'Zertifikate: sonstige mit privatem Schlüssel (nicht als Smartcard erkannt)')
-                $matching = $otherCerts
-            }
-        } elseif ($selectedTag) {
-            $btnDeleteReader.Enabled = $true
-            $lblCertsHeader.Text = ((T 'Zertifikate auf: {0}') -f $selectedTag.FriendlyName)
-            $matching = @($certs | Where-Object { $_.Reader -and $selectedTag.PcscName -and $_.Reader -eq $selectedTag.PcscName })
+        if ($sel.PSObject.Properties['IsMarker']) {
+            $matching = if ($sel.Kind -eq 'unmatched') { $unmatchedSmartCardCerts } else { $otherCerts }
+            $lblCertsHeader.Text = $lvReaders.SelectedItems[0].Text
         } else {
-            $btnDeleteReader.Enabled = $false
+            $lblCertsHeader.Text = (T 'Zertifikate auf {0}') -f $sel.FriendlyName
+            $matching = @($certs | Where-Object { $_.Reader -and $sel.PcscName -and $_.Reader -eq $sel.PcscName } | Sort-Object NotAfter -Descending)
         }
-
         if ($matching.Count -eq 0) {
-            [void]$lvCerts.Items.Add((New-Object System.Windows.Forms.ListViewItem('(keine Zertifikate gefunden)')))
+            $empty = New-Object System.Windows.Forms.ListViewItem((T '(keine Zertifikate auf dieser Karte)'))
+            $empty.ForeColor = $script:UI.Muted
+            [void]$lvCerts.Items.Add($empty)
             return
         }
         foreach ($c in $matching) {
-            $certItem = New-Object System.Windows.Forms.ListViewItem($c.Subject)
-            [void]$certItem.SubItems.Add($c.NotAfter.ToString('yyyy-MM-dd'))
-            [void]$certItem.SubItems.Add($c.Thumbprint)
-            $providerText = if ($c.Provider) { $c.Provider } elseif ($c.DetectionError) { (T 'unbekannt (Fehler: {0})') -f $c.DetectionError } else { (T 'unbekannt') }
-            [void]$certItem.SubItems.Add($providerText)
-            $certItem.Tag = $c   # Cert-Objekt fuer das gezielte Entfernen
-            [void]$lvCerts.Items.Add($certItem)
+            $who = if ($c.Upn) { $c.Upn } else { ($c.Subject -replace '^CN=', '') }
+            $item = New-Object System.Windows.Forms.ListViewItem($who)
+            $item.UseItemStyleForSubItems = $false
+            [void]$item.SubItems.Add($c.NotAfter.ToString('yyyy-MM-dd'))
+            $state = Get-ExpiryState $c.NotAfter
+            $stateText = switch ($state) { 'expired' { T 'abgelaufen' } 'soon' { T 'läuft bald ab' } default { T 'gültig' } }
+            $sub = $item.SubItems.Add($stateText); $sub.ForeColor = Get-ExpiryColor $state
+            [void]$item.SubItems.Add($c.Thumbprint)
+            $item.Tag = $c
+            [void]$lvCerts.Items.Add($item)
         }
-        if ($btnDeleteCert) { $btnDeleteCert.Enabled = $false }
+        # Erstes (neuestes) Zertifikat vorauswählen - "Anzeigen..." ist damit sofort nutzbar.
+        $lvCerts.Items[0].Selected = $true
+        Update-CertButtons   # SelectedIndexChanged feuert vor dem Anzeigen (ohne Handle) nicht
     }
-
+    function Update-CertButtons {
+        $c = if ($lvCerts.SelectedItems.Count -gt 0) { $lvCerts.SelectedItems[0].Tag } else { $null }
+        $btnShowCert.Enabled = [bool]($c -and $c.Thumbprint)
+        # Entfernen nur für echte Smartcard-Zertifikate mit bekanntem Schlüssel-Container.
+        $btnDeleteCert.Enabled = [bool]($c -and $c.KeyContainerName -and $c.Provider -and $c.IsSmartCard)
+    }
     $lvReaders.Add_SelectedIndexChanged({ Update-CertListForSelection })
+
+    $lvCerts.Add_SelectedIndexChanged({ Update-CertButtons })
+
+    # Zertifikat anzeigen: Windows-Zertifikatsdialog (Details, Pfad, Gültigkeit).
+    $showCert = {
+        if ($lvCerts.SelectedItems.Count -eq 0) { return }
+        $c = $lvCerts.SelectedItems[0].Tag
+        if (-not ($c -and $c.Thumbprint)) { return }
+        try {
+            Add-Type -AssemblyName System.Security
+            $x = Get-Item -Path "Cert:\CurrentUser\My\$($c.Thumbprint)" -ErrorAction Stop
+            [System.Security.Cryptography.X509Certificates.X509Certificate2UI]::DisplayCertificate($x, $dlg.Handle)
+        } catch {
+            Write-WizardLog -Message "Zertifikat anzeigen fehlgeschlagen: $($_.Exception.Message)" -Level Error
+        }
+    }
+    $btnShowCert.Add_Click($showCert)
+    $lvCerts.Add_DoubleClick($showCert)
+
+    $btnChangePin.Add_Click({
+        if ($lvReaders.SelectedItems.Count -eq 0) { return }
+        $r = $lvReaders.SelectedItems[0].Tag
+        if (-not (Test-IsVirtualCard $r)) { return }
+        $btnChangePin.Enabled = $false; $btnDeleteReader.Enabled = $false
+        $lblCardHint.ForeColor = $script:UI.Muted
+        $lblCardHint.Text = (T 'Bitte im Windows-Dialog die alte und zweimal die neue PIN eingeben...')
+        $dlg.Cursor = 'WaitCursor'; $dlg.Refresh()
+        try {
+            $res = Invoke-VscPinChange -PcscName $r.PcscName
+        } finally {
+            $dlg.Cursor = 'Default'
+            $btnChangePin.Enabled = $true; $btnDeleteReader.Enabled = $true
+        }
+        switch ($res.Status) {
+            'Changed'   { $lblCardHint.ForeColor = $script:UI.Success; $lblCardHint.Text = ((T 'PIN von {0} geändert.') -f $r.FriendlyName) }
+            'Cancelled' { $lblCardHint.Text = (T 'PIN-Änderung abgebrochen - die bisherige PIN gilt weiter.') }
+            default {
+                $lblCardHint.ForeColor = $script:UI.Danger; $lblCardHint.Text = (T 'PIN ändern fehlgeschlagen - Details siehe Log.')
+                [System.Windows.Forms.MessageBox]::Show(((T 'PIN ändern fehlgeschlagen: {0} Details siehe Log.') -f $res.Message), (T 'Fehler'), 'OK', 'Error') | Out-Null
+            }
+        }
+    })
 
     $btnDeleteReader.Add_Click({
         if ($lvReaders.SelectedItems.Count -eq 0) { return }
         $selectedReader = $lvReaders.SelectedItems[0].Tag
-        if (-not $selectedReader -or $selectedReader.PSObject.Properties['IsMarker']) { return }
-
+        if (-not (Test-IsVirtualCard $selectedReader)) { return }
         $confirm = [System.Windows.Forms.MessageBox]::Show(
             ((T "Virtuelle Smartcard '{0}' wirklich unwiderruflich löschen?`r`n`r`nAlle darauf gespeicherten Schlüssel gehen dabei verloren. Diese Aktion kann nicht rückgängig gemacht werden.") -f $selectedReader.FriendlyName),
             (T 'Smartcard löschen'), 'YesNo', 'Warning')
         if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-
         $btnDeleteReader.Enabled = $false
         Write-WizardLog -Message "Lösche virtuelle Smartcard: $($selectedReader.FriendlyName) ($($selectedReader.InstanceId))" -Level Command
         $result = Remove-VirtualSmartCard -InstanceId $selectedReader.InstanceId
@@ -3365,42 +3449,6 @@ function Show-VscInventoryDialog {
         }
     })
 
-    $dlgBtnPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-    $dlgBtnPanel.Dock = 'Fill'
-    $dlgBtnPanel.FlowDirection = 'RightToLeft'
-    $dlgLayout.Controls.Add($dlgBtnPanel, 0, 5)
-
-    $btnCloseInventory = New-Object System.Windows.Forms.Button
-    $btnCloseInventory.Text = (T 'Schließen')
-    $btnCloseInventory.Size = New-Object System.Drawing.Size(120, 30)
-    $btnCloseInventory.Margin = New-Object System.Windows.Forms.Padding(10)
-    $dlgBtnPanel.Controls.Add($btnCloseInventory)
-    $btnCloseInventory.Add_Click({ $dlg.Close() })
-
-    $btnRefreshInventory = New-Object System.Windows.Forms.Button
-    $btnRefreshInventory.Text = (T 'Aktualisieren')
-    $btnRefreshInventory.Size = New-Object System.Drawing.Size(120, 30)
-    $btnRefreshInventory.Margin = New-Object System.Windows.Forms.Padding(10)
-    $dlgBtnPanel.Controls.Add($btnRefreshInventory)
-    $btnRefreshInventory.Add_Click({
-        $script:InventoryReopen = $true
-        $dlg.Close()
-    })
-
-    # Einzelnes Zertifikat (Schlüssel-Container) gezielt von einer Karte entfernen.
-    $btnDeleteCert = New-Object System.Windows.Forms.Button
-    $btnDeleteCert.Text = (T 'Zertifikat von Karte entfernen...')
-    $btnDeleteCert.Size = New-Object System.Drawing.Size(240, 30)
-    $btnDeleteCert.Margin = New-Object System.Windows.Forms.Padding(10)
-    $btnDeleteCert.Enabled = $false
-    $dlgBtnPanel.Controls.Add($btnDeleteCert)
-
-    $lvCerts.Add_SelectedIndexChanged({
-        $c = if ($lvCerts.SelectedItems.Count -gt 0) { $lvCerts.SelectedItems[0].Tag } else { $null }
-        # Nur aktivieren, wenn ein echtes Smartcard-Cert mit bekanntem Container gewählt ist.
-        $btnDeleteCert.Enabled = [bool]($c -and $c.KeyContainerName -and $c.Provider -and $c.IsSmartCard)
-    })
-
     $btnDeleteCert.Add_Click({
         if ($lvCerts.SelectedItems.Count -eq 0) { return }
         $c = $lvCerts.SelectedItems[0].Tag
@@ -3413,11 +3461,10 @@ function Show-VscInventoryDialog {
             ((T "Dieses Zertifikat samt Schlüssel UNWIDERRUFLICH von der Karte entfernen?`r`n`r`n{0}`r`nGültig bis: {1}`r`nThumbprint: {2}`r`nLesegerät: {3}`r`n`r`nNur den zu entfernenden Eintrag bestätigen - andere Zertifikate auf der Karte bleiben unberührt. Ggf. erscheint der PIN-Dialog der Karte.") -f $idLine, $c.NotAfter.ToString('yyyy-MM-dd'), $c.Thumbprint, $c.Reader),
             (T 'Zertifikat von Karte entfernen'), 'YesNo', 'Warning')
         if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-
         $btnDeleteCert.Enabled = $false
         $dlg.Cursor = 'WaitCursor'; $dlg.Refresh()
-        $res = Remove-SmartCardCertificateFromCard -Provider $c.Provider -ContainerName $c.KeyContainerName -Thumbprint $c.Thumbprint
-        $dlg.Cursor = 'Default'
+        try { $res = Remove-SmartCardCertificateFromCard -Provider $c.Provider -ContainerName $c.KeyContainerName -Thumbprint $c.Thumbprint }
+        finally { $dlg.Cursor = 'Default' }
         if ($res.Success) {
             [System.Windows.Forms.MessageBox]::Show((T 'Zertifikat wurde von der Karte entfernt.'), (T 'Erledigt'), 'OK', 'Information') | Out-Null
             $script:InventoryReopen = $true
@@ -3427,6 +3474,13 @@ function Show-VscInventoryDialog {
             $btnDeleteCert.Enabled = $true
         }
     })
+
+    $btnCloseInventory.Add_Click({ $dlg.Close() })
+    $btnRefreshInventory.Add_Click({ $script:InventoryReopen = $true; $dlg.Close() })
+
+    # Erste echte Karte vorauswählen (dann sind die Zertifikate sofort sichtbar).
+    $first = @($lvReaders.Items | Where-Object { Test-IsVirtualCard $_.Tag }) | Select-Object -First 1
+    if ($first) { $first.Selected = $true } else { Update-CertListForSelection }
 
     # Aktualisieren/Löschen schließen den Dialog und öffnen ihn NACH Rückkehr aus
     # ShowDialog neu - sonst stapelt sich ein zweites Fenster ueber dem alten.

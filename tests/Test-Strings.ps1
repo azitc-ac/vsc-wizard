@@ -55,6 +55,8 @@ foreach ($rel in 'VscWizard.ps1') {
     foreach ($n in $ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $x -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)) {
         if ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $n.StringConstantType -eq 'BareWord') { continue }
         if ($n.Extent.Text -notmatch $germanRe) { continue }
+        # Technische Bezeichner in Großbuchstaben (z.B. 'ROOT\SMARTCARDREADER\*') sind kein UI-Text.
+        if ($n.Value -cmatch '^[A-Z0-9_\\*]+$') { continue }
         # Rollen im Szenario-Ablauf sind Nachschlage-Schlüssel und werden bei der Anzeige übersetzt (T $st.T).
         if ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $n.Value -in @('Du', 'Tool', 'Prüfung')) { continue }
         $p = $n.Parent; $skip = $false

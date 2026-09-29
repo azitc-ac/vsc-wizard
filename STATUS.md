@@ -233,6 +233,21 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   Fehlermeldung statt „Import-VscWizardConfig unbekannt"-Kaskade, wenn `modules\`/
   `config.psd1` fehlen (z.B. EXE ohne Beiwerk / OneDrive-Platzhalter).
 
+## Zuletzt erledigt (2026-09-29): VSCs verwalten neu
+- **Verwaltungsdialog neu** (`Show-VscInventoryDialog`): oben die Karten (Name ·
+  „In Windows-Dialogen" = PC/SC-Name · Anzahl Zertifikate · nächster Ablauf, rot
+  abgelaufen / orange < 30 Tage), darunter „PIN ändern…" / „Karte löschen…" (nur
+  virtuelle Karten `ROOT\SMARTCARDREADER\*`); unten die Zertifikate der gewählten
+  Karte (Ausgestellt für · Gültig bis · Status · Fingerabdruck) mit „Anzeigen…"
+  (auch Doppelklick; Windows-Zertifikatsdialog) und „Von Karte entfernen…".
+  Geräte-ID-/GUID-Spalte entfällt; Szenario 04 ohne Tool/Du-Schritte.
+- **PIN ändern** (`Invoke-VscPinChange`): WinRT `SmartCardProvisioning.
+  RequestPinChangeAsync` im Kindprozess — Windows zeigt seinen eigenen PIN-Dialog, der
+  Wizard sieht die PIN nie. Der Kindprozess beendet sich hart (`Process.Kill()`),
+  weil ein reguläres Ende nach WinRT-Smartcard-Objekten ~20 s hängt (gemessen).
+  **Offen:** interaktiver Test mit echter PIN-Eingabe (Dialog erscheint vor dem
+  Wizard? Ergebnis „geändert"/„abgebrochen" korrekt?).
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird
