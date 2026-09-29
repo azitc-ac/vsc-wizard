@@ -1776,6 +1776,23 @@ function Get-PendingApprovalHint {
 function Complete-CertificateEnrollment {
     param([Parameter(Mandatory)][string]$CerPath)
 
+    # Vorab prüfen, ob der offene Antrag (gleicher öffentlicher Schlüssel) noch im
+    # Antragsspeicher liegt. Fehlt er, scheitert certreq -accept sicher - und zeigt dabei
+    # eine eigene Fehler-MessageBox. Dann gleich den Ersatzweg gehen, ohne certreq.
+    $cer = $null
+    try { $cer = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CerPath } catch { }
+    if ($cer) {
+        $pub = [Convert]::ToBase64String($cer.GetPublicKey())
+        $inStore = @(Get-ChildItem Cert:\CurrentUser\REQUEST -ErrorAction SilentlyContinue | Where-Object { [Convert]::ToBase64String($_.GetPublicKey()) -eq $pub })
+        if ($inStore.Count -eq 0) {
+            Write-WizardLog -Message 'Der offene Antrag ist nicht mehr im Antragsspeicher (certreq -accept nicht möglich) - installiere das Zertifikat stattdessen direkt auf die passende Karte. Windows fragt dafür die Karten-PIN ab.' -Level Info
+            $direct = Install-CertificateOnSmartCard -CerPath $CerPath
+            if ($direct.Success) { return [pscustomobject]@{ Success = $true } }
+            Write-WizardLog -Message 'Zertifikatsübernahme fehlgeschlagen.' -Level Error
+            return [pscustomobject]@{ Success = $false }
+        }
+    }
+
     # Still ausführen und selbst protokollieren: certreq schreibt bei CRYPT_E_NOT_FOUND
     # seine komplette Syntax-Hilfe + Fehlertext - das wirkte wie ein harter Fehler,
     # obwohl direkt danach der Ersatzweg greift. Rohausgabe nur, wenn am Ende nichts half.
