@@ -1776,19 +1776,25 @@ function Get-PendingApprovalHint {
 function Complete-CertificateEnrollment {
     param([Parameter(Mandatory)][string]$CerPath)
 
-    $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList @('-accept', $CerPath)
+    # Still ausführen und selbst protokollieren: certreq schreibt bei CRYPT_E_NOT_FOUND
+    # seine komplette Syntax-Hilfe + Fehlertext - das wirkte wie ein harter Fehler,
+    # obwohl direkt danach der Ersatzweg greift. Rohausgabe nur, wenn am Ende nichts half.
+    Write-WizardLog -Message "certreq.exe -accept $CerPath" -Level Command
+    $result = Invoke-ExternalCommand -FilePath 'certreq.exe' -ArgumentList @('-accept', $CerPath) -Silent
     if ($result.Success) {
         Write-WizardLog -Message 'Zertifikat wurde erfolgreich auf der Smartcard hinterlegt.' -Level Success
         return [pscustomobject]@{ Success = $true }
     }
+    $raw = "$($result.StdOut) $($result.StdErr)".Trim()
     # CRYPT_E_NOT_FOUND: certreq findet den offenen Antrag im Antragsspeicher
     # (CurrentUser\REQUEST) nicht mehr - der Schlüssel liegt aber auf der Karte. Dann
     # direkt installieren (Install-CertificateOnSmartCard) statt neu zu beantragen.
-    if ("$($result.StdOut) $($result.StdErr)" -match '0x80092004|CRYPT_E_NOT_FOUND') {
-        Write-WizardLog -Message 'certreq -accept: offener Antrag im Antragsspeicher nicht gefunden - installiere das Zertifikat direkt auf die passende Karte.' -Level Info
+    if ($raw -match '0x80092004|CRYPT_E_NOT_FOUND') {
+        Write-WizardLog -Message 'Der offene Antrag ist nicht mehr im Antragsspeicher (certreq -accept nicht möglich) - installiere das Zertifikat stattdessen direkt auf die passende Karte. Windows fragt dafür die Karten-PIN ab.' -Level Info
         $direct = Install-CertificateOnSmartCard -CerPath $CerPath
         if ($direct.Success) { return [pscustomobject]@{ Success = $true } }
     }
+    if ($raw) { Write-WizardLog -Message $raw -Level Output }
     Write-WizardLog -Message 'Zertifikatsübernahme fehlgeschlagen.' -Level Error
     return [pscustomobject]@{ Success = $false }
 }
