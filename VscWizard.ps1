@@ -4111,7 +4111,7 @@ function Invoke-WizardResume {
         Set-PlanATemplateForMode
         if ($state['Template']) { $cboTemplateA.Text = $state['Template'] }
         Show-PlanAStep -Index 1   # "Zertifikat anfordern" (Retrieve-Button dort)
-        Set-PlanAPendingUi -RequestId $state['RequestId'] -Text ((T "Fortgesetzter Antrag (RequestId {0}) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde.") -f $state['RequestId'])
+        Set-PlanAPendingUi -RequestId $state['RequestId'] -Text ((T "Fortgesetzter Antrag (RequestId {0}), wartet auf Genehmigung. {1}") -f $(if ($state['RequestId']) { $state['RequestId'] } else { T 'unbekannt' }), (Get-PendingApprovalHint -RequestId $state['RequestId']))
     } else {
         $script:ActivePlan = 'B'
         $script:PlanB_VscCreated = $true
@@ -4121,7 +4121,7 @@ function Invoke-WizardResume {
         if ($state['Stage'] -eq 'Pending') {
             $script:PlanB_SubmitDir = $state['SubmitDir']
             Show-PlanBStep -Index 4
-            Set-PlanBPendingUi -RequestId $state['RequestId'] -Text ((T "Fortgesetzter Antrag (RequestId {0}) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde.") -f $state['RequestId'])
+            Set-PlanBPendingUi -RequestId $state['RequestId'] -Text ((T "Fortgesetzter Antrag (RequestId {0}), wartet auf Genehmigung. {1}") -f $(if ($state['RequestId']) { $state['RequestId'] } else { T 'unbekannt' }), (Get-PendingApprovalHint -RequestId $state['RequestId']))
         } else {
             $script:PlanB_CsrPath = $state['CsrPath']
             $txtCsrPathB.Text = $state['CsrPath']

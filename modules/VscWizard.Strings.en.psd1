@@ -292,7 +292,7 @@
     'CSR erstellt, noch nicht eingereicht' = 'CSR created, not submitted yet'
     "Ein begonnener Antrag vom {0} wurde gefunden:`r`n`r`nKarte: {1}`r`nStand: {2}`r`n`r`nFortsetzen? (Bei 'Nein' wird der gespeicherte Stand verworfen - der offene Antrag im Zertifikatsspeicher bleibt davon unberührt.)" = "A started request from {0} was found:`r`n`r`nCard: {1}`r`nState: {2}`r`n`r`nContinue? (With 'No' the saved state is discarded - the open request in the certificate store is not affected.)"
     'Begonnenen Antrag fortsetzen' = 'Continue started request'
-    'Fortgesetzter Antrag (RequestId {0}) - über ''Zertifikat abrufen'' prüfen, ob er inzwischen genehmigt wurde.' = 'Continued request (request ID {0}) - use ''Retrieve certificate'' to check whether it has been approved in the meantime.'
+    'Fortgesetzter Antrag (RequestId {0}), wartet auf Genehmigung. {1}' = 'Resumed request (request ID {0}), waiting for approval. {1}'
     '{0} läuft...' = '{0} running...'
     'Prüfe TPM...' = 'Checking TPM...'
     'Prüfe Domänen-Status...' = 'Checking domain state...'
@@ -373,4 +373,5 @@
     'Zertifikate' = 'Certificates'
     'Zertifikate (oben eine Karte auswählen)' = 'Certificates (select a card above)'
     'Zertifikate auf {0}' = 'Certificates on {0}'
+    'unbekannt' = 'unknown'
 }

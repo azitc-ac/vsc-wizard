@@ -160,6 +160,8 @@ Step 'Resume (Ja)' { Invoke-WizardResume }
 # Wartender Antrag: 'Zertifikat anfordern' muss gesperrt sein (sonst zweiter Antrag mit neuem Schlüssel).
 if ($btnRequestCertA.Enabled) { $global:Errors.Add('[Resume] Zertifikat anfordern ist trotz wartendem Antrag aktiv') }
 if (-not (OwnVisible $btnRetrieveA)) { $global:Errors.Add('[Resume] Zertifikat abrufen ist nicht sichtbar') }
+# Was auf der CA zu tun ist, muss auch nach dem Fortsetzen dastehen (fehlte dort früher).
+if ($lblCertResultA.Text -notmatch 'certutil -resubmit') { $global:Errors.Add("[Resume] Genehmigungs-Hinweis (certutil -resubmit) fehlt: '$($lblCertResultA.Text)'") }
 Step 'Abrufen ohne ID (InputBox leer)' { Click $btnRetrieveA }
 
 # Resume-Datei des Benutzers wiederherstellen
