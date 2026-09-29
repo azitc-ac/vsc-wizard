@@ -575,16 +575,30 @@ $mainArea.BringToFront()
 # im UI-Thread und blockieren die Oberflaeche. Ohne Rueckmeldung wirkt das eingefroren.
 # Zwei Signale: (1) der OS-Wartecursor via Application.UseWaitCursor - die drehende
 # Scheibe wird vom BETRIEBSSYSTEM animiert, auch wenn unser Thread blockiert; (2) ein
-# sichtbares gelbes Banner mit Klartext, was gerade laeuft.
-$script:BusyLabel = New-Object System.Windows.Forms.Label
-$script:BusyLabel.AutoSize = $false
-$script:BusyLabel.TextAlign = 'MiddleCenter'
-$script:BusyLabel.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+# sichtbarer gelber Hinweis mit Klartext, was gerade laeuft.
+# Kompakte, fast quadratische Karte MITTIG über dem Inhaltsbereich (vorher ein breiter
+# Streifen oben, der z.B. den Karten-Hinweis "Microsoft Virtual Smart Card N" verdeckte):
+# große Sanduhr oben, darunter der Text mit Zeilenumbruch. Name $script:BusyLabel
+# historisch (jetzt ein Panel).
+$script:BusyLabel = New-Object System.Windows.Forms.Panel
+$script:BusyLabel.Size = New-Object System.Drawing.Size(280, 140)
 $script:BusyLabel.BackColor = [System.Drawing.Color]::FromArgb(255, 248, 196)
-$script:BusyLabel.ForeColor = [System.Drawing.Color]::FromArgb(90, 70, 0)
-$script:BusyLabel.BorderStyle = 'FixedSingle'
-$script:BusyLabel.Size = New-Object System.Drawing.Size(560, 40)
 $script:BusyLabel.Visible = $false
+Add-BorderPaint -Control $script:BusyLabel -Color ([System.Drawing.Color]::FromArgb(224, 196, 110))
+$busyIcon = New-Object System.Windows.Forms.Label
+$busyIcon.Text = [string][char]0x231B   # Sanduhr
+$busyIcon.Font = New-UiFont 22
+$busyIcon.ForeColor = [System.Drawing.Color]::FromArgb(90, 70, 0)
+$busyIcon.TextAlign = 'MiddleCenter'
+$busyIcon.Location = New-Object System.Drawing.Point(1, 16); $busyIcon.Size = New-Object System.Drawing.Size(278, 44)
+$script:BusyTextLabel = New-Object System.Windows.Forms.Label
+$script:BusyTextLabel.UseMnemonic = $false
+$script:BusyTextLabel.Font = New-UiFont 10 -Semibold
+$script:BusyTextLabel.ForeColor = [System.Drawing.Color]::FromArgb(90, 70, 0)
+$script:BusyTextLabel.TextAlign = 'TopCenter'
+$script:BusyTextLabel.AutoEllipsis = $true
+$script:BusyTextLabel.Location = New-Object System.Drawing.Point(16, 66); $script:BusyTextLabel.Size = New-Object System.Drawing.Size(248, 62)
+$script:BusyLabel.Controls.AddRange(@($busyIcon, $script:BusyTextLabel))
 $form.Controls.Add($script:BusyLabel)
 
 # Verschachtelungstiefe: ein innerer Set-/Clear-Busy (z.B. Zertifikate lesen innerhalb
@@ -601,11 +615,11 @@ function Set-Busy {
     $script:BusyWatch = [System.Diagnostics.Stopwatch]::StartNew()
     [System.Windows.Forms.Application]::UseWaitCursor = $true
     if ($script:BusyLabel -and $form) {
-        $script:BusyLabel.Text = "$([char]0x231B)  $Text"   # Sanduhr-Symbol + Text
-        # Mittig über dem Arbeitsbereich (rechts der Seitenleiste), unter dem Seitentitel.
+        $script:BusyTextLabel.Text = $Text
+        # Mittig über dem Arbeitsbereich (rechts der Seitenleiste), horizontal UND vertikal.
         $x = [int]($sidebar.Width + ($form.ClientSize.Width - $sidebar.Width - $script:BusyLabel.Width) / 2)
-        if ($x -lt 0) { $x = 0 }
-        $script:BusyLabel.Location = New-Object System.Drawing.Point($x, 64)
+        $y = [int](($form.ClientSize.Height - $script:BusyLabel.Height) / 2)
+        $script:BusyLabel.Location = New-Object System.Drawing.Point([Math]::Max(0, $x), [Math]::Max(0, $y))
         $script:BusyLabel.Visible = $true
         $script:BusyLabel.BringToFront()
     }
