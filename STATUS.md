@@ -100,7 +100,10 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
    Übersetzungen in `modules\VscWizard.Strings.en.psd1` (356 Einträge), Werte über
    Platzhalter `(T '... {0} ...') -f $wert`. Umschalter Deutsch|English in der
    Seitenleiste (speichert `Language` in config.psd1 und startet neu; Hintergrund-Jobs
-   übernehmen die Sprache über `VSCWIZARD_UILANG`). Das **Protokoll bleibt deutsch**
+   übernehmen die Sprache über `VSCWIZARD_UILANG`). **Standardsprache** ohne
+   `Language` in der config: Windows-Anzeigesprache (Deutsch -> de, sonst en); die
+   Entscheidung fällt einmal ganz am Skriptanfang (`$script:StartLang`), damit auch der
+   Splash (läuft vor dem Modul-Import, Texte dort über `L 'de' 'en'`) stimmt. Das **Protokoll bleibt deutsch**
    (Diagnose). Neue Texte IMMER mit `T` schreiben und die Übersetzung ergänzen -
    `tests\Test-Strings.ps1` meldet fehlende/verwaiste Einträge und Platzhalter-Fehler.
 7. **[ERLEDIGT] Layout-/Design-Überarbeitung** nach dem freigegebenen Entwurf

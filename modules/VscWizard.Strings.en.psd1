@@ -357,4 +357,10 @@
     'Provider' = 'Provider'
     'Subject' = 'Subject'
     'Thumbprint' = 'Thumbprint'
+    'Wartet auf Genehmigung.' = 'Waiting for approval.'
+    'Übernahme des EA-Zertifikats fehlgeschlagen.' = 'Installing the EA certificate failed.'
+    'Textdatei (*.txt)|*.txt' = 'Text file (*.txt)|*.txt'
+    'CSR-Dateien (*.csr;*.req)|*.csr;*.req|Alle Dateien (*.*)|*.*' = 'CSR files (*.csr;*.req)|*.csr;*.req|All files (*.*)|*.*'
+    'Zertifikatsdateien (*.cer)|*.cer|Alle Dateien (*.*)|*.*' = 'Certificate files (*.cer)|*.cer|All files (*.*)|*.*'
+    'Antragserstellung fehlgeschlagen.' = 'Creating the request failed.'
 }

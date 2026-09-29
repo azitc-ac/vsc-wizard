@@ -157,6 +157,9 @@ Save-WizardResumeState -State @{ Plan = 'A'; Stage = 'Pending'; RequestId = ''; 
 $global:MsgAnswer = [System.Windows.Forms.DialogResult]::Yes
 Reset-Run
 Step 'Resume (Ja)' { Invoke-WizardResume }
+# Wartender Antrag: 'Zertifikat anfordern' muss gesperrt sein (sonst zweiter Antrag mit neuem Schlüssel).
+if ($btnRequestCertA.Enabled) { $global:Errors.Add('[Resume] Zertifikat anfordern ist trotz wartendem Antrag aktiv') }
+if (-not (OwnVisible $btnRetrieveA)) { $global:Errors.Add('[Resume] Zertifikat abrufen ist nicht sichtbar') }
 Step 'Abrufen ohne ID (InputBox leer)' { Click $btnRetrieveA }
 
 # Resume-Datei des Benutzers wiederherstellen

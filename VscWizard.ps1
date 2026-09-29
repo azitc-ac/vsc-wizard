@@ -25,6 +25,35 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
+# Basisverzeichnis robust bestimmen - MUSS sowohl als .ps1 (dann $PSScriptRoot) als
+# auch als PS2EXE-.exe funktionieren. In einer PS2EXE-Exe ist $PSScriptRoot je nach
+# Version LEER; dann liefert der Prozesspfad (die .exe selbst) das richtige Verzeichnis.
+# Ohne das schlägt der Modul-Import still fehl und man sieht nur eine Kaskade von
+# "... ist nicht erkannt"-Fehlern (u.a. Import-VscWizardConfig).
+$script:BaseDir = $PSScriptRoot
+if (-not $script:BaseDir -and $MyInvocation.MyCommand.Path) {
+    $script:BaseDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if (-not $script:BaseDir) {
+    try { $script:BaseDir = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) } catch { }
+}
+if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
+
+# --- Sprache GANZ AM ANFANG festlegen (einzige Entscheidung, gilt für alles) ---------
+# Der Splash läuft vor dem Laden des Kernmoduls (wo T/Übersetzungen leben) - daher hier:
+#   1. VSCWIZARD_LANG (Tests)  2. 'Language' aus config.psd1 (Wahl über den Umschalter)
+#   3. Windows-Anzeigesprache: Deutsch -> de, sonst en.
+$script:StartLang = $env:VSCWIZARD_LANG
+if (-not $script:StartLang) {
+    try { $script:StartLang = (Import-PowerShellDataFile -Path (Join-Path $script:BaseDir 'config.psd1') -ErrorAction Stop).Language } catch { }
+}
+if (-not $script:StartLang) {
+    $script:StartLang = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') { 'de' } else { 'en' }
+}
+$script:StartLang = if ("$script:StartLang" -match '^en') { 'en' } else { 'de' }
+# Texte VOR dem Modul-Import (Splash, Startfehler): zweisprachig direkt.
+function L([string]$De, [string]$En) { if ($script:StartLang -eq 'en') { $En } else { $De } }
+
 # --- Splash / Start-Fortschritt ---------------------------------------------------
 # Der Start dauert mehrere Sekunden (Modul laden, Fenster bauen, Umgebung erkennen via
 # TPM/Kerberos/PnP/Zertifikatsspeicher). Ohne Rueckmeldung wirkt das wie eine Blackbox.
@@ -47,7 +76,8 @@ function Show-SplashScreen {
     $sp.Controls.Add($title)
 
     $sub = New-Object System.Windows.Forms.Label
-    $sub.Text = 'Virtuelle Smartcards & Zertifikate'
+    $sub.UseMnemonic = $false   # sonst verschluckt WinForms das "&"
+    $sub.Text = L 'Virtuelle Smartcards & Zertifikate' 'Virtual smart cards & certificates'
     $sub.ForeColor = [System.Drawing.Color]::FromArgb(150, 170, 190)
     $sub.Font = New-Object System.Drawing.Font('Segoe UI', 9)
     $sub.Location = New-Object System.Drawing.Point(26, 58)
@@ -55,7 +85,7 @@ function Show-SplashScreen {
     $sp.Controls.Add($sub)
 
     $status = New-Object System.Windows.Forms.Label
-    $status.Text = 'Starte...'
+    $status.Text = L 'Starte...' 'Starting...'
     $status.ForeColor = [System.Drawing.Color]::FromArgb(210, 220, 230)
     $status.Font = New-Object System.Drawing.Font('Segoe UI', 9)
     $status.Location = New-Object System.Drawing.Point(26, 96)
@@ -104,27 +134,13 @@ function Close-Splash {
 
 $null = Show-SplashScreen
 
-# Basisverzeichnis robust bestimmen - MUSS sowohl als .ps1 (dann $PSScriptRoot) als
-# auch als PS2EXE-.exe funktionieren. In einer PS2EXE-Exe ist $PSScriptRoot je nach
-# Version LEER; dann liefert der Prozesspfad (die .exe selbst) das richtige Verzeichnis.
-# Ohne das schlägt der Modul-Import still fehl und man sieht nur eine Kaskade von
-# "... ist nicht erkannt"-Fehlern (u.a. Import-VscWizardConfig).
-$script:BaseDir = $PSScriptRoot
-if (-not $script:BaseDir -and $MyInvocation.MyCommand.Path) {
-    $script:BaseDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-}
-if (-not $script:BaseDir) {
-    try { $script:BaseDir = Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) } catch { }
-}
-if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
-
-Update-Splash -Text 'Kernmodul laden...' -Percent 25
+Update-Splash -Text (L 'Kernmodul laden...' 'Loading core module...') -Percent 25
 $script:ModulePath = Join-Path $script:BaseDir 'modules\VscWizard.Core.psm1'
 if (-not (Test-Path $script:ModulePath)) {
     Close-Splash
     [System.Windows.Forms.MessageBox]::Show(
-        "Das Kernmodul wurde nicht gefunden:`r`n$script:ModulePath`r`n`r`nDie Datei/EXE braucht den Ordner 'modules\' UND 'config.psd1' DIREKT DANEBEN.`r`n`r`nSo startest du richtig:`r`n - Aus dem geklonten Repo: VscWizard.bat doppelklicken (nicht eine einzelne .exe kopieren).`r`n - Als EXE: '.\build.ps1' ausführen und die EXE aus 'dist\' zusammen mit dem dort erzeugten Ordner 'modules\' und 'config.psd1' verwenden.",
-        'VSC-Wizard - Start fehlgeschlagen', 'OK', 'Error') | Out-Null
+        ((L "Das Kernmodul wurde nicht gefunden:`r`n{0}`r`n`r`nDie Datei/EXE braucht den Ordner 'modules\' UND 'config.psd1' DIREKT DANEBEN.`r`n`r`nSo startest du richtig:`r`n - Aus dem geklonten Repo: VscWizard.bat doppelklicken (nicht eine einzelne .exe kopieren).`r`n - Als EXE: '.\build.ps1' ausführen und die EXE aus 'dist\' zusammen mit dem dort erzeugten Ordner 'modules\' und 'config.psd1' verwenden." "The core module was not found:`r`n{0}`r`n`r`nThe file/EXE needs the folder 'modules\' AND 'config.psd1' RIGHT NEXT TO IT.`r`n`r`nHow to start it correctly:`r`n - From the cloned repo: double-click VscWizard.bat (do not copy a single .exe).`r`n - As EXE: run '.\build.ps1' and use the EXE from 'dist\' together with the 'modules\' folder and 'config.psd1' created there.") -f $script:ModulePath),
+        (L 'VSC-Wizard - Start fehlgeschlagen' 'VSC Wizard - start failed'), 'OK', 'Error') | Out-Null
     exit 1
 }
 try {
@@ -132,12 +148,12 @@ try {
 } catch {
     Close-Splash
     [System.Windows.Forms.MessageBox]::Show(
-        "Das Kernmodul konnte nicht geladen werden:`r`n$($_.Exception.Message)`r`n`r`nPfad: $script:ModulePath",
-        'VSC-Wizard - Start fehlgeschlagen', 'OK', 'Error') | Out-Null
+        ((L "Das Kernmodul konnte nicht geladen werden:`r`n{0}`r`n`r`nPfad: {1}" "The core module could not be loaded:`r`n{0}`r`n`r`nPath: {1}") -f $_.Exception.Message, $script:ModulePath),
+        (L 'VSC-Wizard - Start fehlgeschlagen' 'VSC Wizard - start failed'), 'OK', 'Error') | Out-Null
     exit 1
 }
 
-Update-Splash -Text 'Konfiguration lesen...' -Percent 40
+Update-Splash -Text (L 'Konfiguration lesen...' 'Reading configuration...') -Percent 40
 $script:ConfigPath = Join-Path $script:BaseDir 'config.psd1'
 # Fehlt config.psd1 (z.B. nur die EXE ohne Beiwerk kopiert), NICHT abstürzen: mit
 # leerer Konfiguration starten - der Wizard öffnet dann den Einstellungen-Tab.
@@ -146,8 +162,8 @@ try {
 } catch {
     $config = @{}
 }
-# Sprache der Oberfläche (config 'Language' = de|en; VSCWIZARD_LANG überschreibt, z.B. für Tests).
-Set-WizardLanguage -Language $(if ($env:VSCWIZARD_LANG) { $env:VSCWIZARD_LANG } else { $config.Language })
+# Sprache der Oberfläche: die EINE Entscheidung vom Skriptanfang ($script:StartLang).
+Set-WizardLanguage -Language $script:StartLang
 Update-Splash -Text (T 'Oberfläche wird aufgebaut...') -Percent 55
 
 function New-WizardLabel {
@@ -250,12 +266,12 @@ function Invoke-EnrollmentAgentRequest {
 
     $csr = New-CertificateSigningRequest -Subject $identity.Subject -Upn $identity.Upn -CspName $csp -OutputDirectory $enrollDir
     if (-not $csr.Success) {
-        return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = 'Antragserstellung fehlgeschlagen.' }
+        return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $null; Message = (T 'Antragserstellung fehlgeschlagen.') }
     }
 
     $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $Template -OutputDirectory $enrollDir
     if ($submit.Pending) {
-        return [pscustomobject]@{ Success = $false; Pending = $true; RequestId = $submit.RequestId; Message = 'Wartet auf Genehmigung.' }
+        return [pscustomobject]@{ Success = $false; Pending = $true; RequestId = $submit.RequestId; Message = (T 'Wartet auf Genehmigung.') }
     }
     if (-not $submit.Success) {
         return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = (T 'Antrag bei der CA fehlgeschlagen.') }
@@ -265,7 +281,7 @@ function Invoke-EnrollmentAgentRequest {
     if ($complete.Success) {
         return [pscustomobject]@{ Success = $true; Pending = $false; RequestId = $submit.RequestId; Message = '' }
     }
-    return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = 'Übernahme des EA-Zertifikats fehlgeschlagen.' }
+    return [pscustomobject]@{ Success = $false; Pending = $false; RequestId = $submit.RequestId; Message = (T 'Übernahme des EA-Zertifikats fehlgeschlagen.') }
 }
 
 # Einfache Hint/Placeholder-Eingabe: zeigt grauen Beispieltext, solange kein echter
@@ -1266,10 +1282,6 @@ $lblScnSub.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
 $lblScnValidation = New-Object System.Windows.Forms.Label
 $lblScnValidation.AutoSize = $true; $lblScnValidation.Font = New-UiFont 9.5; $lblScnValidation.ForeColor = $script:UI.Danger
 $lblScnValidation.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14); $lblScnValidation.Visible = $false
-# Frühere lange Umgebungszeile: Inhalt steht jetzt in der Seitenleiste; das Label bleibt
-# (unsichtbar) als Text-Quelle für Tests/Log.
-$lblScnEnv = New-Object System.Windows.Forms.Label
-$lblScnEnv.Visible = $false
 
 function New-ScnSection([string]$Text) {
     $l = New-Object System.Windows.Forms.Label
@@ -1531,10 +1543,7 @@ function Update-ScenarioAvailability {
     }
     Update-ScenarioRowColors
 
-    $tpmText = if ($caps.TpmPresent) { if ($caps.TpmReady) { 'TPM bereit' } else { 'TPM vorhanden (nicht bereit)' } } else { 'kein TPM' }
-    $tgtText = if ($caps.HasOnPremTgt) { "On-Prem-TGT: ja$(if ($caps.Realm) { " ($($caps.Realm))" })" } else { 'On-Prem-TGT: nein' }
-    $lblScnEnv.Text = "Hier erkannt:  $($caps.JoinMode)  ·  $tpmText  ·  $tgtText  ·  VSCs: $($caps.VscCount)  ·  EA-Zert: $($caps.EaCertCount)  (ausgegraute Punkte sind hier nicht möglich)"
-    # Seitenleiste "Dieses Gerät" (kompakt, statt der langen Zeile oben).
+    # Seitenleiste "Dieses Gerät" (kompakt, ersetzt die frühere lange Umgebungszeile).
     Update-DeviceInfo -Pairs @(
         [pscustomobject]@{ K = (T 'Anmeldung'); V = "$($caps.JoinMode)" }
         [pscustomobject]@{ K = (T 'TPM'); V = $(if ($caps.TpmPresent) { if ($caps.TpmReady) { (T 'bereit') } else { (T 'nicht bereit') } } else { (T 'keins') }) }
@@ -1583,12 +1592,10 @@ function Enter-Plan {
         $script:ActivePlan = 'A'
         $script:PlanA_VscCreated = $false
         $script:PlanA_CertIssued = $false
-        $script:PlanA_PendingRequestId = $null
         $script:PlanA_RenewMode = $false
         $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
         $lblVscResultA.Text = ''
-        $lblCertResultA.Text = ''
-        $btnRetrieveA.Visible = $false
+        Reset-PlanARequestUi
         $tabPlanA.Visible = $true
         Set-PlanATemplateForMode
         Show-PlanAStep -Index 0
@@ -1596,13 +1603,11 @@ function Enter-Plan {
         $script:ActivePlan = 'B'
         $script:PlanB_VscCreated = $false
         $script:PlanB_CertIssued = $false
-        $script:PlanB_PendingRequestId = $null
         $script:PlanB_RenewMode = $false
         $txtCardNameB.Text = "$($config.VscNamePrefix)-$env:USERNAME"
         $lblVscResultB.Text = ''
-        $lblSubmitResultB.Text = ''
         $lblCompleteResultB.Text = ''
-        $btnRetrieveB.Visible = $false
+        Reset-PlanBSubmitUi
         $tabPlanB.Visible = $true
         Show-PlanBStep -Index 0
     }
@@ -1697,6 +1702,39 @@ function Show-VscPickerDialog {
     return $null
 }
 
+# Zustand "Antrag wartet auf Genehmigung" an EINER Stelle je Plan: solange ein Antrag
+# offen ist, ist "Anfordern"/"Einreichen" gesperrt (ein zweiter Klick erzeugte einen
+# weiteren Antrag mit neuem Schlüssel); nur "Zertifikat abrufen" ist sinnvoll. Wieder
+# frei nach Ablehnung durch die CA oder beim Neustart eines Ablaufs.
+function Reset-PlanARequestUi {
+    $script:PlanA_PendingRequestId = $null
+    $lblCertResultA.Text = ''
+    $btnRetrieveA.Visible = $false
+    $btnRequestCertA.Enabled = $true
+}
+function Set-PlanAPendingUi {
+    param([string]$RequestId, [string]$Text)
+    $script:PlanA_PendingRequestId = $RequestId
+    $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
+    $lblCertResultA.Text = $Text
+    $btnRetrieveA.Visible = $true
+    $btnRequestCertA.Enabled = $false
+}
+function Reset-PlanBSubmitUi {
+    $script:PlanB_PendingRequestId = $null
+    $lblSubmitResultB.Text = ''
+    $btnRetrieveB.Visible = $false
+    $btnSubmitB.Enabled = $true
+}
+function Set-PlanBPendingUi {
+    param([string]$RequestId, [string]$Text)
+    $script:PlanB_PendingRequestId = $RequestId
+    $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
+    $lblSubmitResultB.Text = $Text
+    $btnRetrieveB.Visible = $true
+    $btnSubmitB.Enabled = $false
+}
+
 function Enter-PlanARenewal {
     # Sprung in den Plan-A-"Anfordern"-Schritt fuer eine BESTEHENDE Karte - ohne
     # Neuerstellung. Wird für "bestehende VSC verwenden" genutzt (Konto kommt vom
@@ -1707,7 +1745,7 @@ function Enter-PlanARenewal {
     $script:PlanA_CardName = $Reader.FriendlyName
     $script:PlanA_PcscName = $Reader.PcscName
     $script:PlanA_CertIssued = $false
-    $script:PlanA_PendingRequestId = $null
+    Reset-PlanARequestUi
     $script:PlanA_RenewMode = $true
     $script:PlanA_OfflineDirect = [bool]$OfflineDirect
     $script:PlanEntryFrom = 'Scenario'
@@ -1729,7 +1767,7 @@ function Enter-PlanBRenewal {
     $script:PlanB_CardName = $Reader.FriendlyName
     $script:PlanB_PcscName = $Reader.PcscName
     $script:PlanB_CsrPath = $null
-    $script:PlanB_PendingRequestId = $null
+    Reset-PlanBSubmitUi
     $script:PlanB_RenewMode = $true
     $script:PlanEntryFrom = 'Scenario'
     $pnlScenario.Visible = $false
@@ -1986,7 +2024,7 @@ $logDrawer.BringToFront(); $pnlContentArea.BringToFront()
 
 $btnExportLog.Add_LinkClicked({
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'Textdatei (*.txt)|*.txt'
+    $dlg.Filter = (T 'Textdatei (*.txt)|*.txt')
     $dlg.FileName = "vscwizard-log-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $rtbLog.SaveFile($dlg.FileName, [System.Windows.Forms.RichTextBoxStreamType]::PlainText)
@@ -2183,18 +2221,18 @@ $btnRequestCertA.Add_Click({
     $submitTemplate = if ($eoboThumbprint) { $null } else { $selectedTemplate }
     $submit = Submit-CertificateSigningRequest -CsrPath $csr.CsrPath -CAConfig $config.CAConfig -TemplateName $submitTemplate -OutputDirectory $script:PlanA_EnrollDir
     if ($submit.Pending) {
-        $script:PlanA_PendingRequestId = $submit.RequestId
         # Zustand persistieren: der wartende Antrag kann nach einem Wizard-Neustart
-        # über den Fortsetzen-Dialog beim Start wieder aufgenommen werden.
+        # über den Fortsetzen-Dialog beim Start wieder aufgenommen werden - inkl.
+        # Zielkonto und Offline-Modus (sonst zeigte das Fortsetzen das eigene Konto
+        # und das Standard-Template).
         Save-WizardResumeState -State @{
             Plan = 'A'; Stage = 'Pending'; RequestId = $submit.RequestId
             CardName = $script:PlanA_CardName; PcscName = "$($script:PlanA_PcscName)"
             EnrollDir = $script:PlanA_EnrollDir
+            TargetAccount = "$($script:TargetAccount)"; OfflineDirect = "$([bool]$script:PlanA_OfflineDirect)"
+            Template = "$selectedTemplate"
         }
-        $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblCertResultA.Text = ((T 'Antrag wurde eingereicht und wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f $submit.RequestId, (Get-PendingApprovalHint -RequestId $submit.RequestId))
-        $btnRetrieveA.Visible = $true
-        $btnRequestCertA.Enabled = $true
+        Set-PlanAPendingUi -RequestId $submit.RequestId -Text ((T 'Antrag wurde eingereicht und wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f $submit.RequestId, (Get-PendingApprovalHint -RequestId $submit.RequestId))
         return
     }
     if (-not $submit.Success) {
@@ -2257,6 +2295,12 @@ function Invoke-PlanARetrieve {
             $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
             $lblCertResultA.Text = ((T "Zertifikat wurde abgerufen ({0}), aber nicht auf die Smartcard übernommen (z.B. PIN-Abfrage abgebrochen) - 'Zertifikat abrufen' erneut klicken. Details siehe Log.") -f $recv.CerPath)
         }
+    } elseif ($recv.Status -eq 'Denied') {
+        # Abgelehnt: der Antrag ist erledigt - "Anfordern" wieder frei für einen neuen.
+        Clear-WizardResumeState
+        Reset-PlanARequestUi
+        $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblCertResultA.Text = $recv.Message
     } else {
         $lblCertResultA.ForeColor = if ($recv.Status -eq 'Pending') { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick }
         $lblCertResultA.Text = $recv.Message
@@ -2330,11 +2374,9 @@ function Update-PlanASummary {
 $btnResetA.Add_Click({
     $script:PlanA_VscCreated = $false
     $script:PlanA_CertIssued = $false
-    $script:PlanA_PendingRequestId = $null
     $txtCardNameA.Text = "$($config.VscNamePrefix)-$env:USERNAME"
     $lblVscResultA.Text = ''
-    $lblCertResultA.Text = ''
-    $btnRetrieveA.Visible = $false
+    Reset-PlanARequestUi
     $script:PlanA_RenewMode = $false
     $script:PlanA_OfflineDirect = $false
     if ($script:PlanEntryFrom -eq 'Scenario') {
@@ -2701,7 +2743,7 @@ $pnlB5.Controls.AddRange(@($lblSubmitInfoB, $lblCsrPasteLabelB, $txtCsrPasteB, $
 
 $btnSelectCsrB.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = 'CSR-Dateien (*.csr;*.req)|*.csr;*.req|Alle Dateien (*.*)|*.*'
+    $dlg.Filter = (T 'CSR-Dateien (*.csr;*.req)|*.csr;*.req|Alle Dateien (*.*)|*.*')
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtSelectedCsrB.Text = $dlg.FileName
     }
@@ -2739,16 +2781,15 @@ $btnSubmitB.Add_Click({
 
     $submit = Submit-CertificateSigningRequest -CsrPath $csrPath -CAConfig $config.CAConfig -TemplateName $cboTemplateSubmitB.SelectedItem -OutputDirectory $script:PlanB_SubmitDir
     if ($submit.Pending) {
-        $script:PlanB_PendingRequestId = $submit.RequestId
         Save-WizardResumeState -State @{
             Plan = 'B'; Stage = 'Pending'; RequestId = $submit.RequestId
             SubmitDir = $script:PlanB_SubmitDir
             CardName = "$($script:PlanB_CardName)"; PcscName = "$($script:PlanB_PcscName)"
             TargetAccount = "$($script:TargetAccount)"
         }
-        $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblSubmitResultB.Text = ((T 'Antrag wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f $submit.RequestId, (Get-PendingApprovalHint -RequestId $submit.RequestId))
-        $btnRetrieveB.Visible = $true
+        # Wartet: "Einreichen" bleibt gesperrt (siehe Set-PlanBPendingUi).
+        Set-PlanBPendingUi -RequestId $submit.RequestId -Text ((T 'Antrag wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f $submit.RequestId, (Get-PendingApprovalHint -RequestId $submit.RequestId))
+        return
     } elseif ($submit.Success) {
         $txtCerPathB.Text = $submit.CerPath
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::ForestGreen
@@ -2775,6 +2816,12 @@ $btnRetrieveB.Add_Click({
         $btnRetrieveB.Visible = $false
         $lblSubmitResultB.ForeColor = [System.Drawing.Color]::ForestGreen
         $lblSubmitResultB.Text = (T 'Zertifikat wurde abgerufen.')
+    } elseif ($recv.Status -eq 'Denied') {
+        # Abgelehnt: Antrag erledigt - "Einreichen" wieder frei für einen neuen.
+        Clear-WizardResumeState
+        Reset-PlanBSubmitUi
+        $lblSubmitResultB.ForeColor = [System.Drawing.Color]::Firebrick
+        $lblSubmitResultB.Text = $recv.Message
     } else {
         $lblSubmitResultB.ForeColor = if ($recv.Status -eq 'Pending') { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick }
         $lblSubmitResultB.Text = $recv.Message
@@ -2842,7 +2889,7 @@ $pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, 
 
 $btnSelectCerB.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = 'Zertifikatsdateien (*.cer)|*.cer|Alle Dateien (*.*)|*.*'
+    $dlg.Filter = (T 'Zertifikatsdateien (*.cer)|*.cer|Alle Dateien (*.*)|*.*')
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtSelectedCerB.Text = $dlg.FileName
     }
@@ -2945,9 +2992,8 @@ $btnResetB.Add_Click({
     $txtCerPathB.Text = ''
     $txtSelectedCerB.Text = ''
     $txtCerTextB.Text = ''
-    $lblSubmitResultB.Text = ''
     $lblCompleteResultB.Text = ''
-    $btnRetrieveB.Visible = $false
+    Reset-PlanBSubmitUi
     $script:PlanB_RenewMode = $false
     # Aus einem Szenario gekommen -> zurück zur Startseite; sonst neuer Plan-B-Durchlauf.
     if ($script:PlanEntryFrom -eq 'Scenario') {
@@ -3968,12 +4014,13 @@ function Invoke-WizardResume {
         $script:PlanA_CardName = $state['CardName']
         $script:PlanA_PcscName = $state['PcscName']
         $script:PlanA_EnrollDir = $state['EnrollDir']
-        $script:PlanA_PendingRequestId = $state['RequestId']
+        # Szenario-03-Modus mit wiederherstellen (ältere Stände ohne den Schlüssel: aus).
+        $script:PlanA_OfflineDirect = ($state['OfflineDirect'] -eq 'True')
         $tabPlanA.Visible = $true
+        Set-PlanATemplateForMode
+        if ($state['Template']) { $cboTemplateA.Text = $state['Template'] }
         Show-PlanAStep -Index 1   # "Zertifikat anfordern" (Retrieve-Button dort)
-        $btnRetrieveA.Visible = $true
-        $lblCertResultA.ForeColor = [System.Drawing.Color]::DarkOrange
-        $lblCertResultA.Text = ((T "Fortgesetzter Antrag (RequestId {0}) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde.") -f $state['RequestId'])
+        Set-PlanAPendingUi -RequestId $state['RequestId'] -Text ((T "Fortgesetzter Antrag (RequestId {0}) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde.") -f $state['RequestId'])
     } else {
         $script:ActivePlan = 'B'
         $script:PlanB_VscCreated = $true
@@ -3981,12 +4028,9 @@ function Invoke-WizardResume {
         $script:PlanB_PcscName = $state['PcscName']
         $tabPlanB.Visible = $true
         if ($state['Stage'] -eq 'Pending') {
-            $script:PlanB_PendingRequestId = $state['RequestId']
             $script:PlanB_SubmitDir = $state['SubmitDir']
             Show-PlanBStep -Index 4
-            $btnRetrieveB.Visible = $true
-            $lblSubmitResultB.ForeColor = [System.Drawing.Color]::DarkOrange
-            $lblSubmitResultB.Text = ((T "Fortgesetzter Antrag (RequestId {0}) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde.") -f $state['RequestId'])
+            Set-PlanBPendingUi -RequestId $state['RequestId'] -Text ((T "Fortgesetzter Antrag (RequestId {0}) - über 'Zertifikat abrufen' prüfen, ob er inzwischen genehmigt wurde.") -f $state['RequestId'])
         } else {
             $script:PlanB_CsrPath = $state['CsrPath']
             $txtCsrPathB.Text = $state['CsrPath']

@@ -66,7 +66,7 @@ function Test-Layout($root, [string]$Context) {
             }
             # 1a) Englische Oberfläche: kein deutscher Text übrig (Umlaute/typische Wörter).
             if ($txt -and (Get-WizardLanguage) -eq 'en' -and $c -isnot [System.Windows.Forms.TextBoxBase] -and $c -isnot [System.Windows.Forms.ComboBox] -and
-                $txt -match '[äöüÄÖÜß]|\b(der|die|das|und|nicht|wird|bitte|Karte|Zertifikat|Antrag|keine?|Szenario|wählen|Schritt|Weiter|Zurück|Fehler)\b') {
+                $txt -match '[äöüÄÖÜß]|\b(der|die|das|und|oder|nicht|wird|bitte|mit|für|auf|keine?|Starte|Weiter)\b|\b(Virtuell|Zertifikat|Smartcard|Karte|Antr[aä]g|Schl[üu]ssel|[Ee]rstell|abgebrochen|Fehler|wählen|laden|lesen|Einstellung|Zurück|Szenario|Schritt|Konto)') {
                 $global:Findings.Add("[$Context] DEUTSCH IN EN: $name  Text: '$($txt.Substring(0,[Math]::Min(90,$txt.Length)))'")
             }
             # 1b) AutoSize-Label mit MaximumSize: gewachsene Höhe muss in den Container passen
@@ -112,6 +112,9 @@ $src = $src.Substring(0, $idx) + '# (Audit: kein ShowDialog)' + $src.Substring($
 $src = [regex]::Replace($src, '\$dlg\.ShowDialog\([^)]*\)', '(Invoke-HarnessDialog $dlg)')
 
 . ([scriptblock]::Create($src))
+# Splash (läuft vor dem Modul-Import) mitprüfen, bevor er geschlossen wird.
+# (der Wizard schliesst ihn selbst vor dem Hauptfenster - daher gezielt neu öffnen)
+$null = Show-SplashScreen; Update-Splash -Text (L 'Kernmodul laden...' 'Loading core module...') -Percent 25; Test-Layout $script:Splash 'Splash'
 Close-Splash
 if ($Width -gt 0) { $form.Size = New-Object System.Drawing.Size($Width, $Height) }
 "Fenstergröße: $($form.Size)  (Minimum $($form.MinimumSize))"

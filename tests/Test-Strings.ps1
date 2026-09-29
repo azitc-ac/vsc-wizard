@@ -43,7 +43,36 @@ $placeholder = @($keys.Keys | Where-Object { $dict.ContainsKey($_) } | Where-Obj
     $a -ne $b
 })
 
+# Unübersetzte deutsche Texte im GANZEN Oberflächen-Code (auch vor dem Modul-Import,
+# z.B. Splash): Zeichenketten mit deutschen Merkmalen, die weder in T/L noch im
+# Protokoll (Write-WizardLog) stehen. Fand z.B. den Splash-Untertitel.
+$germanRe = '[äöüÄÖÜß]|\b(der|die|das|und|oder|nicht|wird|bitte|mit|für|auf|keine?|Starte|Weiter)\b|\b(Virtuell|Zertifikat|Smartcard|Karte|Antr[aä]g|Schl[üu]ssel|[Ee]rstell|abgebrochen|Fehler|wählen|laden|lesen|Einstellung|Zurück|Szenario|Schritt|Konto)'
+$skipCmds = @('T', 'L', 'Write-WizardLog', 'Write-Host', 'Write-Verbose', 'Join-Path', 'Get-Item', 'New-Object', 'Add-Type', 'Import-Module', 'Get-CimInstance', 'Set-Content', 'Get-Content', 'Select-String')
+$untranslated = New-Object System.Collections.Generic.List[string]
+foreach ($rel in 'VscWizard.ps1') {
+    $tokens = $null; $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Repo $rel), [ref]$tokens, [ref]$errs)
+    foreach ($n in $ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $x -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)) {
+        if ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $n.StringConstantType -eq 'BareWord') { continue }
+        if ($n.Extent.Text -notmatch $germanRe) { continue }
+        # Rollen im Szenario-Ablauf sind Nachschlage-Schlüssel und werden bei der Anzeige übersetzt (T $st.T).
+        if ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $n.Value -in @('Du', 'Tool', 'Prüfung')) { continue }
+        $p = $n.Parent; $skip = $false
+        while ($p) {
+            if ($p -is [System.Management.Automation.Language.CommandAst] -and ($skipCmds -contains $p.GetCommandName())) { $skip = $true; break }
+            if ($p -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -and $p -ne $n) { $skip = $true; break }
+            # Bewusst deutsch/zweisprachig: Sprachwechsel-Rückfrage, Protokoll-Variablen ($msg für Log)
+            if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $p.Name -in @('Switch-WizardLanguage', 'L')) { $skip = $true; break }
+            $p = $p.Parent
+        }
+        if ($skip) { continue }
+        $untranslated.Add("$rel`:$($n.Extent.StartLineNumber)  $(($n.Extent.Text -replace "`r?`n", ' | ').Substring(0, [Math]::Min(110, $n.Extent.Text.Length)))")
+    }
+}
+
 "Texte im Code: $($keys.Count)  |  Übersetzungen: $($dict.Count)"
+"UNÜBERSETZT (deutscher Text ohne T/L): $($untranslated.Count)"
+foreach ($u in $untranslated) { "  UNÜBERSETZT  $u" }
 "FEHLT: $($missing.Count)  UNBENUTZT: $($unused.Count)  PLATZHALTER: $($placeholder.Count)"
 if ($ListMissing) { foreach ($m in $missing) { "  FEHLT  [$($keys[$m])]  $m" } }
 foreach ($u in $unused) { "  UNBENUTZT  $u" }
