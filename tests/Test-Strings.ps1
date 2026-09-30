@@ -62,6 +62,8 @@ foreach ($rel in 'VscWizard.ps1') {
         $p = $n.Parent; $skip = $false
         while ($p) {
             if ($p -is [System.Management.Automation.Language.CommandAst] -and ($skipCmds -contains $p.GetCommandName())) { $skip = $true; break }
+            # Provisionierungs-Protokoll (& $plog '...'): bewusst deutsch wie Write-WizardLog.
+            if ($p -is [System.Management.Automation.Language.CommandAst] -and $p.CommandElements[0] -is [System.Management.Automation.Language.VariableExpressionAst] -and $p.CommandElements[0].VariablePath.UserPath -eq 'plog') { $skip = $true; break }
             if ($p -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -and $p -ne $n) { $skip = $true; break }
             # Bewusst deutsch/zweisprachig: Sprachwechsel-Rückfrage, Protokoll-Variablen ($msg für Log)
             if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $p.Name -in @('Switch-WizardLanguage', 'L')) { $skip = $true; break }

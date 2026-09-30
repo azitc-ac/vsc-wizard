@@ -160,6 +160,25 @@ foreach ($ans in 'Yes', 'No') {
 }
 $global:OnPremAnswer = $null
 
+# -Simple (Intune-App 2): ohne PIN-Änderung KEINE Ausstellung; mit Änderung Szenario 02
+# (eigenes Konto, kein Offline-Template) auf der vorhandenen VSC.
+function Select-ExistingVsc { $global:Log.Add('    (VSC-Auswahl -> VSC-TEST)'); return [pscustomobject]@{ FriendlyName = 'VSC-TEST'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' } }
+function Show-VscPinChangeDialog { param($Reader, $Owner, [string]$PrefillCurrentPin, [switch]$NumericOnly, [int]$MinNewLength = 4) $global:PinDialogArgs = @{ Prefill = [bool]$PrefillCurrentPin; Numeric = [bool]$NumericOnly; Min = $MinNewLength }; return $global:PinChangedAnswer }
+foreach ($pinChanged in $false, $true) {
+    $global:Log.Add("=== Simple-Modus, PIN geändert: $pinChanged ===")
+    Reset-Run
+    $global:PinDialogArgs = $null
+    $global:PinChangedAnswer = $pinChanged
+    Step "Simple (PIN geändert=$pinChanged)" { Enter-SimpleFlow }
+    $planOpen = (OwnVisible $tabPlanA) -or (OwnVisible $tabPlanB)
+    if (-not $global:PinDialogArgs) { $global:Errors.Add('[Simple] PIN-Dialog wurde nicht gezeigt') }
+    elseif (-not ($global:PinDialogArgs.Prefill -and $global:PinDialogArgs.Numeric -and $global:PinDialogArgs.Min -ge 6)) { $global:Errors.Add("[Simple] PIN-Dialog ohne Vorbelegung/numerisch/min 6: $(($global:PinDialogArgs.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', ')") }
+    if ($pinChanged) {
+        if (-not (OwnVisible $tabPlanA)) { $global:Errors.Add('[Simple] nach PIN-Änderung kein Plan A (Ausstellung) geöffnet') }
+        if ($script:TargetAccount -or $script:PlanA_OfflineDirect) { $global:Errors.Add("[Simple] nicht Szenario 02 (TargetAccount='$($script:TargetAccount)', OfflineDirect=$($script:PlanA_OfflineDirect))") }
+    } elseif ($planOpen) { $global:Errors.Add('[Simple] Ausstellung gestartet, obwohl die PIN NICHT geändert wurde') }
+}
+
 # Plan B für das eigene Konto (ohne Zielkonto) direkt
 $global:Log.Add('=== Plan B eigenes Konto ===')
 Reset-Run; $script:TargetAccount = $null
