@@ -27,10 +27,16 @@ param(
     [switch]$Silent,      # zusammen mit -Provision: bewusst ohne Fenster (Default für Provision)
     [switch]$Simple,      # schlanker Assistent (Benutzerkontext / Intune-App 2): PIN ändern -> ausstellen
     [string]$CardName,    # optionaler VSC-Name (Default: VscNamePrefix + Computername)
-    [string]$Pin          # optionale Start-PIN (Default: aus Computername abgeleitet); nur mit -Provision
+    [string]$Pin,         # optionale Start-PIN (Default: aus Computername abgeleitet); nur mit -Provision
+    # Per-Benutzer-Karten (Variante 2, docs/intune-rollout.md):
+    [switch]$Install,         # Intune-App (SYSTEM): Wizard nach %ProgramFiles%, Aufgaben + Auftragsordner anlegen
+    [switch]$Uninstall,       # Gegenstück (Karten bleiben erhalten)
+    [switch]$ProcessRequests, # SYSTEM-Aufgabe "VSC-Wizard CreateCard": Aufträge abarbeiten
+    [switch]$AutoStart        # Anmelde-Aufgabe: -Simple, aber still beenden, wenn nichts zu tun ist
 )
 
-$script:SimpleMode = [bool]$Simple
+$script:SimpleMode = [bool]($Simple -or $AutoStart)
+$script:HeadlessMode = [bool]($Provision -or $Install -or $Uninstall -or $ProcessRequests)
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -144,7 +150,8 @@ function Close-Splash {
     $script:Splash = $null
 }
 
-if (-not $Provision) { $null = Show-SplashScreen }
+# Kein Splash für die fensterlosen Modi und den Anmelde-Autostart (der sich oft still beendet).
+if (-not ($script:HeadlessMode -or $AutoStart)) { $null = Show-SplashScreen }
 
 Update-Splash -Text (L 'Kernmodul laden...' 'Loading core module...') -Percent 25
 $script:ModulePath = Join-Path $script:BaseDir 'modules\VscWizard.Core.psm1'
@@ -217,6 +224,22 @@ function Invoke-VscProvision {
 
 if ($Provision) {
     exit (Invoke-VscProvision)
+}
+# Per-Benutzer-Karten (Variante 2): fensterlose Modi für Intune und die SYSTEM-Aufgabe.
+if ($Install) { exit (Install-VscCardService -SourceDir $script:BaseDir) }
+if ($Uninstall) { exit (Uninstall-VscCardService) }
+if ($ProcessRequests) {
+    try { Initialize-WizardLog -LogBox $null } catch { }
+    $maxCards = if ($config.MaxVscPerDevice) { [int]$config.MaxVscPerDevice } else { 10 }
+    [void](Invoke-VscCardRequests -Config $config -MaxCards $maxCards)
+    exit 0
+}
+if ($AutoStart) {
+    # Anmelde-Aufgabe: nur öffnen, wenn es etwas zu tun gibt (sonst still beenden).
+    try { Initialize-WizardLog -LogBox $null } catch { }
+    $need = Test-VscAutoStartNeeded -Config $config
+    if (-not $need.Needed) { Write-WizardLog -Message "Autostart: nichts zu tun - $($need.Reason)." -Level Info; exit 0 }
+    Write-WizardLog -Message 'Autostart: Einrichtung nötig - Assistent wird geöffnet.' -Level Info
 }
 
 Update-Splash -Text (T 'Oberfläche wird aufgebaut...') -Percent 55
@@ -4346,10 +4369,12 @@ function Get-SimpleCardState {
 }
 
 function Show-SimpleStart {
-    # Startseite des Simple-Modus (VscWizard.exe -Simple, Intune-App 2) statt der
-    # Szenario-Übersicht: was passiert, welche Karte, ein Knopf. Die per -Provision
-    # angelegte Karte wird automatisch erkannt (Find-ProvisionedVsc) - Auswahl nur, wenn
-    # das nicht eindeutig geht.
+    # Startseite des Simple-Modus (VscWizard.exe -Simple / -AutoStart) statt der
+    # Szenario-Übersicht. Zwei Wege:
+    #  - Per-Benutzer-Karte (Variante 2): Einrichtung per -Install vorbereitet -> die
+    #    eigene Karte "VSC-<Benutzer>" wird beim Start von der SYSTEM-Aufgabe angelegt
+    #    (bzw. die vorhandene wiederverwendet).
+    #  - Vorbereitete Karte (Variante 1, -Provision): per Find-ProvisionedVsc erkannt.
     $script:ActivePlan = 'SIMPLE'
     $tabPlanA.Visible = $false; $tabPlanB.Visible = $false
     $pnlScenario.Visible = $false; $pnlModeSelect.Visible = $false
@@ -4361,23 +4386,40 @@ function Show-SimpleStart {
     $ready = $true
     if (-not $script:SimpleCardResolved) {
         $script:SimpleCardResolved = $true
+        $script:SimpleCard = $null; $script:SimpleCardState = $null
         $readers = @(Invoke-Busy -Text (T 'Suche die vorbereitete Smartcard...') -Action { Get-VirtualSmartCardReaders } | Where-Object { $_.PcscName })
         $script:SimpleReaderCount = $readers.Count
-        $found = Find-ProvisionedVsc -Readers $readers -ExpectedName (Get-VscProvisionCardName -Config $config)
+        $script:PerUserMode = Test-VscCardServiceInstalled
+        $found = $null
+        if ($script:PerUserMode) {
+            $mySid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $rec = Get-VscUserCardRecord -Sid $mySid
+            $mine = if ($rec) { $readers | Where-Object { "$($_.InstanceId)" -eq "$($rec.InstanceId)" } | Select-Object -First 1 }
+            if ($mine) { $found = [pscustomobject]@{ Reader = $mine; Reason = 'SID-Zuordnung (HKLM)' } }
+            $script:SimpleNewCardName = Get-VscUserCardName -Sid $mySid -Config $config -ExistingNames @($readers | ForEach-Object { $_.FriendlyName })
+            Write-WizardLog -Message "Simple-Modus: Per-Benutzer-Einrichtung vorbereitet; eigene Karte $(if ($found) { "'$($found.Reader.FriendlyName)'" } else { "noch nicht vorhanden (wird '$($script:SimpleNewCardName)')" })." -Level Info
+        } else {
+            $found = Find-ProvisionedVsc -Readers $readers -ExpectedName (Get-VscProvisionCardName -Config $config)
+        }
         if ($found) {
             $script:SimpleCard = $found.Reader
-            Write-WizardLog -Message "Simple-Modus: Karte '$($found.Reader.FriendlyName)' ($($found.Reader.PcscName)) automatisch gewählt - $($found.Reason)." -Level Info
+            Write-WizardLog -Message "Simple-Modus: Karte '$($found.Reader.FriendlyName)' ($($found.Reader.PcscName)) - $($found.Reason)." -Level Info
             # Schon eingerichtet (von mir / jemand anderem)? Still auf der Karte nachsehen.
             $occ = Invoke-Busy -Text (T 'Prüfe, ob die Smartcard schon eingerichtet ist...') -Action { Get-SmartCardOccupancy -PcscName $found.Reader.PcscName }
             $script:SimpleCardState = Get-SimpleCardState -Occupancy $occ -CurrentUpn (Get-CurrentUpn)
             Write-WizardLog -Message "Simple-Modus: Kartenzustand $($script:SimpleCardState.State)$(if ($script:SimpleCardState.Entry) { " (Zertifikat für $($script:SimpleCardState.Entry.Upn))" })." -Level Info
-        } else {
+        } elseif (-not $script:PerUserMode) {
             Write-WizardLog -Message "Simple-Modus: keine eindeutige vorbereitete Karte ($($readers.Count) VSC vorhanden) - Auswahl beim Start." -Level Info
         }
     }
     if ([string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)) {
         $lblSimpleCard.Text = (T 'Die Konfiguration (Zertifizierungsstelle/Vorlage) ist unvollständig. Der Einrichtungsassistent kann so kein Zertifikat ausstellen. Bitte die Einstellungen prüfen oder den Administrator kontaktieren.')
         $lblSimpleCard.ForeColor = $script:UI.Danger; $ready = $false
+    } elseif ($script:SimpleNotice) {
+        # Ergebnis/Hinweis des letzten Versuchs (z.B. Fehler beim Anlegen) - mit Ausweg.
+        $lblSimpleCard.Text = $script:SimpleNotice.Text
+        $lblSimpleCard.ForeColor = $script:SimpleNotice.Color
+        $ready = $script:SimpleNotice.CanRetry
     } elseif ($script:SimpleCard -and $script:SimpleCardState -and $script:SimpleCardState.State -eq 'Own') {
         $e = $script:SimpleCardState.Entry
         $lblSimpleCard.Text = ((T 'Deine Smartcard ist bereits eingerichtet (Zertifikat für {0}, gültig bis {1}). Es ist nichts weiter zu tun.') -f $e.Upn, $(if ($e.NotAfter) { $e.NotAfter.ToString('yyyy-MM-dd') } else { '?' }))
@@ -4391,10 +4433,13 @@ function Show-SimpleStart {
     } elseif ($script:SimpleCard) {
         $lblSimpleCard.Text = ((T 'Deine Smartcard: {0}  (in Windows-Dialogen: {1})') -f $script:SimpleCard.FriendlyName, $script:SimpleCard.PcscName)
         $lblSimpleCard.ForeColor = $script:UI.Text
-        if ($script:SimpleCardState -and $script:SimpleCardState.State -eq 'Started') {
+        if ($script:SimpleCardState -and $script:SimpleCardState.State -eq 'Started' -and -not $script:PerUserMode) {
             $lblSimpleCard.Text += "`r`n" + (T 'Auf der Karte liegt schon ein Schlüssel ohne Zertifikat. Falls du die Einrichtung schon begonnen und deine PIN geändert hast, trage im nächsten Schritt deine eigene PIN als aktuelle PIN ein.')
             $lblSimpleCard.ForeColor = $script:UI.Warn
         }
+    } elseif ($script:PerUserMode) {
+        $lblSimpleCard.Text = ((T 'Beim Start wird deine persönliche Smartcard "{0}" angelegt (dauert meist 5-15 Sekunden).') -f $script:SimpleNewCardName)
+        $lblSimpleCard.ForeColor = $script:UI.Text
     } elseif ($script:SimpleReaderCount -gt 0) {
         $lblSimpleCard.Text = (T 'Auf diesem Gerät gibt es mehrere Smartcards - beim Start wählst du die richtige aus.')
         $lblSimpleCard.ForeColor = $script:UI.Warn
@@ -4406,54 +4451,138 @@ function Show-SimpleStart {
     $btnNextShared.Enabled = $ready
 }
 
+function Set-SimpleNotice {
+    # Hinweis auf der Startseite nach einem Versuch. -CanRetry: "Einrichtung starten" bleibt
+    # aktiv (erneut versuchen) - so wird ein erwarteter Fehler keine Sackgasse.
+    param([string]$Text, [ValidateSet('Info', 'Warn', 'Error')][string]$Kind = 'Warn', [bool]$CanRetry = $true)
+    $color = switch ($Kind) { 'Info' { $script:UI.Text } 'Warn' { $script:UI.Warn } default { $script:UI.Danger } }
+    $script:SimpleNotice = [pscustomobject]@{ Text = $Text; Color = $color; CanRetry = $CanRetry }
+    Show-SimpleStart
+}
+
 function Enter-SimpleFlow {
-    # Schlanker Ablauf für die Intune-Benutzer-App (VscWizard.exe -Simple), siehe
-    # docs/intune-rollout.md. Läuft im Benutzerkontext auf einer bereits von der
-    # Device-App (-Provision) angelegten, leeren VSC:
-    #   1. PIN-Änderung ERZWINGEN (alte PIN = aus der Seriennummer abgeleitete
-    #      Start-PIN, vorbelegt) -> erst danach existiert eine nur dem Benutzer
-    #      bekannte PIN. Ohne Änderung geht es NICHT weiter (Sicherheit).
-    #   2. Zertifikat für das EIGENE on-prem/hybrid-Konto direkt bei der CA ausstellen
-    #      (entspricht Szenario 02, Enter-PlanARenewal -TargetAccount $null).
+    # "Einrichtung starten". Per-Benutzer-Karte: Auftrag an die SYSTEM-Aufgabe (Anlegen
+    # bzw. vorhandene Karte + offene Start-PIN) -> Warten per Timer (Fenster bleibt
+    # bedienbar) -> Complete-SimpleCardRequest. Vorbereitete Karte (Variante 1): direkt
+    # PIN ändern -> ausstellen.
     if ([string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)) {
         Write-WizardLog -Message 'Simple-Modus: Konfiguration unvollständig (CAConfig/Template).' -Level Warn
         return
     }
+    $script:SimpleNotice = $null
+    if ($script:PerUserMode) { Start-SimpleCardRequest; return }
 
-    # Automatisch erkannte Karte (Show-SimpleStart); nur wenn das nicht eindeutig ging,
-    # wählt der Benutzer.
     $card = $script:SimpleCard
     if (-not $card) { $card = Select-ExistingVsc }
-    if (-not $card) {
-        Write-WizardLog -Message 'Simple-Modus: keine VSC gewählt.' -Level Warn
-        return
-    }
-
-    # Start-/Quell-PIN identisch zur Device-App aus der Seriennummer ableiten
-    # (Get-VscBootstrapPin), damit sie im PIN-Dialog vorbelegt werden kann.
-    $pinMin = Get-SimpleTargetPinMin
+    if (-not $card) { Write-WizardLog -Message 'Simple-Modus: keine VSC gewählt.' -Level Warn; return }
     $startPin = ''
-    try { $startPin = Get-VscBootstrapPin -MinLength $pinMin.CardMin } catch {
+    try { $startPin = Get-VscBootstrapPin -MinLength (Get-SimpleTargetPinMin).CardMin } catch {
         Write-WizardLog -Message "Simple-Modus: Start-PIN konnte nicht abgeleitet werden: $($_.Exception.Message)" -Level Warn
     }
+    Invoke-SimplePinAndIssue -Card $card -StartPin $startPin
+}
 
-    # PIN-Änderung ERZWINGEN: erst nach erfolgreicher Änderung geht es weiter. Die ZIEL-PIN
-    # ist NUMERISCH und mindestens 6-stellig (bzw. die Karten-Mindestlänge, falls höher).
-    Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current 1
-    $changed = Show-VscPinChangeDialog -Reader $card -Owner $form -PrefillCurrentPin $startPin -NumericOnly -MinNewLength $pinMin.TargetMin
-    if (-not $changed) {
-        Write-WizardLog -Message 'Simple-Modus: PIN-Änderung abgebrochen - Zertifikatsausstellung wird nicht gestartet.' -Level Warn
-        Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current 0
-        [System.Windows.Forms.MessageBox]::Show(
-            (T 'Die Einrichtung geht erst weiter, wenn du eine eigene PIN vergeben hast. Klicke dazu erneut auf "Einrichtung starten".'),
-            (T 'Einrichtung'), 'OK', 'Information') | Out-Null
+function Invoke-SimplePinAndIssue {
+    # PIN-Änderung ERZWINGEN (Start-PIN vorbelegt), dann Zertifikat für das eigene Konto
+    # ausstellen (Szenario 02). Ohne -StartPin: der Benutzer hat seine PIN schon vergeben
+    # (z.B. Einrichtung vorher nach der PIN abgebrochen) -> direkt ausstellen.
+    param([Parameter(Mandatory)]$Card, [string]$StartPin, [switch]$ReportPinChange)
+    if ($StartPin) {
+        $pinMin = Get-SimpleTargetPinMin
+        Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current 1
+        $changed = Show-VscPinChangeDialog -Reader $Card -Owner $form -PrefillCurrentPin $StartPin -NumericOnly -MinNewLength $pinMin.TargetMin
+        if (-not $changed) {
+            Write-WizardLog -Message 'Simple-Modus: PIN-Änderung abgebrochen - Zertifikatsausstellung wird nicht gestartet.' -Level Warn
+            Set-SimpleNotice -Text (T 'Die Einrichtung geht erst weiter, wenn du eine eigene PIN vergeben hast. Klicke dazu erneut auf "Einrichtung starten" - deine Karte bleibt erhalten.') -Kind Warn
+            return
+        }
+        if ($ReportPinChange) {
+            # SYSTEM-Aufgabe: gemerkte Start-PIN verwerfen (sonst würde sie später veraltet
+            # vorbelegt und kostete einen Fehlversuch). Fehler hier sind unkritisch.
+            try { [void](Submit-VscCardRequest -Type PinChanged); [void](Start-VscCardService) } catch { Write-WizardLog -Message "PIN-Änderung nicht gemeldet: $($_.Exception.Message)" -Level Warn }
+        }
+    } else {
+        Write-WizardLog -Message "Simple-Modus: eigene PIN für '$($Card.FriendlyName)' bereits vergeben - direkt zur Ausstellung." -Level Info
+    }
+    Write-WizardLog -Message "Simple-Modus: starte Zertifikatsausstellung für die Karte '$($Card.FriendlyName)'." -Level Info
+    $pnlSimple.Visible = $false
+    Enter-PlanARenewal -Reader $Card -TargetAccount $null
+}
+
+function Start-SimpleCardRequest {
+    # Auftrag ablegen + SYSTEM-Aufgabe starten; Antwort per Timer abwarten.
+    $btnSimpleStart.Enabled = $false; Update-PrimaryEnabledLook $btnSimpleStart; $btnNextShared.Enabled = $false
+    try {
+        $script:SimpleReqId = Submit-VscCardRequest -Type Create
+    } catch {
+        Write-WizardLog -Message "Simple-Modus: Auftrag nicht ablegbar: $($_.Exception.Message)" -Level Error
+        Set-SimpleNotice -Text ((T 'Die Einrichtung ist auf diesem Gerät nicht vollständig vorbereitet (Auftragsordner fehlt oder ist gesperrt: {0}). Bitte wende dich an deine IT.') -f $_.Exception.Message) -Kind Error -CanRetry $true
         return
     }
+    $err = Start-VscCardService
+    if ($err) {
+        Write-WizardLog -Message "Simple-Modus: SYSTEM-Aufgabe nicht startbar: $err" -Level Error
+        Set-SimpleNotice -Text ((T 'Die Einrichtung ist auf diesem Gerät nicht vollständig vorbereitet (Aufgabe "{0}" nicht startbar). Bitte wende dich an deine IT.') -f (Get-VscServicePaths).CreateTask) -Kind Error -CanRetry $true
+        return
+    }
+    Write-WizardLog -Message "Simple-Modus: Auftrag $($script:SimpleReqId) abgelegt, SYSTEM-Aufgabe gestartet." -Level Info
+    $script:SimpleReqStart = Get-Date; $script:SimpleReqKicked = $false
+    Set-Busy -Text (T 'Deine Smartcard wird angelegt... (dauert meist 5-15 Sekunden)')
+    $script:SimpleReqTimer.Start()
+}
 
-    # Zertifikat für das eigene Konto direkt bei der CA ausstellen (Szenario 02).
-    Write-WizardLog -Message "Simple-Modus: PIN gesetzt, starte Zertifikatsausstellung für die Karte '$($card.FriendlyName)'." -Level Info
-    $pnlSimple.Visible = $false
-    Enter-PlanARenewal -Reader $card -TargetAccount $null
+function Invoke-SimpleCardPoll {
+    # Timer-Takt (1 s): Antwort da? Nach 20 s die Aufgabe einmal erneut anstoßen (evtl. lief
+    # gerade eine andere Instanz), nach 90 s fragen: weiter warten oder abbrechen.
+    $r = Read-VscCardResult -Id $script:SimpleReqId
+    if (-not $r) {
+        $el = ((Get-Date) - $script:SimpleReqStart).TotalSeconds
+        if ($el -gt 20 -and -not $script:SimpleReqKicked) { $script:SimpleReqKicked = $true; [void](Start-VscCardService) }
+        if ($el -gt 90) {
+            $script:SimpleReqTimer.Stop(); Clear-Busy
+            Write-WizardLog -Message "Simple-Modus: keine Antwort der SYSTEM-Aufgabe nach 90 s (Auftrag $($script:SimpleReqId))." -Level Warn
+            $ans = [System.Windows.Forms.MessageBox]::Show((T "Das Anlegen der Smartcard dauert ungewöhnlich lange.`r`n`r`nWeiter warten?"), (T 'Einrichtung'), 'YesNo', 'Question')
+            if ($ans -eq [System.Windows.Forms.DialogResult]::Yes) {
+                $script:SimpleReqStart = Get-Date; $script:SimpleReqKicked = $false
+                [void](Start-VscCardService)
+                Set-Busy -Text (T 'Deine Smartcard wird angelegt... (dauert meist 5-15 Sekunden)')
+                $script:SimpleReqTimer.Start()
+            } else {
+                Set-SimpleNotice -Text ((T 'Die Smartcard wurde (noch) nicht angelegt. Versuche es gleich erneut; bleibt es dabei, hilft deine IT (Protokoll: {0}).') -f (Get-VscServicePaths).LogFile) -Kind Warn
+            }
+        }
+        return
+    }
+    $script:SimpleReqTimer.Stop(); Clear-Busy
+    Complete-SimpleCardRequest -Result $r
+}
+
+function Complete-SimpleCardRequest {
+    # Antwort der SYSTEM-Aufgabe umsetzen. Jeder erwartete Fehler endet mit einem Ausweg
+    # (erneut versuchen / konkreter Hinweis an die IT) statt in einer Sackgasse.
+    param([Parameter(Mandatory)][hashtable]$Result)
+    Write-WizardLog -Message "Simple-Modus: Antwort $($Result.Status) $(if ($Result.Code) { "($($Result.Code))" }) für '$($Result.CardName)'." -Level Info
+    switch ($Result.Status) {
+        { $_ -in 'Created', 'Existing' } {
+            # Karte suchen (nach dem Anlegen braucht Windows einen Moment für das Gerät).
+            $card = $null
+            for ($i = 0; $i -lt 10 -and -not $card; $i++) {
+                $card = @(Get-VirtualSmartCardReaders | Where-Object { "$($_.InstanceId)" -eq "$($Result.InstanceId)" -and $_.PcscName }) | Select-Object -First 1
+                if (-not $card) { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $card) { $card = [pscustomobject]@{ FriendlyName = $Result.CardName; PcscName = $Result.PcscName; InstanceId = $Result.InstanceId } }
+            $script:SimpleCard = $card
+            Invoke-SimplePinAndIssue -Card $card -StartPin $Result.StartPin -ReportPinChange
+        }
+        default {
+            $code = "$($Result.Code)"
+            switch ($code) {
+                'Limit' { Set-SimpleNotice -Text ((T 'Auf diesem Gerät ist kein Platz für eine weitere Smartcard ({0} von maximal {1}). Bitte wende dich an deine IT - nicht mehr benötigte Karten lassen sich dort entfernen.') -f $Result.Count, $Result.Max) -Kind Error -CanRetry $true }
+                'TpmNotReady' { Set-SimpleNotice -Text (T 'Der Sicherheitschip (TPM) dieses Geräts ist gerade nicht bereit. Starte das Gerät neu und versuche es dann erneut; hilft das nicht, wende dich an deine IT.') -Kind Error -CanRetry $true }
+                default { Set-SimpleNotice -Text ((T 'Die Smartcard konnte nicht angelegt werden ({0}). Versuche es bitte erneut; bleibt der Fehler, hilft deine IT (Protokoll: {1}).') -f $(if ($Result.Message) { $Result.Message } else { $code }), (Get-VscServicePaths).LogFile) -Kind Error -CanRetry $true }
+            }
+        }
+    }
 }
 
 # --- Startseite des Simple-Modus -----------------------------------------------------
@@ -4481,15 +4610,33 @@ $lblSimpleStep2 = New-SimpleLabel (T '2.  Anmeldezertifikat ausstellen - der Ass
 $lblSimpleCard = New-SimpleLabel '' 9.5 -Bottom 18
 $btnSimpleStart = New-Object System.Windows.Forms.Button
 $btnSimpleStart.Text = (T 'Einrichtung starten'); $btnSimpleStart.Size = New-Object System.Drawing.Size(200, 36)
-$btnSimpleStart.Margin = New-Object System.Windows.Forms.Padding(0)
+$btnSimpleStart.Margin = New-Object System.Windows.Forms.Padding(0, 0, 12, 0)
 Set-ButtonStyle -Button $btnSimpleStart -Kind Primary
 $btnSimpleStart.Add_Click({ Enter-SimpleFlow })
-$simpleBox.Controls.AddRange(@($lblSimpleTitle, $lblSimpleStep1, $lblSimpleStep2, $lblSimpleCard, $btnSimpleStart))
+# "Später": Anmelde-Autostart einen Tag zurückstellen (über das Startmenü jederzeit).
+$btnSimpleLater = New-Object System.Windows.Forms.Button
+$btnSimpleLater.Text = (T 'Später erinnern'); $btnSimpleLater.Size = New-Object System.Drawing.Size(160, 36)
+$btnSimpleLater.Margin = New-Object System.Windows.Forms.Padding(0)
+Set-ButtonStyle -Button $btnSimpleLater -Kind Secondary
+$btnSimpleLater.Add_Click({
+    try { Set-VscSnooze -Hours 24 } catch { }
+    Write-WizardLog -Message 'Simple-Modus: auf später zurückgestellt (24 h).' -Level Info
+    $form.Close()
+})
+$simpleButtons = New-Object System.Windows.Forms.FlowLayoutPanel
+$simpleButtons.AutoSize = $true; $simpleButtons.AutoSizeMode = 'GrowAndShrink'; $simpleButtons.WrapContents = $false
+$simpleButtons.Margin = New-Object System.Windows.Forms.Padding(0)
+$simpleButtons.Controls.AddRange(@($btnSimpleStart, $btnSimpleLater))
+$simpleBox.Controls.AddRange(@($lblSimpleTitle, $lblSimpleStep1, $lblSimpleStep2, $lblSimpleCard, $simpleButtons))
 # Texte in der verfügbaren Breite umbrechen.
 $pnlSimple.Add_Resize({
     $w = [Math]::Max(200, $pnlSimple.ClientSize.Width - $pnlSimple.Padding.Horizontal - $simpleBox.Padding.Horizontal - 4)
     foreach ($l in @($lblSimpleTitle, $lblSimpleStep1, $lblSimpleStep2, $lblSimpleCard)) { $l.MaximumSize = New-Object System.Drawing.Size($w, 0) }
 })
+# Warten auf die SYSTEM-Aufgabe ohne das Fenster zu blockieren.
+$script:SimpleReqTimer = New-Object System.Windows.Forms.Timer
+$script:SimpleReqTimer.Interval = 1000
+$script:SimpleReqTimer.Add_Tick({ Invoke-SimpleCardPoll })
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($script:SimpleMode) {
     # Intune-Benutzer-App (-Simple): eigene Startseite statt Szenario-Übersicht; der

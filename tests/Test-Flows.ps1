@@ -259,6 +259,62 @@ if (-not (OwnVisible $btnRetrieveA)) { $global:Errors.Add('[Resume] Zertifikat a
 if ($lblCertResultA.Text -notmatch 'certutil -resubmit') { $global:Errors.Add("[Resume] Genehmigungs-Hinweis (certutil -resubmit) fehlt: '$($lblCertResultA.Text)'") }
 Step 'Abrufen ohne ID (InputBox leer)' { Click $btnRetrieveA }
 
+# --- Per-Benutzer-Karten (Variante 2): jede Antwort der SYSTEM-Aufgabe muss weiterführen ---
+$global:Log.Add('=== Per-Benutzer-Karte ===')
+$global:PU = @{ Result = $null; StartErr = $null; SubmitThrows = $false; Submitted = @() }
+function Submit-VscCardRequest { param([string]$Type = 'Create', [string]$RequestDir) if ($global:PU.SubmitThrows) { throw 'Zugriff verweigert' }; $global:PU.Submitted += $Type; return 'testreq' }
+function Start-VscCardService { param([string]$TaskName) return $global:PU.StartErr }
+function Read-VscCardResult { param([string]$Id, [string]$RequestDir) return $global:PU.Result }
+function Get-VirtualSmartCardReaders { @([pscustomobject]@{ FriendlyName = 'VSC-alex'; PcscName = 'Microsoft Virtual Smart Card 7'; InstanceId = 'ROOT\SMARTCARDREADER\0007'; Status = 'OK' }) }
+function Show-VscPinChangeDialog { param($Reader, $Owner, [string]$PrefillCurrentPin, [switch]$NumericOnly, [int]$MinNewLength = 4) $global:PinDialogArgs = @{ Prefill = $PrefillCurrentPin }; return $global:PinChangedAnswer }
+$okCard = @{ Status = 'Created'; CardName = 'VSC-alex'; PcscName = 'Microsoft Virtual Smart Card 7'; InstanceId = 'ROOT\SMARTCARDREADER\0007'; StartPin = '123456789012' }
+$cases = @(
+    @{ N = 'angelegt + Start-PIN, PIN geändert'; R = $okCard; Pin = $true; WantPlan = $true; WantPinDialog = $true; WantReport = $true }
+    @{ N = 'vorhanden, PIN schon eigene'; R = @{ Status = 'Existing'; CardName = 'VSC-alex'; PcscName = 'Microsoft Virtual Smart Card 7'; InstanceId = 'ROOT\SMARTCARDREADER\0007'; StartPin = '' }; Pin = $true; WantPlan = $true; WantPinDialog = $false }
+    @{ N = 'PIN-Änderung abgebrochen'; R = $okCard; Pin = $false; WantPlan = $false; WantPinDialog = $true; WantRetry = $true }
+    @{ N = 'TPM voll'; R = @{ Status = 'Error'; Code = 'Limit'; Count = '10'; Max = '10' }; WantPlan = $false; WantRetry = $true; WantText = '10' }
+    @{ N = 'TPM nicht bereit'; R = @{ Status = 'Error'; Code = 'TpmNotReady' }; WantPlan = $false; WantRetry = $true; WantText = 'TPM' }
+    @{ N = 'Erstellung fehlgeschlagen'; R = @{ Status = 'Error'; Code = 'CreateFailed'; Message = 'HRESULT 0x80090030' }; WantPlan = $false; WantRetry = $true; WantText = '0x80090030' }
+    @{ N = 'Aufgabe nicht startbar'; StartErr = 'Das System kann die angegebene Datei nicht finden.'; WantPlan = $false; WantRetry = $true; WantText = 'VSC-Wizard CreateCard' }
+    @{ N = 'Auftragsordner fehlt'; SubmitThrows = $true; WantPlan = $false; WantRetry = $true; WantText = 'Zugriff verweigert' }
+)
+foreach ($c in $cases) {
+    Reset-Run
+    $script:SimpleCardResolved = $true; $script:PerUserMode = $true; $script:SimpleCard = $null; $script:SimpleCardState = $null; $script:SimpleNotice = $null; $script:SimpleNewCardName = 'VSC-alex'
+    $global:PU.Result = $c.R; $global:PU.StartErr = $c.StartErr; $global:PU.SubmitThrows = [bool]$c.SubmitThrows; $global:PU.Submitted = @()
+    $global:PinChangedAnswer = [bool]$c.Pin; $global:PinDialogArgs = $null
+    if ($c.SubmitThrows) {
+        # Absichtlich geworfener Fehler des Platzhalters: erwartet, nicht als Befund werten.
+        try { Show-SimpleStart; Enter-SimpleFlow } catch { $global:Errors.Add("[Per-User $($c.N)] AUSNAHME $($_.Exception.Message)") }
+        $Error.Clear()
+    } else {
+        Step "Per-User: $($c.N)" { Show-SimpleStart; Enter-SimpleFlow; if ($script:SimpleReqTimer.Enabled) { Invoke-SimpleCardPoll } }
+    }
+    $script:SimpleReqTimer.Stop()
+    $plan = OwnVisible $tabPlanA
+    if ($plan -ne $c.WantPlan) { $global:Errors.Add("[Per-User $($c.N)] Ausstellung geöffnet=$plan, erwartet $($c.WantPlan)") }
+    if ($c.ContainsKey('WantPinDialog') -and ([bool]$global:PinDialogArgs -ne $c.WantPinDialog)) { $global:Errors.Add("[Per-User $($c.N)] PIN-Dialog gezeigt=$([bool]$global:PinDialogArgs), erwartet $($c.WantPinDialog)") }
+    if ($c.WantPinDialog -and $global:PinDialogArgs -and $global:PinDialogArgs.Prefill -ne $c.R.StartPin) { $global:Errors.Add("[Per-User $($c.N)] Start-PIN nicht vorbelegt") }
+    if ($c.WantReport -and ($global:PU.Submitted -notcontains 'PinChanged')) { $global:Errors.Add("[Per-User $($c.N)] PIN-Änderung nicht an SYSTEM gemeldet") }
+    if ($c.WantRetry) {
+        if (-not (OwnVisible $pnlSimple) -or -not $btnSimpleStart.Enabled) { $global:Errors.Add("[Per-User $($c.N)] Sackgasse: Startseite nicht sichtbar oder 'Einrichtung starten' gesperrt") }
+        if ($c.WantText -and $lblSimpleCard.Text -notmatch [regex]::Escape($c.WantText)) { $global:Errors.Add("[Per-User $($c.N)] Hinweis ohne '$($c.WantText)': '$($lblSimpleCard.Text)'") }
+    }
+    if (Get-Variable -Name BusyDepth -Scope Script -ErrorAction SilentlyContinue) { if ($script:BusyDepth -ne 0) { $global:Errors.Add("[Per-User $($c.N)] Warte-Anzeige hängt (BusyDepth=$($script:BusyDepth))") } }
+}
+# Zeitüberschreitung: "Weiter warten" (Ja) startet erneut, "Nein" führt zur Startseite mit Ausweg.
+foreach ($ans in 'Yes', 'No') {
+    Reset-Run
+    $script:SimpleCardResolved = $true; $script:PerUserMode = $true; $script:SimpleCard = $null; $script:SimpleNotice = $null
+    $global:PU.Result = $null; $global:PU.StartErr = $null; $global:PU.SubmitThrows = $false
+    $global:MsgAnswer = [System.Windows.Forms.DialogResult]::$ans
+    Step "Per-User: Zeitüberschreitung ($ans)" { Show-SimpleStart; Enter-SimpleFlow; $script:SimpleReqStart = (Get-Date).AddSeconds(-100); Invoke-SimpleCardPoll }
+    $global:MsgAnswer = [System.Windows.Forms.DialogResult]::No
+    if ($ans -eq 'Yes' -and -not $script:SimpleReqTimer.Enabled) { $global:Errors.Add('[Per-User Timeout Ja] wartet nicht weiter') }
+    if ($ans -eq 'No' -and (-not $btnSimpleStart.Enabled -or $lblSimpleCard.Text -notmatch 'provision.log')) { $global:Errors.Add("[Per-User Timeout Nein] kein Ausweg: '$($lblSimpleCard.Text)'") }
+    $script:SimpleReqTimer.Stop(); while ($script:BusyDepth -gt 0) { Clear-Busy }
+}
+$script:PerUserMode = $false
 # Resume-Datei des Benutzers wiederherstellen
 & $restoreResume
 

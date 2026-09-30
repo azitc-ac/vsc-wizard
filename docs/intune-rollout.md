@@ -131,54 +131,74 @@ in der Benutzersitzung.
   und versucht es periodisch erneut — er sieht dann jeweils den Hinweis. Wer das nicht
   will: App 2 nur dem Hauptbenutzer zuweisen.
 
-### Variante 2 — eine Karte pro Benutzer (DESIGN, nicht umgesetzt)
+### Variante 2 — eine Karte pro Benutzer, Anlegen + Zertifikat als EINE Einheit (UMGESETZT, 2026-09-30, Admin-/HW-Test offen)
 
-Ziel: Jeder Hybrid-Benutzer, der sich anmeldet und noch keine Karte hat, bekommt eine.
+Ziel: Jeder Hybrid-Benutzer, der sich anmeldet und noch kein gültiges Smartcard-
+Anmeldezertifikat hat, bekommt seine **eigene** Karte `VSC-<Benutzername>` — angelegt erst
+im Moment der Einrichtung, direkt gefolgt von eigener PIN und Zertifikat. Keine vorab
+angelegten Karten, keine Start-PIN aus der Seriennummer.
 
-**Bausteine (App 1 installiert sie, statt selbst eine Karte anzulegen):**
+**Intune: nur EINE Win32-App (Gerät, SYSTEM)**
+- Install: `VscWizard.exe -Install` · Uninstall: `"%ProgramFiles%\VSC-Wizard\VscWizard.exe" -Uninstall`
+- Erkennung: Registry `HKLM\SOFTWARE\VSC-Wizard`, Wert `ServiceVersion` vorhanden.
+- `-Install` (`Install-VscCardService`):
+  1. Kopiert den Wizard nach `%ProgramFiles%\VSC-Wizard` (nur Admins schreibbar — wichtig,
+     weil SYSTEM ihn ausführt).
+  2. `C:\ProgramData\VSC-Wizard\Requests` — Benutzer dürfen nur Dateien **anlegen**
+     (CREATOR OWNER = Vollzugriff auf die eigene Datei, fremde nicht lesbar);
+     `…\State` — nur SYSTEM/Admins.
+  3. Aufgabe **„VSC-Wizard CreateCard“**: SYSTEM, **kein Auslöser**, `-ProcessRequests`,
+     parallele Starts ignoriert; Sicherheitsbeschreibung: Benutzer dürfen **nur lesen und
+     starten** (`D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)`).
+  4. Aufgabe **„VSC-Wizard Setup“**: Gruppe „Benutzer“, Auslöser **bei jeder Anmeldung**
+     (30 s verzögert), `-Simple -AutoStart`, in der Sitzung des Benutzers.
+  5. Startmenü „Smartcard einrichten“ (`-Simple`) als Weg zurück (z.B. nach „Später“).
 
-1. **Wizard fest installieren** nach `%ProgramFiles%\VSC-Wizard` (nur Admins schreibbar —
-   wichtig, weil eine SYSTEM-Aufgabe ihn ausführt).
-2. **SYSTEM-Aufgabe „VSC-Wizard\CreateCard“** (Aufgabenplanung, Konto SYSTEM, kein
-   Auslöser, nur bei Bedarf): `VscWizard.exe -Provision -Silent -ForUser`. Ihre
-   Sicherheitsbeschreibung erlaubt **Benutzern nur das Starten** (Lesen+Ausführen), nicht
-   das Ändern.
-   - Für **welchen** Benutzer? Nicht aus einer vom Benutzer beschreibbaren Datei
-     vertrauen, sondern selbst ermitteln: die interaktiv angemeldeten Sitzungen
-     (WTSEnumerateSessions / Besitzer von explorer.exe) → deren SIDs.
-   - Pro SID höchstens **eine** Karte: HKLM-Marker je Benutzer
-     (`HKLM\SOFTWARE\VSC-Wizard\Users\<SID>\InstanceId`); Karte `VSC-<sAMAccountName>`.
-   - Missbrauchsschutz: nie mehr als eine Karte pro SID, Obergrenze pro Gerät (z.B. 8 von
-     max. 10 VSCs pro TPM), Protokoll in `C:\ProgramData\VSC-Wizard\provision.log`.
-3. **Benutzer-Aufgabe „VSC-Wizard\Setup“** (Gruppe „Benutzer“, interaktiv, Auslöser
-   „bei Anmeldung eines beliebigen Benutzers“, leicht verzögert):
-   `VscWizard.exe -Simple -AutoStart`:
-   - **Beenden ohne Fenster**, wenn: kein Hybrid-Konto (kein On-Prem-TGT / keine
-     onprem-UPN), eigenes Zertifikat schon vorhanden (HKCU-Marker + Karte), oder
-     Benutzer hat „später“ gewählt (Zurückstellen mit Datum, sonst nervt es bei jeder
-     Anmeldung).
-   - Sonst: eigene Karte suchen (`Find-ProvisionedVsc` pro SID); fehlt sie →
-     `Start-ScheduledTask 'VSC-Wizard\CreateCard'`, auf die Karte warten (Timeout, klare
-     Meldung) → dann der bekannte Simple-Ablauf.
-4. **Intune:** nur noch **eine** Device-App (installiert Wizard + beide Aufgaben).
-   Erkennung: Programmordner + Aufgaben vorhanden. App 2 entfällt (die Aufgabe übernimmt).
+**Ablauf beim Benutzer**
+1. Anmeldung → nach 30 s startet „VSC-Wizard Setup“ → `-AutoStart` beendet sich **still**,
+   wenn: gültiges Smartcard-Anmeldezertifikat vorhanden (> 30 Tage gültig), kein On-Prem-
+   Kerberos-Ticket (kein Hybrid-Konto / gerade keine AD-Verbindung), „Später“ aktiv, oder
+   Konfiguration unvollständig. Grund steht im Tageslog des Benutzers.
+2. Sonst: Startseite „Smartcard einrichten“ — „Beim Start wird deine persönliche Smartcard
+   „VSC-<name>“ angelegt“ (oder die vorhandene eigene Karte).
+3. **Klick „Einrichtung starten“ = hier startet der Wizard (mit den Rechten des Benutzers)
+   die SYSTEM-Aufgabe:** `Requests\<id>.req` ablegen (Besitzer = Benutzer) →
+   `Start-ScheduledTask 'VSC-Wizard CreateCard'` → Warten per Timer (Fenster bleibt
+   bedienbar; nach 20 s wird die Aufgabe einmal erneut angestoßen).
+4. SYSTEM (`Invoke-VscCardRequests`): Benutzer = **NTFS-Besitzer** des Auftrags (nicht
+   fälschbar), muss interaktiv angemeldet sein (Besitzer von explorer.exe). Eigene Karte
+   gemerkt (`HKLM\…\Users\<SID>`) und vorhanden → **wiederverwenden**; sonst Grenze
+   prüfen (`MaxVscPerDevice`, Standard 10) + TPM bereit → Karte `VSC-<name>` mit
+   **zufälliger 12-stelliger Start-PIN** anlegen. Start-PIN bis zur gemeldeten Änderung in
+   `State\<SID>.pin` (nur SYSTEM/Admins). Antwort `<id>.res`: nur **dieser Benutzer**
+   (+ SYSTEM/Admins) darf sie lesen/löschen; der Wizard löscht sie sofort nach dem Lesen.
+5. Wizard: PIN-Dialog mit vorbelegter Start-PIN → eigene PIN (Ziffern, min. 6, erzwungen)
+   → meldet „PinChanged“ (SYSTEM verwirft die gemerkte Start-PIN) → Ausstellung
+   (Szenario 02) → HKCU-Marker.
 
-**Aufräumen:** Benutzer verlässt das Gerät → Karte bleibt belegt. Optional SYSTEM-
-Aufgabe „Cleanup“ (z.B. wöchentlich): Karten zu SIDs ohne Profil auf dem Gerät bzw.
-mit abgelaufenem Zertifikat nach Frist entfernen (`tpmvscmgr destroy`) — vorsichtig,
-nur mit Protokoll und klarer Regel.
+**Erwartete Fehler → jeweils mit Ausweg (keine Sackgasse, in Test-Flows abgedeckt)**
 
-**Grenzen / Risiken:**
-- Max. **10 VSCs pro TPM** → echte Grenze für Gemeinschafts-/Schichtgeräte.
-- Die Start-PIN (Seriennummer) wäre für **alle** Karten eines Geräts gleich → pro Karte
-  variieren (z.B. Seriennummer + sAMAccountName ableiten), sonst kann Benutzer A die
-  frisch angelegte Karte von B vor B einrichten.
-- Anmelde-Aufgabe + SYSTEM-Aufgabe sind nur auf echten Geräten mit Intune sinnvoll
-  testbar (mehrere Benutzerkonten, Hybrid + Nicht-Hybrid, Offline-Anmeldung ohne CA).
+| Fehler | Verhalten |
+|---|---|
+| Aufgabe fehlt / nicht startbar | Hinweis „nicht vollständig vorbereitet – IT“, „Einrichtung starten“ bleibt aktiv |
+| Auftragsordner fehlt/gesperrt | dito, mit Fehlertext |
+| Keine Antwort nach 90 s | Frage „Weiter warten?“ – Ja: wartet erneut (Aufgabe neu angestoßen); Nein: Hinweis mit Protokollpfad, erneut versuchbar. Ein später doch verarbeiteter Auftrag schadet nicht (nächster Versuch = „vorhanden“) |
+| TPM voll (`Limit`) | „kein Platz (x von max. y) – IT kann alte Karten entfernen“, erneut versuchbar |
+| TPM nicht bereit | „Gerät neu starten, dann erneut; sonst IT“ |
+| Erstellung fehlgeschlagen | Fehlertext + Protokollpfad, erneut versuchbar |
+| PIN-Änderung abgebrochen | Karte bleibt; nächster Start: gleiche Karte, Start-PIN wieder vorbelegt |
+| PIN geändert, Ausstellung nicht fertig (CA/VPN) | nächster Start: gleiche Karte, **ohne** PIN-Dialog direkt zur Ausstellung |
+| Gemerkte Karte gelöscht | wird automatisch neu angelegt |
+| Zertifikat läuft in < 30 Tagen ab | Autostart öffnet sich wieder → Ausstellung auf derselben Karte (Verlängerung) |
 
-**Aufwand (Schätzung):** einige Tage Entwicklung (Aufgaben anlegen/absichern, Sitzungs-
-ermittlung, per-SID-Marker, `-AutoStart`-Logik mit Zurückstellen, Cleanup) plus Pilot.
-
+**Grenzen / offen**
+- Max. **10 VSCs pro TPM**; Aufräumen verwaister Karten (Benutzer weg) ist **nicht**
+  automatisiert (bewusst: Löschen nur mit klarer Regel) — per „VSCs verwalten“ als Admin.
+- Nur auf echten Geräten testbar: `-Install` (Admin), SYSTEM-Aufgabe legt Karte an,
+  Anmelde-Aufgabe, mehrere Benutzer. Protokoll-/Fehlerlogik ist per Test ohne Admin
+  abgedeckt (Austausch mit Test-Ordner, alle Fehlercodes, Ordner-/Dateirechte).
+- Variante 1 (`-Provision`) bleibt als Alternative erhalten; ohne `-Install` nutzt `-Simple`
+  automatisch die vorbereitete Karte.
 ## Offene Punkte / vor der Umsetzung zu klären
 
 - **PIN-Zeichensatz/-länge** der VSC auf Hardware prüfen: Quell-PIN **alphanumerisch**

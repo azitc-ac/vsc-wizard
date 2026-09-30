@@ -191,6 +191,12 @@ foreach ($st in 'Own', 'Other', 'Started') {
     Test-Layout $form "Simple-Startseite (Karte $st)"
 }
 $script:SimpleCardState = $null
+# Per-Benutzer-Karte: neue Karte (Vorschau-Name) und längster Fehlerhinweis mit Ausweg.
+$script:PerUserMode = $true; $script:SimpleCard = $null; $script:SimpleNewCardName = 'VSC-administrator.langerna'
+Show-SimpleStart; Test-Layout $form 'Simple-Startseite (Per-Benutzer, neue Karte)'
+$script:SimpleNotice = [pscustomobject]@{ Text = ((T 'Die Smartcard konnte nicht angelegt werden ({0}). Versuche es bitte erneut; bleibt der Fehler, hilft deine IT (Protokoll: {1}).') -f 'CreateVirtualSmartCardWithPinPolicy: HRESULT 0x80090030 (NTE_DEVICE_NOT_READY) - TpmVirtualSmartCardManager returned no instance id after 3 attempts', 'C:\ProgramData\VSC-Wizard\provision.log'); Color = $script:UI.Danger; CanRetry = $true }
+Show-SimpleStart; Test-Layout $form 'Simple-Startseite (Per-Benutzer, Fehlerhinweis)'
+$script:SimpleNotice = $null; $script:PerUserMode = $false
 foreach ($case in 'Karte', 'Mehrere', 'Keine') {
     $script:SimpleCard = if ($case -eq 'Karte') { [pscustomobject]@{ FriendlyName = $long; PcscName = $pcsc; InstanceId = 'ROOT\SMARTCARDREADER\0001' } } else { $null }
     $script:SimpleReaderCount = if ($case -eq 'Mehrere') { 3 } else { 0 }

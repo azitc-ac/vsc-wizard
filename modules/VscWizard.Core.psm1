@@ -2503,6 +2503,368 @@ function Find-ProvisionedVsc {
     return $null
 }
 
+# ----------------------------------------------------------------------------------
+# PER-BENUTZER-KARTEN (Variante 2, docs/intune-rollout.md): Karte anlegen + Zertifikat
+# als EINE Einheit. Anlegen braucht Adminrechte -> SYSTEM-Aufgabe "VSC-Wizard CreateCard"
+# (Benutzer dürfen sie nur STARTEN). Übergabe über einen Auftragsordner: der Benutzer
+# legt <id>.req ab (NTFS-Besitzer = er, nicht fälschbar), SYSTEM antwortet mit <id>.res
+# (nur für diesen Benutzer lesbar). Start-PIN zufällig; bis zur gemeldeten PIN-Änderung
+# pro Benutzer nur für SYSTEM lesbar gemerkt (abgebrochene Einrichtung -> weiter statt
+# Sackgasse).
+# ----------------------------------------------------------------------------------
+
+function Get-VscServicePaths {
+    $data = Join-Path $env:ProgramData 'VSC-Wizard'
+    return [pscustomobject]@{
+        ProgramDir = Join-Path $env:ProgramFiles 'VSC-Wizard'
+        DataDir    = $data
+        RequestDir = Join-Path $data 'Requests'
+        StateDir   = Join-Path $data 'State'
+        LogFile    = Join-Path $data 'provision.log'
+        RegRoot    = 'HKLM:\SOFTWARE\VSC-Wizard'
+        CreateTask = 'VSC-Wizard CreateCard'
+        LogonTask  = 'VSC-Wizard Setup'
+        Shortcut   = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Smartcard einrichten.lnk'
+    }
+}
+
+function Write-VscServiceLog {
+    # Protokoll der SYSTEM-Seite (Intune-Diagnose) + Tageslog des Wizards.
+    param([string]$Message, [string]$LogFile = (Get-VscServicePaths).LogFile)
+    try { Add-Content -Path $LogFile -Value ("{0}  {1}" -f (Get-Date -Format 'o'), $Message) -Encoding UTF8 -ErrorAction Stop } catch { }
+    try { Write-WizardLog -Message $Message -Level Info } catch { }
+}
+
+function New-VscRandomPin {
+    # Zufällige Start-PIN (nur Ziffern: von jeder Karten-Richtlinie akzeptiert). Niemand
+    # muss sie kennen - der Wizard belegt sie vor und erzwingt sofort die eigene PIN.
+    param([int]$Length = 12)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = New-Object byte[] $Length
+    $rng.GetBytes($bytes); $rng.Dispose()
+    return (-join ($bytes | ForEach-Object { [string]($_ % 10) }))
+}
+
+function Get-VscUserCardName {
+    # "VSC-<Benutzername>" aus der SID (CONTOSO\alex -> VSC-alex, AzureAD\Max -> VSC-Max).
+    # Namenskollision mit einer fremden Karte -> Suffix -2, -3, ...
+    param([Parameter(Mandatory)][string]$Sid, $Config, [string[]]$ExistingNames = @())
+    $prefix = if ($Config -and $Config.VscNamePrefix) { $Config.VscNamePrefix } else { 'VSC-' }
+    $account = $Sid
+    try { $account = (New-Object System.Security.Principal.SecurityIdentifier($Sid)).Translate([System.Security.Principal.NTAccount]).Value } catch { }
+    $user = (($account -split '\\')[-1] -replace '@.*$', '') -replace '[^A-Za-z0-9._-]', ''
+    if (-not $user) { $user = 'User' }
+    if ($user.Length -gt 20) { $user = $user.Substring(0, 20) }
+    $name = "$prefix$user"; $i = 2
+    while ($ExistingNames -contains $name) { $name = "$prefix$user-$i"; $i++ }
+    return $name
+}
+
+function Get-VscUserCardRecord {
+    # Zuordnung Benutzer-SID -> Karte (von SYSTEM geschrieben, für alle lesbar - kein Geheimnis).
+    param([Parameter(Mandatory)][string]$Sid, [string]$RegRoot = (Get-VscServicePaths).RegRoot)
+    $key = Join-Path $RegRoot "Users\$Sid"
+    if (-not (Test-Path $key)) { return $null }
+    $p = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+    if (-not $p -or -not $p.InstanceId) { return $null }
+    return [pscustomobject]@{ InstanceId = $p.InstanceId; CardName = $p.CardName; PcscName = $p.PcscName; CreatedAt = $p.CreatedAt }
+}
+
+function Test-VscCardServiceInstalled {
+    # Ist die Per-Benutzer-Einrichtung auf diesem Gerät vorbereitet (App 1 / -Install)?
+    param([string]$TaskName = (Get-VscServicePaths).CreateTask)
+    return [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction Ignore)   # Ignore: kein Eintrag in $Error
+}
+
+function Submit-VscCardRequest {
+    # Auftrag an die SYSTEM-Aufgabe ablegen (als Benutzer). Liefert die Auftrags-ID.
+    param([ValidateSet('Create', 'PinChanged')][string]$Type = 'Create', [string]$RequestDir = (Get-VscServicePaths).RequestDir)
+    $id = [guid]::NewGuid().ToString('N')
+    Set-Content -Path (Join-Path $RequestDir "$id.req") -Value "Type=$Type" -Encoding ASCII -ErrorAction Stop
+    return $id
+}
+
+function Start-VscCardService {
+    # SYSTEM-Aufgabe anstoßen. Ergebnis: $null = ok, sonst Fehlertext.
+    param([string]$TaskName = (Get-VscServicePaths).CreateTask)
+    try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop; return $null } catch { return $_.Exception.Message }
+}
+
+function Read-VscCardResult {
+    # Antwort der SYSTEM-Aufgabe lesen und SOFORT löschen (enthält ggf. die Start-PIN).
+    # $null = noch keine Antwort.
+    param([Parameter(Mandatory)][string]$Id, [string]$RequestDir = (Get-VscServicePaths).RequestDir)
+    $path = Join-Path $RequestDir "$Id.res"
+    if (-not (Test-Path $path)) { return $null }
+    $r = @{}
+    try {
+        foreach ($line in [IO.File]::ReadAllLines($path)) { $i = $line.IndexOf('='); if ($i -gt 0) { $r[$line.Substring(0, $i)] = $line.Substring($i + 1) } }
+    } catch { return $null }   # SYSTEM schreibt evtl. noch - nächster Versuch
+    try { [IO.File]::Delete($path) } catch { }
+    return $r
+}
+
+function Write-VscCardResult {
+    # Antwortdatei schreiben: danach NUR SYSTEM, Administratoren und der Auftraggeber
+    # (Lesen + Löschen) - die Start-PIN sieht kein anderer Benutzer.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$UserSid, [hashtable]$Values, [switch]$SkipAcl)
+    $lines = foreach ($k in $Values.Keys) { "$k=$($Values[$k])" }
+    [IO.File]::WriteAllLines($Path, [string[]]$lines)
+    if ($SkipAcl) { return }
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($s in 'S-1-5-18', 'S-1-5-32-544') {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($s)), 'FullControl', 'Allow')))
+    }
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($UserSid)), 'Read, Delete', 'Allow')))
+    Set-Acl -Path $Path -AclObject $acl
+}
+
+function Get-VscLoggedOnSids {
+    # Interaktiv angemeldete Benutzer = Besitzer von explorer.exe.
+    $sids = @()
+    try {
+        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop)) {
+            try { $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ($o.Sid) { $sids += $o.Sid } } catch { }
+        }
+    } catch { }
+    return @($sids | Select-Object -Unique)
+}
+
+function Invoke-VscCardRequests {
+    # SYSTEM-Seite: alle offenen Aufträge abarbeiten (Aufgabe "VSC-Wizard CreateCard",
+    # VscWizard.exe -ProcessRequests). Abhängigkeiten als Parameter -> ohne Admin/TPM
+    # testbar (tests\Test-Flows.ps1 simuliert so den kompletten Austausch).
+    # Status in der Antwort: Created | Existing | Ok | Error (+ Code, Message).
+    param(
+        $Paths = (Get-VscServicePaths),
+        $Config,
+        [scriptblock]$CreateCard = { param($Name, $MinLen, $Pin) New-VirtualSmartCard -CardName $Name -PinPolicyMinLength $MinLen -Pin $Pin },
+        [scriptblock]$GetLoggedOnSids = { Get-VscLoggedOnSids },
+        [scriptblock]$GetReaders = { @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName }) },
+        [scriptblock]$TestTpm = { [bool](Test-TpmReadiness).Ready },
+        [int]$MaxCards = 10,
+        [switch]$SkipAcl
+    )
+    $log = { param($m) Write-VscServiceLog -Message $m -LogFile $Paths.LogFile }
+    $minLen = 6
+    if ($Config -and $Config.PinMinLength) { $minLen = [int]$Config.PinMinLength }
+    if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
+    $handled = 0
+    for ($round = 0; $round -lt 5; $round++) {   # neue Aufträge während der Arbeit: erneut schauen
+        $reqs = @(Get-ChildItem -Path $Paths.RequestDir -Filter '*.req' -File -ErrorAction SilentlyContinue | Sort-Object CreationTime)
+        if ($reqs.Count -eq 0) { break }
+        foreach ($f in $reqs) {
+            $id = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+            $resPath = Join-Path $Paths.RequestDir "$id.res"
+            $sid = $null
+            try { $sid = (Get-Acl -Path $f.FullName).GetOwner([System.Security.Principal.SecurityIdentifier]).Value } catch { }
+            $type = 'Create'
+            try { $c = [IO.File]::ReadAllText($f.FullName); if ($c -match 'Type=(\w+)') { $type = $Matches[1] } } catch { }
+            try { [IO.File]::Delete($f.FullName) } catch { }
+            $handled++
+            if (-not $sid -or $sid -in @('S-1-5-18', 'S-1-5-32-544')) {
+                & $log "Auftrag $id verworfen: Besitzer '$sid' ist kein Benutzerkonto."
+                continue   # keine Antwort möglich (für wen?) - der Wizard läuft in seinen Timeout
+            }
+            if ($f.CreationTime -lt (Get-Date).AddMinutes(-15)) { & $log "Auftrag $id von $sid veraltet - verworfen."; continue }
+            $pinFile = Join-Path $Paths.StateDir "$sid.pin"
+            $answer = @{}
+            try {
+                if ($type -eq 'PinChanged') {
+                    if (Test-Path $pinFile) { [IO.File]::Delete($pinFile) }
+                    & $log "PIN-Änderung von $sid gemeldet - Start-PIN verworfen."
+                    $answer = @{ Status = 'Ok' }
+                } else {
+                    $loggedOn = @(& $GetLoggedOnSids)
+                    if ($loggedOn.Count -gt 0 -and $loggedOn -notcontains $sid) {
+                        $answer = @{ Status = 'Error'; Code = 'NotLoggedOn'; Message = "Benutzer $sid ist nicht interaktiv angemeldet." }
+                    } else {
+                        $readers = @(& $GetReaders)
+                        $rec = Get-VscUserCardRecord -Sid $sid -RegRoot $Paths.RegRoot
+                        $card = if ($rec) { $readers | Where-Object { "$($_.InstanceId)" -eq "$($rec.InstanceId)" } | Select-Object -First 1 } else { $null }
+                        if ($card) {
+                            $pending = if (Test-Path $pinFile) { ([IO.File]::ReadAllText($pinFile)).Trim() } else { '' }
+                            $answer = @{ Status = 'Existing'; CardName = $card.FriendlyName; PcscName = $card.PcscName; InstanceId = $card.InstanceId; StartPin = $pending }
+                            & $log "Karte für $sid vorhanden ('$($card.FriendlyName)'), Start-PIN $(if ($pending) { 'noch offen' } else { 'bereits geändert' })."
+                        } else {
+                            if ($rec) { & $log "Gemerkte Karte für $sid ($($rec.InstanceId)) existiert nicht mehr - lege neu an." }
+                            $vscCount = @($readers | Where-Object { "$($_.InstanceId)" -like 'ROOT\SMARTCARDREADER\*' }).Count
+                            if ($vscCount -ge $MaxCards) {
+                                $answer = @{ Status = 'Error'; Code = 'Limit'; Count = $vscCount; Max = $MaxCards; Message = "Auf diesem Gerät sind bereits $vscCount von maximal $MaxCards virtuellen Smartcards angelegt." }
+                            } elseif (-not (& $TestTpm)) {
+                                $answer = @{ Status = 'Error'; Code = 'TpmNotReady'; Message = 'Das TPM dieses Geräts ist nicht bereit.' }
+                            } else {
+                                $name = Get-VscUserCardName -Sid $sid -Config $Config -ExistingNames @($readers | ForEach-Object { $_.FriendlyName })
+                                $pin = New-VscRandomPin -Length ([Math]::Max(12, $minLen))
+                                & $log "Lege Karte '$name' für $sid an."
+                                $res = & $CreateCard $name $minLen $pin
+                                if ($res -and $res.Success) {
+                                    $key = Join-Path $Paths.RegRoot "Users\$sid"
+                                    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+                                    foreach ($kv in @(@('InstanceId', "$($res.InstanceId)"), @('CardName', $name), @('PcscName', "$($res.PcscName)"), @('CreatedAt', (Get-Date -Format 'o')))) {
+                                        New-ItemProperty -Path $key -Name $kv[0] -Value $kv[1] -PropertyType String -Force | Out-Null
+                                    }
+                                    [IO.File]::WriteAllText($pinFile, $pin)
+                                    $answer = @{ Status = 'Created'; CardName = $name; PcscName = "$($res.PcscName)"; InstanceId = "$($res.InstanceId)"; StartPin = $pin }
+                                    & $log "Karte '$name' für $sid angelegt ($($res.InstanceId), $($res.PcscName))."
+                                } else {
+                                    $answer = @{ Status = 'Error'; Code = 'CreateFailed'; Message = "$(if ($res) { $res.Message } else { 'kein Ergebnis' })" }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch {
+                $answer = @{ Status = 'Error'; Code = 'Exception'; Message = $_.Exception.Message }
+            }
+            if ($answer.Status -eq 'Error') { & $log "Auftrag $id ($sid): FEHLER $($answer.Code) - $($answer.Message)" }
+            try { Write-VscCardResult -Path $resPath -UserSid $sid -Values $answer -SkipAcl:$SkipAcl } catch { & $log "Antwort $id nicht schreibbar: $($_.Exception.Message)" }
+        }
+    }
+    # Liegengebliebene Antworten (Wizard vorzeitig geschlossen) nach 1 h entfernen.
+    Get-ChildItem -Path $Paths.RequestDir -Filter '*.res' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) } | ForEach-Object { try { [IO.File]::Delete($_.FullName) } catch { } }
+    return $handled
+}
+
+function Set-VscDirAcl {
+    # Verzeichnisrechte: -Kind Requests = Benutzer dürfen nur Dateien ANLEGEN (fremde nicht
+    # lesen), eigene Dateien gehören ihnen (CREATOR OWNER); -Kind Private = nur SYSTEM/Admins.
+    param([Parameter(Mandatory)][string]$Path, [ValidateSet('Requests', 'Private')][string]$Kind)
+    if (-not (Test-Path $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null }
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $inh = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    foreach ($s in 'S-1-5-18', 'S-1-5-32-544') {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($s)), 'FullControl', $inh, 'None', 'Allow')))
+    }
+    if ($Kind -eq 'Requests') {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')), 'CreateFiles, ReadAttributes, Synchronize', 'None', 'None', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier('S-1-3-0')), 'FullControl', 'ObjectInherit', 'InheritOnly', 'Allow')))
+    }
+    Set-Acl -Path $Path -AclObject $acl
+}
+
+function Install-VscCardService {
+    # App 1 (Intune, SYSTEM): Wizard nach %ProgramFiles% kopieren, Auftragsordner mit
+    # Rechten, SYSTEM-Aufgabe "CreateCard" (nur startbar für Benutzer), Anmelde-Aufgabe
+    # "Setup" (startet -Simple -AutoStart), Startmenü-Eintrag, HKLM-Marker.
+    # Rückgabe: 0 ok, 3 nicht eleviert, 1 Fehler.
+    param([Parameter(Mandatory)][string]$SourceDir, $Paths = (Get-VscServicePaths), [int]$LogonDelaySeconds = 30)
+    $log = { param($m) Write-VscServiceLog -Message $m -LogFile $Paths.LogFile }
+    if (-not (Test-Path $Paths.DataDir)) { New-Item -ItemType Directory -Path $Paths.DataDir -Force | Out-Null }
+    if (-not (Test-IsElevated)) { & $log 'Install: nicht eleviert - muss als Admin/SYSTEM laufen.'; return 3 }
+    try {
+        & $log "Install: kopiere '$SourceDir' nach '$($Paths.ProgramDir)'."
+        if ((Resolve-Path $SourceDir).Path.TrimEnd('\') -ne $Paths.ProgramDir.TrimEnd('\')) {
+            if (-not (Test-Path $Paths.ProgramDir)) { New-Item -ItemType Directory -Path $Paths.ProgramDir -Force | Out-Null }
+            Copy-Item -Path (Join-Path $SourceDir '*') -Destination $Paths.ProgramDir -Recurse -Force -ErrorAction Stop
+        }
+        Set-VscDirAcl -Path $Paths.RequestDir -Kind Requests
+        Set-VscDirAcl -Path $Paths.StateDir -Kind Private
+
+        $exe = Join-Path $Paths.ProgramDir 'VscWizard.exe'
+        $mk = if (Test-Path $exe) { { param($a) New-ScheduledTaskAction -Execute $exe -Argument $a } }
+              else { $ps1 = Join-Path $Paths.ProgramDir 'VscWizard.ps1'; { param($a) New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ps1`" $a" } }
+
+        # SYSTEM-Aufgabe: kein Auslöser, nur auf Anforderung; parallele Starts ignorieren
+        # (die laufende Instanz arbeitet auch neu eingetroffene Aufträge ab).
+        $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+        Register-ScheduledTask -TaskName $Paths.CreateTask -Action (& $mk '-ProcessRequests') -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) -Settings $set -Force | Out-Null
+        # Benutzer dürfen sie lesen + starten, nicht ändern.
+        $svc = New-Object -ComObject 'Schedule.Service'; $svc.Connect()
+        $svc.GetFolder('\').GetTask($Paths.CreateTask).SetSecurityDescriptor('D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)', 0)
+
+        # Anmelde-Aufgabe: für JEDEN Benutzer bei der Anmeldung (leicht verzögert), in
+        # dessen Sitzung; -AutoStart beendet sich still, wenn nichts zu tun ist.
+        $trg = New-ScheduledTaskTrigger -AtLogOn; $trg.Delay = "PT$($LogonDelaySeconds)S"
+        $set2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)
+        Register-ScheduledTask -TaskName $Paths.LogonTask -Action (& $mk '-Simple -AutoStart') -Trigger $trg -Principal (New-ScheduledTaskPrincipal -GroupId ((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')).Translate([System.Security.Principal.NTAccount]).Value) -RunLevel Limited) -Settings $set2 -Force | Out-Null
+
+        # Startmenü: "Smartcard einrichten" (Weg zurück, z.B. nach "Später").
+        try {
+            $sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut($Paths.Shortcut)
+            if (Test-Path $exe) { $lnk.TargetPath = $exe; $lnk.Arguments = '-Simple' }
+            else { $lnk.TargetPath = 'powershell.exe'; $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $Paths.ProgramDir 'VscWizard.ps1')`" -Simple" }
+            $lnk.WorkingDirectory = $Paths.ProgramDir; $lnk.Save()
+        } catch { & $log "Install: Startmenü-Eintrag nicht angelegt: $($_.Exception.Message)" }
+
+        if (-not (Test-Path $Paths.RegRoot)) { New-Item -Path $Paths.RegRoot -Force | Out-Null }
+        $ver = try { (Get-Content (Join-Path $Paths.ProgramDir 'version.txt') -ErrorAction Stop | Select-Object -First 1) } catch { 'unbekannt' }
+        New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion' -Value "$ver" -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceInstalledAt' -Value (Get-Date -Format 'o') -PropertyType String -Force | Out-Null
+        & $log "Install: fertig (Version $ver)."
+        return 0
+    } catch {
+        & $log "Install: FEHLER $($_.Exception.Message)"
+        return 1
+    }
+}
+
+function Uninstall-VscCardService {
+    # Aufgaben, Startmenü-Eintrag, Programmordner und Service-Marker entfernen. Karten und
+    # Benutzer-Zuordnungen bleiben (Benutzerdaten) - Löschen von Karten nur bewusst.
+    param($Paths = (Get-VscServicePaths))
+    $log = { param($m) Write-VscServiceLog -Message $m -LogFile $Paths.LogFile }
+    if (-not (Test-IsElevated)) { & $log 'Uninstall: nicht eleviert.'; return 3 }
+    foreach ($t in $Paths.CreateTask, $Paths.LogonTask) { try { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction Stop } catch { } }
+    try { if (Test-Path $Paths.Shortcut) { [IO.File]::Delete($Paths.Shortcut) } } catch { }
+    try { Remove-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion', 'ServiceInstalledAt' -ErrorAction SilentlyContinue } catch { }
+    try { if (Test-Path $Paths.ProgramDir) { [IO.Directory]::Delete($Paths.ProgramDir, $true) } } catch { & $log "Uninstall: Programmordner nicht vollständig entfernt: $($_.Exception.Message)" }
+    & $log 'Uninstall: fertig (Karten und Zuordnungen bleiben erhalten).'
+    return 0
+}
+
+function Get-VscSnoozeUntil {
+    $v = (Get-ItemProperty -Path 'HKCU:\SOFTWARE\VSC-Wizard' -ErrorAction Ignore).SnoozeUntil
+    if ($v) { try { return [datetime]::Parse($v, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
+    return $null
+}
+
+function Set-VscSnooze {
+    # "Später": Anmelde-Autostart für diesen Benutzer zurückstellen.
+    param([int]$Hours = 24)
+    $key = 'HKCU:\SOFTWARE\VSC-Wizard'
+    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+    New-ItemProperty -Path $key -Name 'SnoozeUntil' -Value ((Get-Date).AddHours($Hours).ToString('o', [Globalization.CultureInfo]::InvariantCulture)) -PropertyType String -Force | Out-Null
+}
+
+function Test-VscAutoStartNeeded {
+    # -AutoStart (Anmelde-Aufgabe): nur öffnen, wenn es etwas zu tun gibt. Rückgabe
+    # [pscustomobject]@{ Needed; Reason }.
+    param($Config)
+    if (-not $Config -or [string]::IsNullOrWhiteSpace($Config.CAConfig) -or [string]::IsNullOrWhiteSpace($Config.Template)) { return [pscustomobject]@{ Needed = $false; Reason = 'Konfiguration unvollständig (CAConfig/Template)' } }
+    $snooze = Get-VscSnoozeUntil
+    if ($snooze -and $snooze -gt (Get-Date)) { return [pscustomobject]@{ Needed = $false; Reason = "zurückgestellt bis $($snooze.ToString('yyyy-MM-dd HH:mm'))" } }
+    # Eingerichtet = gültiges Smartcard-Anmeldezertifikat, dessen Schlüssel auf einer
+    # SMARTCARD liegt und das auf das EIGENE Konto lautet (egal ob per Variante 1, 2 oder
+    # normalem Wizard). NICHT mitzählen: Windows-Hello-Zertifikate (Passport-KSP, gleicher
+    # Verwendungszweck) und Karten, die man für ANDERE Konten ausgestellt hat (liegen auch
+    # im eigenen Speicher). Läuft es in < 30 Tagen ab, öffnet sich der Assistent wieder
+    # -> Verlängerung auf derselben Karte.
+    $cands = @(Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue | Where-Object {
+        $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date).AddDays(30) -and ($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId -eq '1.3.6.1.4.1.311.20.2.2' })
+    })
+    if ($cands.Count -gt 0) {
+        $myUpn = Get-CurrentUpn
+        $info = Get-SmartCardCngProviderInfoBatch -Thumbprint @($cands | ForEach-Object { $_.Thumbprint })
+        foreach ($c in ($cands | Sort-Object NotAfter -Descending)) {
+            $i = $info[$c.Thumbprint]
+            if (-not ($i -and "$($i.Provider)" -match 'Smart Card')) { continue }
+            $upn = $null
+            $san = $c.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } | Select-Object -First 1
+            if ($san -and $san.Format($true) -match '([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})') { $upn = $Matches[1] }
+            if ($myUpn -and $upn -and $upn -ne $myUpn) { continue }
+            return [pscustomobject]@{ Needed = $false; Reason = "bereits eingerichtet ($(if ($upn) { $upn } else { $c.Subject }), gültig bis $($c.NotAfter.ToString('yyyy-MM-dd')))" }
+        }
+    }
+    $tgt = $false
+    try { $tgt = ((& klist 2>$null) -join "`n") -match 'krbtgt/' } catch { }
+    if (-not $tgt) { return [pscustomobject]@{ Needed = $false; Reason = 'kein On-Prem-Kerberos-Ticket (kein Hybrid-Konto oder gerade keine Verbindung zum AD)' } }
+    return [pscustomobject]@{ Needed = $true; Reason = '' }
+}
+
 function Set-VscEnrollMarker {
     # HKCU-Marker fuer die Intune-Erkennung von App 2 (Benutzerkontext).
     try {

@@ -401,6 +401,23 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   (SYSTEM-Aufgabe „CreateCard“ nur startbar, Benutzer-Aufgabe bei Anmeldung, per-SID-
   Marker, Cleanup, Grenze 10 VSCs/TPM, Start-PIN pro Karte variieren).
 
+## Zuletzt erledigt (2026-09-30): Intune Variante 2 - eigene Karte pro Benutzer (Admin-/HW-Test offen)
+- Eine Intune-App: `VscWizard.exe -Install` (SYSTEM) -> %ProgramFiles%\VSC-Wizard,
+  Auftragsordner mit Rechten, Aufgabe "VSC-Wizard CreateCard" (SYSTEM, ohne Auslöser,
+  Benutzer dürfen nur starten), Aufgabe "VSC-Wizard Setup" (bei jeder Anmeldung,
+  `-Simple -AutoStart`), Startmenü "Smartcard einrichten", HKLM ServiceVersion.
+- "Einrichtung starten" = Auftrag ablegen + Aufgabe starten -> SYSTEM legt
+  `VSC-<Benutzer>` mit zufälliger Start-PIN an (Benutzer = NTFS-Besitzer des Auftrags),
+  Antwort nur für ihn lesbar -> erzwungene eigene PIN -> "PinChanged" -> Ausstellung.
+- Jeder erwartete Fehler mit Ausweg (Tabelle in docs/intune-rollout.md), alle in
+  Test-Flows abgedeckt inkl. Gegenprobe; Protokoll ohne Admin mit Test-Ordner geprüft
+  (9 Fälle), Ordner-/Dateirechte als Benutzer geprüft.
+- `-AutoStart` zählt nur ein Smartcard-Zertifikat auf die EIGENE UPN (nicht WHfB,
+  nicht für andere ausgestellte Karten); < 30 Tage Restlaufzeit -> öffnet zur
+  Verlängerung. "Später erinnern" = 24 h.
+- **Offen (braucht Admin/Intune):** `-Install` auf dem Test-PC, Karte per SYSTEM-
+  Aufgabe, Anmelde-Aufgabe mit mehreren Benutzern.
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird

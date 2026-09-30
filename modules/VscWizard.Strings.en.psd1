@@ -401,7 +401,6 @@
     'Deine Smartcard: {0}  (in Windows-Dialogen: {1})' = 'Your smart card: {0}  (in Windows dialogs: {1})'
     'Der folgende Assistent führt dich durch die Einrichtung deiner virtuellen Smartcard.' = 'This assistant guides you through setting up your virtual smart card.'
     'Die aktuelle PIN ist schon eingetragen (Start-PIN der Einrichtung). Vergib jetzt eine eigene, nur dir bekannte PIN.' = 'The current PIN is already filled in (initial PIN from the setup). Now choose your own PIN that only you know.'
-    'Die Einrichtung geht erst weiter, wenn du eine eigene PIN vergeben hast. Klicke dazu erneut auf "Einrichtung starten".' = 'Setup only continues once you have chosen your own PIN. Click "Start setup" again to do so.'
     'Eigene PIN' = 'Own PIN'
     'Einrichtung starten' = 'Start setup'
     'Smartcard einrichten' = 'Set up smart card'
@@ -411,4 +410,15 @@
     'Deine Smartcard ist bereits eingerichtet (Zertifikat für {0}, gültig bis {1}). Es ist nichts weiter zu tun.' = 'Your smart card is already set up (certificate for {0}, valid until {1}). There is nothing else to do.'
     'Die Smartcard dieses Geräts ({0}) ist bereits für {1} eingerichtet. Für ein weiteres Benutzerkonto wende dich bitte an deine IT.' = 'The smart card of this device ({0}) is already set up for {1}. For another user account, please contact your IT department.'
     'Prüfe, ob die Smartcard schon eingerichtet ist...' = 'Checking whether the smart card is already set up...'
+    'Auf diesem Gerät ist kein Platz für eine weitere Smartcard ({0} von maximal {1}). Bitte wende dich an deine IT - nicht mehr benötigte Karten lassen sich dort entfernen.' = 'There is no room for another smart card on this device ({0} of at most {1}). Please contact your IT department - smart cards that are no longer needed can be removed there.'
+    'Beim Start wird deine persönliche Smartcard "{0}" angelegt (dauert meist 5-15 Sekunden).' = 'When you start, your personal smart card "{0}" is created (usually takes 5-15 seconds).'
+    "Das Anlegen der Smartcard dauert ungewöhnlich lange.`r`n`r`nWeiter warten?" = "Creating the smart card is taking unusually long.`r`n`r`nKeep waiting?"
+    'Deine Smartcard wird angelegt... (dauert meist 5-15 Sekunden)' = 'Creating your smart card... (usually takes 5-15 seconds)'
+    'Der Sicherheitschip (TPM) dieses Geräts ist gerade nicht bereit. Starte das Gerät neu und versuche es dann erneut; hilft das nicht, wende dich an deine IT.' = 'The security chip (TPM) of this device is not ready right now. Restart the device and try again; if that does not help, contact your IT department.'
+    'Die Einrichtung geht erst weiter, wenn du eine eigene PIN vergeben hast. Klicke dazu erneut auf "Einrichtung starten" - deine Karte bleibt erhalten.' = 'Setup only continues once you have chosen your own PIN. Click "Start setup" again - your card is kept.'
+    'Die Einrichtung ist auf diesem Gerät nicht vollständig vorbereitet (Aufgabe "{0}" nicht startbar). Bitte wende dich an deine IT.' = 'Setup is not fully prepared on this device (task "{0}" cannot be started). Please contact your IT department.'
+    'Die Einrichtung ist auf diesem Gerät nicht vollständig vorbereitet (Auftragsordner fehlt oder ist gesperrt: {0}). Bitte wende dich an deine IT.' = 'Setup is not fully prepared on this device (request folder missing or locked: {0}). Please contact your IT department.'
+    'Die Smartcard konnte nicht angelegt werden ({0}). Versuche es bitte erneut; bleibt der Fehler, hilft deine IT (Protokoll: {1}).' = 'The smart card could not be created ({0}). Please try again; if the error persists, your IT department can help (log: {1}).'
+    'Die Smartcard wurde (noch) nicht angelegt. Versuche es gleich erneut; bleibt es dabei, hilft deine IT (Protokoll: {0}).' = 'The smart card has not been created (yet). Try again in a moment; if it stays that way, your IT department can help (log: {0}).'
+    'Später erinnern' = 'Remind me later'
 }
