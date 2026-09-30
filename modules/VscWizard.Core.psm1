@@ -2337,6 +2337,40 @@ function Set-VscProvisionMarker {
     }
 }
 
+function Get-VscProvisionCardName {
+    # Name der per -Provision angelegten Karte - EINE Quelle für Provisionierung und
+    # Simple-Modus (der die Karte daran wiedererkennt).
+    param($Config)
+    $prefix = if ($Config -and $Config.VscNamePrefix) { $Config.VscNamePrefix } else { 'VSC-' }
+    return "$prefix$env:COMPUTERNAME"
+}
+
+function Find-ProvisionedVsc {
+    # Die per -Provision (Intune-App 1) angelegte Karte unter den vorhandenen finden, damit
+    # der Simple-Modus sie OHNE Auswahldialog nimmt - auch wenn weitere VSCs existieren.
+    # Reihenfolge: (1) InstanceId aus dem HKLM-Marker, (2) Provisionierungs-Name,
+    # (3) genau eine VSC vorhanden. Sonst $null (-> Auswahl durch den Benutzer).
+    # Ergebnis: @{ Reader; Reason } oder $null.
+    param([object[]]$Readers, [string]$ExpectedName)
+    $cards = @($Readers | Where-Object { $_.PcscName })
+    if ($cards.Count -eq 0) { return $null }
+    $markerId = $null
+    $markerKey = 'HKLM:\SOFTWARE\VSC-Wizard'
+    if (Test-Path $markerKey) {
+        $markerId = (Get-ItemProperty -Path $markerKey -ErrorAction SilentlyContinue).InstanceId
+    }
+    if ($markerId) {
+        $hit = @($cards | Where-Object { "$($_.InstanceId)" -eq "$markerId" }) | Select-Object -First 1
+        if ($hit) { return [pscustomobject]@{ Reader = $hit; Reason = "InstanceId aus dem Provisionierungs-Marker ($markerId)" } }
+    }
+    if ($ExpectedName) {
+        $byName = @($cards | Where-Object { $_.FriendlyName -eq $ExpectedName })
+        if ($byName.Count -eq 1) { return [pscustomobject]@{ Reader = $byName[0]; Reason = "Name '$ExpectedName'" } }
+    }
+    if ($cards.Count -eq 1) { return [pscustomobject]@{ Reader = $cards[0]; Reason = 'einzige VSC auf dem Gerät' } }
+    return $null
+}
+
 function Set-VscEnrollMarker {
     # HKCU-Marker fuer die Intune-Erkennung von App 2 (Benutzerkontext).
     try {

@@ -360,6 +360,21 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 - **Ungetestet (HW/Intune):** supplied-PIN auf ARM64/x64, PIN-Zeichensatz der VSC,
   Szenario 02 auf EJ-Client, `.intunewin`-Paketierung. Siehe Backlog #0 / `docs/intune-rollout.md`.
 
+## Zuletzt erledigt (2026-09-30): Simple-Modus schlank + automatische Kartenwahl
+- `-Simple` zeigt eine eigene Startseite (`Show-SimpleStart`, `$pnlSimple`) statt der
+  Szenario-Übersicht: 2 Schritte erklärt, erkannte Karte, „Einrichtung starten“.
+  Seitenleiste: Start / Eigene PIN / Zertifikat / Fertig; Einstellungen + Geräte-
+  Details ausgeblendet; „Zurück“ führt nie zur Szenario-Auswahl; Sprachwechsel
+  behält `-Simple`. Umgebungserkennung der Szenario-Seite entfällt beim Start.
+- `Find-ProvisionedVsc` (Core): per `-Provision` angelegte Karte über (1) InstanceId
+  aus dem HKLM-Marker, (2) Namen `Get-VscProvisionCardName` (= Provisionierung),
+  (3) einzige VSC. Sonst Auswahl durch den Benutzer.
+- Texte im Simple-Modus duzen jetzt (wie der Rest des Wizards).
+- Fehler beim Bau gefunden: Panel-Variable `$simpleCard` == `$script:SimpleCard`
+  (PowerShell ignoriert Groß/Klein) -> umbenannt; Test-Flows prüft die echte Erkennung
+  ohne Vorbelegung (Gegenprobe ok).
+- **Offen:** auf dem Test-PC mit per -Provision angelegter Karte bestätigen.
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird

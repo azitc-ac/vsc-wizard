@@ -189,8 +189,7 @@ function Invoke-VscProvision {
     $plog = { param($m) try { Add-Content -Path $logFile -Value ("{0}  {1}" -f (Get-Date -Format 'o'), $m) -Encoding UTF8 } catch { } }
     try { Initialize-WizardLog -LogBox $null } catch { }   # Kernmodul-Logs in die Tagesdatei
 
-    $prefix = if ($config.VscNamePrefix) { $config.VscNamePrefix } else { 'VSC-' }
-    $name = if ($CardName) { $CardName } else { "$prefix$env:COMPUTERNAME" }
+    $name = if ($CardName) { $CardName } else { Get-VscProvisionCardName -Config $config }
     $minLen = 6
     if ($config.PinMinLength) { $minLen = [int]$config.PinMinLength }
     if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
@@ -875,11 +874,13 @@ function Switch-WizardLanguage {
     # Neu starten: als PS2EXE-Exe dieselbe Exe, sonst das Skript über powershell.exe.
     $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $env:VSCWIZARD_UILANG = $null
+    # Simple-Modus beibehalten (sonst landete der Benutzer nach dem Wechsel im vollen Wizard).
+    $modeArgs = @(); if ($script:SimpleMode) { $modeArgs = @('-Simple') }
     if ($exe -notmatch '\\(powershell|pwsh)\.exe$') {
-        Start-Process -FilePath $exe
+        if ($modeArgs) { Start-Process -FilePath $exe -ArgumentList $modeArgs } else { Start-Process -FilePath $exe }
     } else {
         $scriptPath = Join-Path $script:BaseDir 'VscWizard.ps1'
-        Start-Process -FilePath $exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$scriptPath`"")
+        Start-Process -FilePath $exe -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$scriptPath`"") + $modeArgs)
     }
     $form.Close()
 }
@@ -2536,7 +2537,12 @@ function Show-PlanAStep {
     $script:PlanACurrentStep = $Index
     # Globale Schrittnummer: +2, da Schritt 1 (Szenario) davor liegt.
     $lblGlobalStep.Text = $planAStepTitles[$Index]
-    Update-Stepper -Labels (@((T 'Szenario')) + $planAStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 1 = "$($script:PlanA_CardName)" }
+    if ($script:SimpleMode) {
+        # Simple-Modus: Start / Eigene PIN (erledigt) / Zertifikat / Fertig.
+        Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current ([Math]::Min(3, $Index + 1)) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 1 = "$($script:PlanA_CardName)" }
+    } else {
+        Update-Stepper -Labels (@((T 'Szenario')) + $planAStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 1 = "$($script:PlanA_CardName)" }
+    }
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
 
@@ -2577,6 +2583,7 @@ function Invoke-PlanABackClick {
     # "Zurück" führt dort zur Szenario-Auswahl, nicht zum (übersprungenen) Erstellen.
     if ($script:PlanA_RenewMode -and $script:PlanACurrentStep -eq 1) {
         $tabPlanA.Visible = $false
+        if ($script:SimpleMode) { Show-SimpleStart; return }   # nie zur Szenario-Auswahl
         Show-ScenarioStep
         return
     }
@@ -3239,6 +3246,7 @@ $btnNextShared.Add_Click({
         'A'    { Invoke-PlanANextClick }
         'B'    { Invoke-PlanBNextClick }
         'SCEN' { Invoke-ScenarioNextClick }
+        'SIMPLE' { Enter-SimpleFlow }
         default { Invoke-ModeSelectNextClick }
     }
 })
@@ -3248,6 +3256,7 @@ $btnBackShared.Add_Click({
         'A'    { Invoke-PlanABackClick }
         'B'    { Invoke-PlanBBackClick }
         'SCEN' { }
+        'SIMPLE' { }
         default { Show-ScenarioStep }  # Mode-Select (Schritt 2) -> zurück zur Szenario-Auswahl
     }
 })
@@ -3298,7 +3307,7 @@ function Show-VscPinChangeDialog {
     $msg = New-Object System.Windows.Forms.Label
     $msg.UseMnemonic = $false; $msg.ForeColor = $script:UI.Muted
     $msg.Text = if ($PrefillCurrentPin) {
-        (T 'Die aktuelle PIN ist bereits vorausgefüllt (vom Rollout gesetzt). Bitte jetzt eine eigene, nur Ihnen bekannte PIN vergeben.')
+        (T 'Die aktuelle PIN ist schon eingetragen (Start-PIN der Einrichtung). Vergib jetzt eine eigene, nur dir bekannte PIN.')
     } else {
         (T 'Die neue PIN muss die PIN-Richtlinie der Karte erfüllen (Mindestlänge). Eine falsche aktuelle PIN zählt als Fehlversuch.')
     }
@@ -4250,7 +4259,7 @@ Set-ButtonStyleTree -Root $pnlContentArea
 # ============================================================================
 
 Update-Splash -Text (T 'Umgebung erkennen (TPM, Kerberos, Karten)...') -Percent 80
-Show-ScenarioStep
+if (-not $script:SimpleMode) { Show-ScenarioStep }   # Simple-Modus: eigene Startseite (Show-SimpleStart)
 Update-Splash -Text (T 'Fertig.') -Percent 100
 
 function Invoke-WizardResume {
@@ -4307,69 +4316,150 @@ function Invoke-WizardResume {
     Write-WizardLog -Message "Begonnener Antrag fortgesetzt (Plan $($state['Plan']), Stand: $stageText)." -Level Info
 }
 
+function Get-SimpleTargetPinMin {
+    # Ziel-PIN im Simple-Modus: numerisch, mindestens 6 Stellen bzw. die Karten-
+    # Mindestlänge aus der Konfiguration, falls höher. EINE Quelle für Startseite + Dialog.
+    $minLen = 6
+    if ($config.PinMinLength) { $minLen = [int]$config.PinMinLength }
+    if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
+    return [pscustomobject]@{ CardMin = $minLen; TargetMin = [Math]::Max(6, $minLen) }
+}
+
+function Show-SimpleStart {
+    # Startseite des Simple-Modus (VscWizard.exe -Simple, Intune-App 2) statt der
+    # Szenario-Übersicht: was passiert, welche Karte, ein Knopf. Die per -Provision
+    # angelegte Karte wird automatisch erkannt (Find-ProvisionedVsc) - Auswahl nur, wenn
+    # das nicht eindeutig geht.
+    $script:ActivePlan = 'SIMPLE'
+    $tabPlanA.Visible = $false; $tabPlanB.Visible = $false
+    $pnlScenario.Visible = $false; $pnlModeSelect.Visible = $false
+    $pnlSimple.Visible = $true; $pnlSimple.BringToFront()
+    $lblGlobalStep.Text = (T 'Smartcard einrichten')
+    Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current 0
+    $btnBackShared.Enabled = $false
+
+    $ready = $true
+    if (-not $script:SimpleCardResolved) {
+        $script:SimpleCardResolved = $true
+        $readers = @(Invoke-Busy -Text (T 'Suche die vorbereitete Smartcard...') -Action { Get-VirtualSmartCardReaders } | Where-Object { $_.PcscName })
+        $script:SimpleReaderCount = $readers.Count
+        $found = Find-ProvisionedVsc -Readers $readers -ExpectedName (Get-VscProvisionCardName -Config $config)
+        if ($found) {
+            $script:SimpleCard = $found.Reader
+            Write-WizardLog -Message "Simple-Modus: Karte '$($found.Reader.FriendlyName)' ($($found.Reader.PcscName)) automatisch gewählt - $($found.Reason)." -Level Info
+        } else {
+            Write-WizardLog -Message "Simple-Modus: keine eindeutige vorbereitete Karte ($($readers.Count) VSC vorhanden) - Auswahl beim Start." -Level Info
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)) {
+        $lblSimpleCard.Text = (T 'Die Konfiguration (Zertifizierungsstelle/Vorlage) ist unvollständig. Der Einrichtungsassistent kann so kein Zertifikat ausstellen. Bitte die Einstellungen prüfen oder den Administrator kontaktieren.')
+        $lblSimpleCard.ForeColor = $script:UI.Danger; $ready = $false
+    } elseif ($script:SimpleCard) {
+        $lblSimpleCard.Text = ((T 'Deine Smartcard: {0}  (in Windows-Dialogen: {1})') -f $script:SimpleCard.FriendlyName, $script:SimpleCard.PcscName)
+        $lblSimpleCard.ForeColor = $script:UI.Text
+    } elseif ($script:SimpleReaderCount -gt 0) {
+        $lblSimpleCard.Text = (T 'Auf diesem Gerät gibt es mehrere Smartcards - beim Start wählst du die richtige aus.')
+        $lblSimpleCard.ForeColor = $script:UI.Warn
+    } else {
+        $lblSimpleCard.Text = (T 'Auf diesem Gerät ist noch keine vorbereitete Smartcard vorhanden. Bitte wende dich an deine IT.')
+        $lblSimpleCard.ForeColor = $script:UI.Danger; $ready = $false
+    }
+    $btnSimpleStart.Enabled = $ready; Update-PrimaryEnabledLook $btnSimpleStart
+    $btnNextShared.Enabled = $ready
+}
+
 function Enter-SimpleFlow {
     # Schlanker Ablauf für die Intune-Benutzer-App (VscWizard.exe -Simple), siehe
     # docs/intune-rollout.md. Läuft im Benutzerkontext auf einer bereits von der
     # Device-App (-Provision) angelegten, leeren VSC:
-    #   1. PIN-Änderung ERZWINGEN (alte PIN = aus dem Computernamen abgeleitete
+    #   1. PIN-Änderung ERZWINGEN (alte PIN = aus der Seriennummer abgeleitete
     #      Start-PIN, vorbelegt) -> erst danach existiert eine nur dem Benutzer
     #      bekannte PIN. Ohne Änderung geht es NICHT weiter (Sicherheit).
     #   2. Zertifikat für das EIGENE on-prem/hybrid-Konto direkt bei der CA ausstellen
     #      (entspricht Szenario 02, Enter-PlanARenewal -TargetAccount $null).
-    # Fällt bei fehlender Konfiguration / fehlender VSC bewusst auf den normalen
-    # Assistenten zurück (der Benutzer sieht dann die reguläre Startseite).
-
-    # Ohne CA/Template kann nichts ausgestellt werden (im gepflegten Rollout liegt die
-    # config.psd1 der App bei). Nicht still scheitern: Hinweis + normaler Assistent.
     if ([string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)) {
-        Write-WizardLog -Message 'Simple-Modus: Konfiguration unvollständig (CAConfig/Template) - Rückfall auf den normalen Assistenten.' -Level Warn
-        [System.Windows.Forms.MessageBox]::Show(
-            (T 'Die Konfiguration (Zertifizierungsstelle/Vorlage) ist unvollständig. Der Einrichtungsassistent kann so kein Zertifikat ausstellen. Bitte die Einstellungen prüfen oder den Administrator kontaktieren.'),
-            (T 'Einrichtung'), 'OK', 'Warning') | Out-Null
+        Write-WizardLog -Message 'Simple-Modus: Konfiguration unvollständig (CAConfig/Template).' -Level Warn
         return
     }
 
-    # Bereits von der Device-App angelegte VSC wählen. Keine vorhanden -> normaler
-    # Assistent (dort kann eine neue erstellt werden).
-    $card = Select-ExistingVsc
+    # Automatisch erkannte Karte (Show-SimpleStart); nur wenn das nicht eindeutig ging,
+    # wählt der Benutzer.
+    $card = $script:SimpleCard
+    if (-not $card) { $card = Select-ExistingVsc }
     if (-not $card) {
-        Write-WizardLog -Message 'Simple-Modus: keine vorhandene VSC gefunden/gewählt - Rückfall auf den normalen Assistenten.' -Level Warn
+        Write-WizardLog -Message 'Simple-Modus: keine VSC gewählt.' -Level Warn
         return
     }
 
     # Start-/Quell-PIN identisch zur Device-App aus der Seriennummer ableiten
-    # (Get-VscBootstrapPin), damit sie im PIN-Dialog vorbelegt werden kann. Mindestlänge
-    # wie in Invoke-VscProvision (Karten-Erstellungs-Policy).
-    $minLen = 6
-    if ($config.PinMinLength) { $minLen = [int]$config.PinMinLength }
-    if ($minLen -lt 4) { $minLen = 4 }; if ($minLen -gt 20) { $minLen = 20 }
+    # (Get-VscBootstrapPin), damit sie im PIN-Dialog vorbelegt werden kann.
+    $pinMin = Get-SimpleTargetPinMin
     $startPin = ''
-    try { $startPin = Get-VscBootstrapPin -MinLength $minLen } catch {
+    try { $startPin = Get-VscBootstrapPin -MinLength $pinMin.CardMin } catch {
         Write-WizardLog -Message "Simple-Modus: Start-PIN konnte nicht abgeleitet werden: $($_.Exception.Message)" -Level Warn
     }
 
     # PIN-Änderung ERZWINGEN: erst nach erfolgreicher Änderung geht es weiter. Die ZIEL-PIN
     # ist NUMERISCH und mindestens 6-stellig (bzw. die Karten-Mindestlänge, falls höher).
-    $targetMin = [Math]::Max(6, $minLen)
-    $changed = Show-VscPinChangeDialog -Reader $card -Owner $form -PrefillCurrentPin $startPin -NumericOnly -MinNewLength $targetMin
+    Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current 1
+    $changed = Show-VscPinChangeDialog -Reader $card -Owner $form -PrefillCurrentPin $startPin -NumericOnly -MinNewLength $pinMin.TargetMin
     if (-not $changed) {
         Write-WizardLog -Message 'Simple-Modus: PIN-Änderung abgebrochen - Zertifikatsausstellung wird nicht gestartet.' -Level Warn
+        Update-Stepper -Labels @((T 'Start'), (T 'Eigene PIN'), (T 'Zertifikat'), (T 'Fertig')) -Current 0
         [System.Windows.Forms.MessageBox]::Show(
-            (T 'Die Einrichtung kann erst fortgesetzt werden, nachdem Sie eine eigene PIN vergeben haben. Bitte starten Sie die Einrichtung erneut.'),
+            (T 'Die Einrichtung geht erst weiter, wenn du eine eigene PIN vergeben hast. Klicke dazu erneut auf "Einrichtung starten".'),
             (T 'Einrichtung'), 'OK', 'Information') | Out-Null
         return
     }
 
     # Zertifikat für das eigene Konto direkt bei der CA ausstellen (Szenario 02).
     Write-WizardLog -Message "Simple-Modus: PIN gesetzt, starte Zertifikatsausstellung für die Karte '$($card.FriendlyName)'." -Level Info
+    $pnlSimple.Visible = $false
     Enter-PlanARenewal -Reader $card -TargetAccount $null
 }
 
+# --- Startseite des Simple-Modus -----------------------------------------------------
+$pnlSimple = New-Object System.Windows.Forms.Panel
+$pnlSimple.Dock = 'Fill'; $pnlSimple.Visible = $false; $pnlSimple.BackColor = $script:UI.Ground
+$pnlSimple.Padding = New-Object System.Windows.Forms.Padding(24, 8, 24, 16)
+$pnlContentArea.Controls.Add($pnlSimple)
+$simpleBox = New-Object System.Windows.Forms.FlowLayoutPanel
+$simpleBox.Dock = 'Top'; $simpleBox.AutoSize = $true; $simpleBox.AutoSizeMode = 'GrowAndShrink'
+$simpleBox.FlowDirection = 'TopDown'; $simpleBox.WrapContents = $false
+$simpleBox.BackColor = $script:UI.Surface; $simpleBox.Padding = New-Object System.Windows.Forms.Padding(24, 20, 24, 22)
+Add-BorderPaint -Control $simpleBox
+$pnlSimple.Controls.Add($simpleBox)
+function New-SimpleLabel([string]$Text, [float]$Size = 10, [switch]$Semibold, [int]$Top = 0, [int]$Bottom = 10) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $Text; $l.AutoSize = $true; $l.UseMnemonic = $false
+    $l.Font = New-UiFont $Size -Semibold:$Semibold; $l.ForeColor = $script:UI.Text
+    $l.Margin = New-Object System.Windows.Forms.Padding(0, $Top, 0, $Bottom)
+    return $l
+}
+$pinMinInfo = Get-SimpleTargetPinMin
+$lblSimpleTitle = New-SimpleLabel (T 'Der folgende Assistent führt dich durch die Einrichtung deiner virtuellen Smartcard.') 12 -Semibold -Bottom 16
+$lblSimpleStep1 = New-SimpleLabel ((T '1.  Eigene PIN vergeben - die Start-PIN ist schon eingetragen, du wählst eine neue, nur dir bekannte PIN aus mindestens {0} Ziffern.') -f $pinMinInfo.TargetMin)
+$lblSimpleStep2 = New-SimpleLabel (T '2.  Anmeldezertifikat ausstellen - der Assistent beantragt dein Zertifikat und legt es auf die Smartcard. Windows fragt dabei nach deiner neuen PIN.') -Bottom 16
+$lblSimpleCard = New-SimpleLabel '' 9.5 -Bottom 18
+$btnSimpleStart = New-Object System.Windows.Forms.Button
+$btnSimpleStart.Text = (T 'Einrichtung starten'); $btnSimpleStart.Size = New-Object System.Drawing.Size(200, 36)
+$btnSimpleStart.Margin = New-Object System.Windows.Forms.Padding(0)
+Set-ButtonStyle -Button $btnSimpleStart -Kind Primary
+$btnSimpleStart.Add_Click({ Enter-SimpleFlow })
+$simpleBox.Controls.AddRange(@($lblSimpleTitle, $lblSimpleStep1, $lblSimpleStep2, $lblSimpleCard, $btnSimpleStart))
+# Texte in der verfügbaren Breite umbrechen.
+$pnlSimple.Add_Resize({
+    $w = [Math]::Max(200, $pnlSimple.ClientSize.Width - $pnlSimple.Padding.Horizontal - $simpleBox.Padding.Horizontal - 4)
+    foreach ($l in @($lblSimpleTitle, $lblSimpleStep1, $lblSimpleStep2, $lblSimpleCard)) { $l.MaximumSize = New-Object System.Drawing.Size($w, 0) }
+})
 $configIncomplete = [string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)
 if ($script:SimpleMode) {
-    # Intune-Benutzer-App (-Simple): direkt in den schlanken Ablauf (PIN erzwingen ->
-    # Zertifikat ausstellen). Erst nach dem Shown-Event (modale Dialoge, siehe unten).
-    $form.Add_Shown({ Enter-SimpleFlow })
+    # Intune-Benutzer-App (-Simple): eigene Startseite statt Szenario-Übersicht; der
+    # Ablauf beginnt mit "Einrichtung starten". Einstellungen und Geräte-Details sind
+    # hier nur Ballast.
+    $btnOpenSettings.Visible = $false
+    $pnlDevice.Visible = $false
+    $form.Add_Shown({ Show-SimpleStart })
 } elseif ($configIncomplete) {
     # Erst öffnen, sobald das Hauptfenster tatsächlich angezeigt wird (Shown-Event) -
     # ein modaler Dialog mit -Owner vor dem ersten Show() des Owners führt sonst zu

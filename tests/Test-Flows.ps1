@@ -164,6 +164,35 @@ $global:OnPremAnswer = $null
 # (eigenes Konto, kein Offline-Template) auf der vorhandenen VSC.
 function Select-ExistingVsc { $global:Log.Add('    (VSC-Auswahl -> VSC-TEST)'); return [pscustomobject]@{ FriendlyName = 'VSC-TEST'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' } }
 function Show-VscPinChangeDialog { param($Reader, $Owner, [string]$PrefillCurrentPin, [switch]$NumericOnly, [int]$MinNewLength = 4) $global:PinDialogArgs = @{ Prefill = [bool]$PrefillCurrentPin; Numeric = [bool]$NumericOnly; Min = $MinNewLength }; return $global:PinChangedAnswer }
+# Kartenerkennung für den Simple-Modus (Find-ProvisionedVsc): Name, einzige Karte, mehrdeutig.
+$fr = { param($n, $i) [pscustomobject]@{ FriendlyName = $n; PcscName = "Microsoft Virtual Smart Card $i"; InstanceId = "ROOT\SMARTCARDREADER\TEST$i" } }
+$exp = 'VSC-TESTPC'
+$r1 = Find-ProvisionedVsc -Readers @((& $fr 'VSC--alex' 1), (& $fr $exp 2), (& $fr 'GAVSC' 3)) -ExpectedName $exp
+if (-not $r1 -or $r1.Reader.FriendlyName -ne $exp) { $global:Errors.Add("[Kartenerkennung] Provisionierte Karte unter mehreren nicht per Name gefunden") }
+$r2 = Find-ProvisionedVsc -Readers @((& $fr 'VSC--alex' 1), (& $fr 'GAVSC' 3)) -ExpectedName $exp
+if ($r2) { $global:Errors.Add("[Kartenerkennung] mehrdeutig, aber '$($r2.Reader.FriendlyName)' gewählt ($($r2.Reason))") }
+$r3 = Find-ProvisionedVsc -Readers @((& $fr 'Irgendwas' 1)) -ExpectedName $exp
+if (-not $r3) { $global:Errors.Add('[Kartenerkennung] einzige Karte nicht gewählt') }
+if (Find-ProvisionedVsc -Readers @() -ExpectedName $exp) { $global:Errors.Add('[Kartenerkennung] ohne Karten etwas gewählt') }
+
+# Startseite mit ECHTER Erkennung (ohne Vorbelegung): was immer gefunden wird, muss ein
+# Kartenleser sein. (Fand die Kollision $simpleCard-Panel == $script:SimpleCard.)
+# Bewusst NICHT $script:SimpleCard leeren: der Test soll den echten Startzustand sehen.
+$script:SimpleCardResolved = $false
+Step 'Simple-Startseite (echte Erkennung)' { Show-SimpleStart }
+if ($script:SimpleCard -and -not $script:SimpleCard.PSObject.Properties['PcscName']) { $global:Errors.Add("[Simple-Start] erkannte 'Karte' ist kein Kartenleser: $($script:SimpleCard.GetType().FullName)") }
+if (-not $script:SimpleCard -and $lblSimpleCard.Text -match '\(\S*:\s*\)') { $global:Errors.Add("[Simple-Start] Kartenzeile ohne Karte: '$($lblSimpleCard.Text)'") }
+$global:Log.Add("    (echte Erkennung: $($lblSimpleCard.Text))")
+# Startseite: Simple-Karte gesetzt -> Start möglich; keine Karte -> Start gesperrt.
+$script:SimpleCardResolved = $true
+$script:SimpleCard = [pscustomobject]@{ FriendlyName = 'VSC-TEST'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' }
+Step 'Simple-Startseite (Karte erkannt)' { Show-SimpleStart }
+if (-not $btnSimpleStart.Enabled) { $global:Errors.Add('[Simple-Start] trotz erkannter Karte gesperrt') }
+if ((OwnVisible $pnlScenario) -or -not (OwnVisible $pnlSimple)) { $global:Errors.Add('[Simple-Start] Szenario-Übersicht statt Simple-Startseite sichtbar') }
+$script:SimpleCard = $null; $script:SimpleReaderCount = 0
+Step 'Simple-Startseite (keine Karte)' { Show-SimpleStart }
+if ($btnSimpleStart.Enabled) { $global:Errors.Add('[Simple-Start] ohne Karte nicht gesperrt') }
+$script:SimpleCard = [pscustomobject]@{ FriendlyName = 'VSC-TEST'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' }
 foreach ($pinChanged in $false, $true) {
     $global:Log.Add("=== Simple-Modus, PIN geändert: $pinChanged ===")
     Reset-Run

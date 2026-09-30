@@ -180,6 +180,15 @@ $btnRetrieveB.Visible = $true
 Test-Layout $form 'Plan B Einreichen Pending'
 $tabPlanB.Visible = $false
 
+# --- Simple-Modus (Intune-App 2): Startseite in allen drei Zuständen ---
+$script:SimpleCardResolved = $true
+foreach ($case in 'Karte', 'Mehrere', 'Keine') {
+    $script:SimpleCard = if ($case -eq 'Karte') { [pscustomobject]@{ FriendlyName = $long; PcscName = $pcsc; InstanceId = 'ROOT\SMARTCARDREADER\0001' } } else { $null }
+    $script:SimpleReaderCount = if ($case -eq 'Mehrere') { 3 } else { 0 }
+    Show-SimpleStart
+    Test-Layout $form "Simple-Startseite ($case)"
+}
+$pnlSimple.Visible = $false
 # --- Dialoge ---
 try { Show-AboutDialog } catch { $global:Findings.Add("Show-AboutDialog Fehler: $($_.Exception.Message)") }
 try { $null = Show-AccountInputDialog -Prefill 'administrator.langername@contoso.onmicrosoft.com' -Prompt (T 'Cloud-Zielkonto/UPN (Entra, z.B. gadmin@contoso.onmicrosoft.com):') } catch { $global:Findings.Add("Show-AccountInputDialog Fehler: $($_.Exception.Message)") }
