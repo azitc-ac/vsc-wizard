@@ -388,6 +388,7 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   nachgestelltes verwaistes Zertifikat (Verweis auf nicht vorhandenen Container) in
   2,4 s ohne Timeout als "ohne Karte" erkannt. Nebenbei erkennt der Lookup jetzt auch
   ECC-Schlüssel (vorher nur RSA).
+- **Auf dem Test-PC bestätigt (2026-09-30): keine Auswahldialoge mehr.**
 
 ## Betriebs-Reminder
 
