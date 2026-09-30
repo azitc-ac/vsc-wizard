@@ -390,6 +390,17 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   ECC-Schlüssel (vorher nur RSA).
 - **Auf dem Test-PC bestätigt (2026-09-30): keine Auswahldialoge mehr.**
 
+## Zuletzt erledigt (2026-09-30): Intune Variante 1 - eine Karte pro Gerät, erster Benutzer
+- `Get-SmartCardOccupancy` (Core): Container + auf der Karte gespeichertes Zertifikat,
+  still, ohne PIN (auch Zertifikate anderer Benutzer). `Get-SimpleCardState`:
+  Own / Other / Started / Free / Unknown -> Startseite sperrt bei Own ("bereits
+  eingerichtet", HKCU-Marker) und Other ("bereits für {UPN}, an IT wenden").
+- Echt geprüft mit vorhandenen Karten (VSC--jdoe -> Other, VSC--alex -> Own), Tests für
+  alle Zustände (Flows + Layout).
+- **Variante 2 (Karte pro Benutzer)** als Design in `docs/intune-rollout.md`
+  (SYSTEM-Aufgabe „CreateCard“ nur startbar, Benutzer-Aufgabe bei Anmeldung, per-SID-
+  Marker, Cleanup, Grenze 10 VSCs/TPM, Start-PIN pro Karte variieren).
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird

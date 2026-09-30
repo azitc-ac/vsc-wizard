@@ -175,6 +175,27 @@ $r3 = Find-ProvisionedVsc -Readers @((& $fr 'Irgendwas' 1)) -ExpectedName $exp
 if (-not $r3) { $global:Errors.Add('[Kartenerkennung] einzige Karte nicht gewählt') }
 if (Find-ProvisionedVsc -Readers @() -ExpectedName $exp) { $global:Errors.Add('[Kartenerkennung] ohne Karten etwas gewählt') }
 
+# Variante 1: Kartenzustand (eigenes Zertifikat / fremdes / nur Schlüssel / leer / unbekannt).
+$occMe = [pscustomobject]@{ Container = 'a'; HasCertificate = $true; Subject = 'CN=me'; Upn = 'me@contoso.com'; NotAfter = (Get-Date).AddYears(1) }
+$occOther = [pscustomobject]@{ Container = 'b'; HasCertificate = $true; Subject = 'CN=other'; Upn = 'other@contoso.com'; NotAfter = (Get-Date).AddYears(1) }
+$occKey = [pscustomobject]@{ Container = 'c'; HasCertificate = $false; Subject = $null; Upn = $null; NotAfter = $null }
+foreach ($case in @(
+    @{ Occ = @($occMe, $occKey); Want = 'Own' }, @{ Occ = @($occOther); Want = 'Other' }, @{ Occ = @($occOther, $occMe); Want = 'Own' },
+    @{ Occ = @($occKey); Want = 'Started' }, @{ Occ = @(); Want = 'Free' }, @{ Occ = $null; Want = 'Unknown' })) {
+    $got = (Get-SimpleCardState -Occupancy $case.Occ -CurrentUpn 'me@contoso.com').State
+    if ($got -ne $case.Want) { $global:Errors.Add("[Kartenzustand] erwartet $($case.Want), bekommen $got") }
+}
+# Startseite: bei fremder Belegung gesperrt, bei eigener gesperrt (erledigt), bei 'Started' frei.
+# Platzhalter bleibt bis Testende: der Test soll den echten HKCU-Marker NICHT schreiben.
+$script:SimpleCardResolved = $true
+$script:SimpleCard = [pscustomobject]@{ FriendlyName = 'VSC-TEST'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' }
+function Set-VscEnrollMarker { $global:Log.Add('    (HKCU-Marker gesetzt)'); $true }
+foreach ($case in @(@{ S = 'Other'; E = $occOther; Enabled = $false }, @{ S = 'Own'; E = $occMe; Enabled = $false }, @{ S = 'Started'; E = $null; Enabled = $true }, @{ S = 'Free'; E = $null; Enabled = $true })) {
+    $script:SimpleCardState = [pscustomobject]@{ State = $case.S; Entry = $case.E }
+    Step "Simple-Startseite ($($case.S))" { Show-SimpleStart }
+    if ($btnSimpleStart.Enabled -ne $case.Enabled) { $global:Errors.Add("[Simple-Start $($case.S)] Start-Knopf aktiv=$($btnSimpleStart.Enabled), erwartet $($case.Enabled)") }
+}
+$script:SimpleCardState = $null
 # Startseite mit ECHTER Erkennung (ohne Vorbelegung): was immer gefunden wird, muss ein
 # Kartenleser sein. (Fand die Kollision $simpleCard-Panel == $script:SimpleCard.)
 # Bewusst NICHT $script:SimpleCard leeren: der Test soll den echten Startzustand sehen.

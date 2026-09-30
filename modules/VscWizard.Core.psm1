@@ -2289,6 +2289,81 @@ Write-Output 'Result=Installed'
     return [pscustomobject]@{ Success = $false }
 }
 
+function Get-SmartCardOccupancy {
+    # Was liegt auf EINER Karte? Schlüsselcontainer + das jeweils AUF DER KARTE gespeicherte
+    # Zertifikat (SmartCardKeyCertificate) - still, ohne PIN, auch für Zertifikate ANDERER
+    # Benutzer (die nicht im eigenen Benutzerspeicher stehen). Für den Simple-Modus: ist
+    # die vorbereitete Karte schon von jemandem eingerichtet?
+    # Ergebnis: Liste @{ Container; HasCertificate; Subject; Upn; NotAfter } oder $null,
+    # wenn nicht ermittelbar (dann nicht blockieren).
+    param([Parameter(Mandatory)][string]$PcscName, [int]$TimeoutSeconds = 20)
+    $scriptPath = Join-Path (Get-WizardWorkingDir) 'card-occupancy.ps1'
+    $occScript = @'
+param([Parameter(Mandatory)][string]$Reader)
+Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class VscOccEnum {
+    [StructLayout(LayoutKind.Sequential)] public struct NCryptKeyName { public IntPtr pszName; public IntPtr pszAlgid; public int dwLegacyKeySpec; public int dwFlags; }
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)] static extern int NCryptOpenStorageProvider(out IntPtr phProvider, string pszProviderName, int dwFlags);
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)] static extern int NCryptEnumKeys(IntPtr hProvider, string pszScope, out IntPtr ppKeyName, ref IntPtr ppEnumState, int dwFlags);
+    [DllImport("ncrypt.dll")] static extern int NCryptFreeBuffer(IntPtr pvInput);
+    [DllImport("ncrypt.dll")] static extern int NCryptFreeObject(IntPtr hObject);
+    public static List<string> Enum(string provider, string scope) {
+        var list = new List<string>(); IntPtr hProv;
+        if (NCryptOpenStorageProvider(out hProv, provider, 0) != 0) return list;
+        IntPtr state = IntPtr.Zero;
+        while (true) {
+            IntPtr pName;
+            if (NCryptEnumKeys(hProv, scope, out pName, ref state, 0x40) != 0) break;
+            var kn = (NCryptKeyName)Marshal.PtrToStructure(pName, typeof(NCryptKeyName));
+            list.Add(Marshal.PtrToStringUni(kn.pszName)); NCryptFreeBuffer(pName);
+        }
+        if (state != IntPtr.Zero) NCryptFreeBuffer(state);
+        NCryptFreeObject(hProv); return list;
+    }
+}
+"@
+$provName = 'Microsoft Smart Card Key Storage Provider'
+$prov = New-Object System.Security.Cryptography.CngProvider($provName)
+$scope = "\\.\$Reader\"
+foreach ($n in [VscOccEnum]::Enum($provName, $scope)) {
+    $b64 = ''
+    try {
+        $k = [System.Security.Cryptography.CngKey]::Open("$scope$n", $prov, [System.Security.Cryptography.CngKeyOpenOptions]::Silent)
+        try { $b64 = [Convert]::ToBase64String($k.GetProperty('SmartCardKeyCertificate', [System.Security.Cryptography.CngPropertyOptions]::None).GetValue()) } catch { }
+        $k.Dispose()
+    } catch { }
+    [Console]::Out.WriteLine("Key=$n|$b64")
+}
+[Console]::Out.WriteLine('Done=1')
+'@
+    Set-Content -Path $scriptPath -Value $occScript -Encoding UTF8
+    $res = Invoke-ExternalCommand -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-Reader', $PcscName
+    ) -TimeoutSeconds $TimeoutSeconds -Silent
+    if ("$($res.StdOut)" -notmatch 'Done=1') {
+        Write-WizardLog -Message "Kartenbelegung von '$PcscName' nicht ermittelbar: $("$($res.StdErr)".Trim())" -Level Info
+        return $null
+    }
+    $items = foreach ($line in ("$($res.StdOut)" -split "`r?`n")) {
+        if ($line -notmatch '^Key=([^|]*)\|(.*)$') { continue }
+        $container = $Matches[1]; $b64 = $Matches[2]
+        $subject = $null; $upn = $null; $notAfter = $null
+        if ($b64) {
+            try {
+                $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, [Convert]::FromBase64String($b64))
+                $subject = $c.Subject; $notAfter = $c.NotAfter
+                $san = $c.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } | Select-Object -First 1
+                if ($san -and $san.Format($true) -match '([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})') { $upn = $Matches[1] }
+            } catch { }
+        }
+        [pscustomobject]@{ Container = $container; HasCertificate = [bool]$b64; Subject = $subject; Upn = $upn; NotAfter = $notAfter }
+    }
+    return @($items)
+}
+
 function Get-IssuedCertificateSummary {
     # Findet das (neueste) frisch ausgestellte Zertifikat. Matcht den Suchbegriff
     # gegen den Subject ODER den UPN im SubjectAltName - wichtig, weil bei

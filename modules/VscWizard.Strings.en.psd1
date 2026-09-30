@@ -407,4 +407,8 @@
     'Smartcard einrichten' = 'Set up smart card'
     'Start' = 'Start'
     'Suche die vorbereitete Smartcard...' = 'Looking for the prepared smart card...'
+    'Auf der Karte liegt schon ein Schlüssel ohne Zertifikat. Falls du die Einrichtung schon begonnen und deine PIN geändert hast, trage im nächsten Schritt deine eigene PIN als aktuelle PIN ein.' = 'There is already a key without a certificate on the card. If you already started the setup and changed your PIN, enter your own PIN as the current PIN in the next step.'
+    'Deine Smartcard ist bereits eingerichtet (Zertifikat für {0}, gültig bis {1}). Es ist nichts weiter zu tun.' = 'Your smart card is already set up (certificate for {0}, valid until {1}). There is nothing else to do.'
+    'Die Smartcard dieses Geräts ({0}) ist bereits für {1} eingerichtet. Für ein weiteres Benutzerkonto wende dich bitte an deine IT.' = 'The smart card of this device ({0}) is already set up for {1}. For another user account, please contact your IT department.'
+    'Prüfe, ob die Smartcard schon eingerichtet ist...' = 'Checking whether the smart card is already set up...'
 }

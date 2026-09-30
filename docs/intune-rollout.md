@@ -106,6 +106,79 @@ SYSTEM legt die leere Karte an; der Benutzer stellt später sein Cert darauf aus
   **Abhängigkeit** App 2 → App 1.
 - **Install behavior:** App 1 = System; App 2 = User.
 
+## Mehrere Benutzer pro Gerät
+
+Grundsatz: **jeder Benutzer braucht eine eigene VSC.** Eine gemeinsame Karte hieße eine
+gemeinsame PIN. VSC anlegen geht nur als Admin/SYSTEM, einrichten (PIN, Zertifikat) nur
+in der Benutzersitzung.
+
+### Variante 1 — eine Karte pro Gerät, „erster Benutzer“ (UMGESETZT, 2026-09-30)
+
+- App 1 legt **eine** Karte an; App 2 läuft (user-targeted) für jeden zugewiesenen
+  Benutzer, aber nur der erste richtet die Karte ein.
+- Der Simple-Modus prüft beim Start **auf der Karte selbst** (`Get-SmartCardOccupancy`:
+  Container + dort gespeichertes Zertifikat, still, ohne PIN — Zertifikate anderer
+  Benutzer stehen nicht im eigenen Speicher), Entscheidung in `Get-SimpleCardState`:
+  - **Own** (Zertifikat mit eigener UPN): „bereits eingerichtet, nichts zu tun“, Start
+    gesperrt, HKCU-Marker gesetzt (Intune-Erkennung erfüllt).
+  - **Other** (Zertifikat eines anderen): „bereits für {UPN} eingerichtet – an die IT
+    wenden“, Start gesperrt. Kein Versuch mit der Start-PIN (hätte einen Fehlversuch
+    gekostet).
+  - **Started** (nur Schlüssel ohne Zertifikat, z.B. Einrichtung abgebrochen): Start
+    erlaubt, Hinweis „ggf. eigene PIN als aktuelle PIN eintragen“.
+  - **Free** / **Unknown** (Belegung nicht ermittelbar): normaler Ablauf.
+- Intune-Folge: für den zweiten Benutzer bleibt App 2 „nicht installiert“ (kein Marker)
+  und versucht es periodisch erneut — er sieht dann jeweils den Hinweis. Wer das nicht
+  will: App 2 nur dem Hauptbenutzer zuweisen.
+
+### Variante 2 — eine Karte pro Benutzer (DESIGN, nicht umgesetzt)
+
+Ziel: Jeder Hybrid-Benutzer, der sich anmeldet und noch keine Karte hat, bekommt eine.
+
+**Bausteine (App 1 installiert sie, statt selbst eine Karte anzulegen):**
+
+1. **Wizard fest installieren** nach `%ProgramFiles%\VSC-Wizard` (nur Admins schreibbar —
+   wichtig, weil eine SYSTEM-Aufgabe ihn ausführt).
+2. **SYSTEM-Aufgabe „VSC-Wizard\CreateCard“** (Aufgabenplanung, Konto SYSTEM, kein
+   Auslöser, nur bei Bedarf): `VscWizard.exe -Provision -Silent -ForUser`. Ihre
+   Sicherheitsbeschreibung erlaubt **Benutzern nur das Starten** (Lesen+Ausführen), nicht
+   das Ändern.
+   - Für **welchen** Benutzer? Nicht aus einer vom Benutzer beschreibbaren Datei
+     vertrauen, sondern selbst ermitteln: die interaktiv angemeldeten Sitzungen
+     (WTSEnumerateSessions / Besitzer von explorer.exe) → deren SIDs.
+   - Pro SID höchstens **eine** Karte: HKLM-Marker je Benutzer
+     (`HKLM\SOFTWARE\VSC-Wizard\Users\<SID>\InstanceId`); Karte `VSC-<sAMAccountName>`.
+   - Missbrauchsschutz: nie mehr als eine Karte pro SID, Obergrenze pro Gerät (z.B. 8 von
+     max. 10 VSCs pro TPM), Protokoll in `C:\ProgramData\VSC-Wizard\provision.log`.
+3. **Benutzer-Aufgabe „VSC-Wizard\Setup“** (Gruppe „Benutzer“, interaktiv, Auslöser
+   „bei Anmeldung eines beliebigen Benutzers“, leicht verzögert):
+   `VscWizard.exe -Simple -AutoStart`:
+   - **Beenden ohne Fenster**, wenn: kein Hybrid-Konto (kein On-Prem-TGT / keine
+     onprem-UPN), eigenes Zertifikat schon vorhanden (HKCU-Marker + Karte), oder
+     Benutzer hat „später“ gewählt (Zurückstellen mit Datum, sonst nervt es bei jeder
+     Anmeldung).
+   - Sonst: eigene Karte suchen (`Find-ProvisionedVsc` pro SID); fehlt sie →
+     `Start-ScheduledTask 'VSC-Wizard\CreateCard'`, auf die Karte warten (Timeout, klare
+     Meldung) → dann der bekannte Simple-Ablauf.
+4. **Intune:** nur noch **eine** Device-App (installiert Wizard + beide Aufgaben).
+   Erkennung: Programmordner + Aufgaben vorhanden. App 2 entfällt (die Aufgabe übernimmt).
+
+**Aufräumen:** Benutzer verlässt das Gerät → Karte bleibt belegt. Optional SYSTEM-
+Aufgabe „Cleanup“ (z.B. wöchentlich): Karten zu SIDs ohne Profil auf dem Gerät bzw.
+mit abgelaufenem Zertifikat nach Frist entfernen (`tpmvscmgr destroy`) — vorsichtig,
+nur mit Protokoll und klarer Regel.
+
+**Grenzen / Risiken:**
+- Max. **10 VSCs pro TPM** → echte Grenze für Gemeinschafts-/Schichtgeräte.
+- Die Start-PIN (Seriennummer) wäre für **alle** Karten eines Geräts gleich → pro Karte
+  variieren (z.B. Seriennummer + sAMAccountName ableiten), sonst kann Benutzer A die
+  frisch angelegte Karte von B vor B einrichten.
+- Anmelde-Aufgabe + SYSTEM-Aufgabe sind nur auf echten Geräten mit Intune sinnvoll
+  testbar (mehrere Benutzerkonten, Hybrid + Nicht-Hybrid, Offline-Anmeldung ohne CA).
+
+**Aufwand (Schätzung):** einige Tage Entwicklung (Aufgaben anlegen/absichern, Sitzungs-
+ermittlung, per-SID-Marker, `-AutoStart`-Logik mit Zurückstellen, Cleanup) plus Pilot.
+
 ## Offene Punkte / vor der Umsetzung zu klären
 
 - **PIN-Zeichensatz/-länge** der VSC auf Hardware prüfen: Quell-PIN **alphanumerisch**

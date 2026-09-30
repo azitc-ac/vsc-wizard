@@ -182,6 +182,15 @@ $tabPlanB.Visible = $false
 
 # --- Simple-Modus (Intune-App 2): Startseite in allen drei Zuständen ---
 $script:SimpleCardResolved = $true
+function Set-VscEnrollMarker { $true }   # Layout-Test: keinen echten HKCU-Marker setzen
+$occEntry = [pscustomobject]@{ Container = 'x'; HasCertificate = $true; Subject = 'CN=administrator.langername'; Upn = 'administrator.langername@contoso.onmicrosoft.com'; NotAfter = (Get-Date).AddYears(2) }
+foreach ($st in 'Own', 'Other', 'Started') {
+    $script:SimpleCard = [pscustomobject]@{ FriendlyName = $long; PcscName = $pcsc; InstanceId = 'ROOT\SMARTCARDREADER\0001' }
+    $script:SimpleCardState = [pscustomobject]@{ State = $st; Entry = $(if ($st -ne 'Started') { $occEntry }) }
+    Show-SimpleStart
+    Test-Layout $form "Simple-Startseite (Karte $st)"
+}
+$script:SimpleCardState = $null
 foreach ($case in 'Karte', 'Mehrere', 'Keine') {
     $script:SimpleCard = if ($case -eq 'Karte') { [pscustomobject]@{ FriendlyName = $long; PcscName = $pcsc; InstanceId = 'ROOT\SMARTCARDREADER\0001' } } else { $null }
     $script:SimpleReaderCount = if ($case -eq 'Mehrere') { 3 } else { 0 }

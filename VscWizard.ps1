@@ -4325,6 +4325,26 @@ function Get-SimpleTargetPinMin {
     return [pscustomobject]@{ CardMin = $minLen; TargetMin = [Math]::Max(6, $minLen) }
 }
 
+function Get-SimpleCardState {
+    # Variante 1 (eine vorbereitete Karte pro Gerät, siehe docs/intune-rollout.md): ist die
+    # Karte schon eingerichtet - von mir oder von jemand anderem? Grundlage ist die
+    # Belegung AUF der Karte (Get-SmartCardOccupancy), denn Zertifikate anderer Benutzer
+    # stehen nicht im eigenen Speicher. State: Free | Own | Other | Started | Unknown.
+    param($Occupancy, [string]$CurrentUpn)
+    if ($null -eq $Occupancy) { return [pscustomobject]@{ State = 'Unknown'; Entry = $null } }
+    $withCert = @($Occupancy | Where-Object { $_.HasCertificate })
+    if ($CurrentUpn) {
+        $own = @($withCert | Where-Object { $_.Upn -and $_.Upn -eq $CurrentUpn }) | Sort-Object NotAfter -Descending | Select-Object -First 1
+        if ($own) { return [pscustomobject]@{ State = 'Own'; Entry = $own } }
+    }
+    if ($withCert.Count -gt 0) {
+        $other = $withCert | Sort-Object NotAfter -Descending | Select-Object -First 1
+        return [pscustomobject]@{ State = 'Other'; Entry = $other }
+    }
+    if (@($Occupancy).Count -gt 0) { return [pscustomobject]@{ State = 'Started'; Entry = $null } }
+    return [pscustomobject]@{ State = 'Free'; Entry = $null }
+}
+
 function Show-SimpleStart {
     # Startseite des Simple-Modus (VscWizard.exe -Simple, Intune-App 2) statt der
     # Szenario-Übersicht: was passiert, welche Karte, ein Knopf. Die per -Provision
@@ -4347,6 +4367,10 @@ function Show-SimpleStart {
         if ($found) {
             $script:SimpleCard = $found.Reader
             Write-WizardLog -Message "Simple-Modus: Karte '$($found.Reader.FriendlyName)' ($($found.Reader.PcscName)) automatisch gewählt - $($found.Reason)." -Level Info
+            # Schon eingerichtet (von mir / jemand anderem)? Still auf der Karte nachsehen.
+            $occ = Invoke-Busy -Text (T 'Prüfe, ob die Smartcard schon eingerichtet ist...') -Action { Get-SmartCardOccupancy -PcscName $found.Reader.PcscName }
+            $script:SimpleCardState = Get-SimpleCardState -Occupancy $occ -CurrentUpn (Get-CurrentUpn)
+            Write-WizardLog -Message "Simple-Modus: Kartenzustand $($script:SimpleCardState.State)$(if ($script:SimpleCardState.Entry) { " (Zertifikat für $($script:SimpleCardState.Entry.Upn))" })." -Level Info
         } else {
             Write-WizardLog -Message "Simple-Modus: keine eindeutige vorbereitete Karte ($($readers.Count) VSC vorhanden) - Auswahl beim Start." -Level Info
         }
@@ -4354,9 +4378,23 @@ function Show-SimpleStart {
     if ([string]::IsNullOrWhiteSpace($config.CAConfig) -or [string]::IsNullOrWhiteSpace($config.Template)) {
         $lblSimpleCard.Text = (T 'Die Konfiguration (Zertifizierungsstelle/Vorlage) ist unvollständig. Der Einrichtungsassistent kann so kein Zertifikat ausstellen. Bitte die Einstellungen prüfen oder den Administrator kontaktieren.')
         $lblSimpleCard.ForeColor = $script:UI.Danger; $ready = $false
+    } elseif ($script:SimpleCard -and $script:SimpleCardState -and $script:SimpleCardState.State -eq 'Own') {
+        $e = $script:SimpleCardState.Entry
+        $lblSimpleCard.Text = ((T 'Deine Smartcard ist bereits eingerichtet (Zertifikat für {0}, gültig bis {1}). Es ist nichts weiter zu tun.') -f $e.Upn, $(if ($e.NotAfter) { $e.NotAfter.ToString('yyyy-MM-dd') } else { '?' }))
+        $lblSimpleCard.ForeColor = $script:UI.Success; $ready = $false
+        Set-VscEnrollMarker | Out-Null   # Intune-Erkennung: für diesen Benutzer erledigt
+    } elseif ($script:SimpleCard -and $script:SimpleCardState -and $script:SimpleCardState.State -eq 'Other') {
+        $e = $script:SimpleCardState.Entry
+        $who = if ($e.Upn) { $e.Upn } else { ($e.Subject -replace '^CN=', '') }
+        $lblSimpleCard.Text = ((T 'Die Smartcard dieses Geräts ({0}) ist bereits für {1} eingerichtet. Für ein weiteres Benutzerkonto wende dich bitte an deine IT.') -f $script:SimpleCard.FriendlyName, $who)
+        $lblSimpleCard.ForeColor = $script:UI.Danger; $ready = $false
     } elseif ($script:SimpleCard) {
         $lblSimpleCard.Text = ((T 'Deine Smartcard: {0}  (in Windows-Dialogen: {1})') -f $script:SimpleCard.FriendlyName, $script:SimpleCard.PcscName)
         $lblSimpleCard.ForeColor = $script:UI.Text
+        if ($script:SimpleCardState -and $script:SimpleCardState.State -eq 'Started') {
+            $lblSimpleCard.Text += "`r`n" + (T 'Auf der Karte liegt schon ein Schlüssel ohne Zertifikat. Falls du die Einrichtung schon begonnen und deine PIN geändert hast, trage im nächsten Schritt deine eigene PIN als aktuelle PIN ein.')
+            $lblSimpleCard.ForeColor = $script:UI.Warn
+        }
     } elseif ($script:SimpleReaderCount -gt 0) {
         $lblSimpleCard.Text = (T 'Auf diesem Gerät gibt es mehrere Smartcards - beim Start wählst du die richtige aus.')
         $lblSimpleCard.ForeColor = $script:UI.Warn
