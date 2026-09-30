@@ -1611,29 +1611,86 @@ foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.Power
         Import-Module $nativeModulePath -Force -ErrorAction SilentlyContinue
     }
 }
+# Zuordnung Zertifikat -> Karte OHNE den privaten Schlüssel zu öffnen: früher
+# GetRSAPrivateKey() je Zertifikat - bei einem Zertifikat, dessen Karte fehlt (gelöschte/
+# neu angelegte VSC), zeigte Windows "Smartcard auswählen" und wartete, bis der Hänger-
+# Schutz den Prozess beendete (Dialog blitzte auf, seit die Dialoge nach vorn geholt
+# werden). Jetzt: Schlüssel-VERWEIS aus dem Zertifikat (CERT_KEY_PROV_INFO) + stille
+# Container-Liste jeder eingesteckten Karte (NCryptEnumKeys, NCRYPT_SILENT_FLAG).
+Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public static class VscKeyMap {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct CRYPT_KEY_PROV_INFO { public string pwszContainerName; public string pwszProvName; public uint dwProvType; public uint dwFlags; public uint cProvParam; public IntPtr rgProvParam; public uint dwKeySpec; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct NCryptKeyName { public IntPtr pszName; public IntPtr pszAlgid; public int dwLegacyKeySpec; public int dwFlags; }
+    [DllImport("crypt32.dll", SetLastError = true)] static extern bool CertGetCertificateContextProperty(IntPtr ctx, uint propId, IntPtr pv, ref uint cb);
+    [DllImport("winscard.dll")] static extern int SCardEstablishContext(uint scope, IntPtr r1, IntPtr r2, out IntPtr ctx);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardListReadersW(IntPtr ctx, string groups, char[] readers, ref uint len);
+    [DllImport("winscard.dll")] static extern int SCardReleaseContext(IntPtr ctx);
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)] static extern int NCryptOpenStorageProvider(out IntPtr prov, string name, int flags);
+    [DllImport("ncrypt.dll", CharSet = CharSet.Unicode)] static extern int NCryptEnumKeys(IntPtr prov, string scope, out IntPtr keyName, ref IntPtr state, int flags);
+    [DllImport("ncrypt.dll")] static extern int NCryptFreeBuffer(IntPtr p);
+    [DllImport("ncrypt.dll")] static extern int NCryptFreeObject(IntPtr h);
+
+    // Verweis auf den Schlüssel (CERT_KEY_PROV_INFO_PROP_ID) - OHNE den Schlüssel zu öffnen.
+    public static string[] ProvInfo(IntPtr certCtx) {
+        uint cb = 0;
+        if (!CertGetCertificateContextProperty(certCtx, 2, IntPtr.Zero, ref cb) || cb == 0) return null;
+        IntPtr buf = Marshal.AllocHGlobal((int)cb);
+        try {
+            if (!CertGetCertificateContextProperty(certCtx, 2, buf, ref cb)) return null;
+            var info = (CRYPT_KEY_PROV_INFO)Marshal.PtrToStructure(buf, typeof(CRYPT_KEY_PROV_INFO));
+            return new[] { info.pwszContainerName, info.pwszProvName, info.dwProvType.ToString() };
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
+
+    // Containername -> PC/SC-Leser, für alle eingesteckten Karten (still, ohne PIN/Dialog).
+    public static Dictionary<string, string> ContainerToReader() {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        IntPtr ctx;
+        if (SCardEstablishContext(0, IntPtr.Zero, IntPtr.Zero, out ctx) != 0) return map;
+        try {
+            uint len = 16384; var buf = new char[len];
+            if (SCardListReadersW(ctx, null, buf, ref len) != 0) return map;
+            IntPtr prov;
+            if (NCryptOpenStorageProvider(out prov, "Microsoft Smart Card Key Storage Provider", 0) != 0) return map;
+            try {
+                foreach (string reader in new string(buf, 0, (int)len).Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries)) {
+                    IntPtr state = IntPtr.Zero;
+                    while (true) {
+                        IntPtr pName;
+                        if (NCryptEnumKeys(prov, "\\\\.\\" + reader + "\\", out pName, ref state, 0x40 /*NCRYPT_SILENT_FLAG*/) != 0) break;
+                        var kn = (NCryptKeyName)Marshal.PtrToStructure(pName, typeof(NCryptKeyName));
+                        string name = Marshal.PtrToStringUni(kn.pszName);
+                        if (name != null && !map.ContainsKey(name)) map[name] = reader;
+                        NCryptFreeBuffer(pName);
+                    }
+                    if (state != IntPtr.Zero) NCryptFreeBuffer(state);
+                }
+            } finally { NCryptFreeObject(prov); }
+        } finally { SCardReleaseContext(ctx); }
+        return map;
+    }
+}
+"@
+$map = [VscKeyMap]::ContainerToReader()
 foreach ($Thumbprint in ($Thumbprints -split ',')) {
     [Console]::Out.WriteLine("Begin=$Thumbprint")
     try {
         $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction Stop
-        $rsaKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-        if ($rsaKey -is [System.Security.Cryptography.RSACng]) {
-            $k = $rsaKey.Key
-            if ($k -and $k.Provider) {
-                [Console]::Out.WriteLine("Provider=$($k.Provider.Provider)")
-                [Console]::Out.WriteLine("Container=$($k.KeyName)")
-                # NCrypt-Property "SmartCardReader" (ohne Leerzeichen!) - PC/SC-Lesegerätename.
-                # Fehlt bei Nicht-Smartcard-CNG-Schlüsseln; dann still überspringen.
-                try {
-                    $prop = $k.GetProperty('SmartCardReader', [System.Security.Cryptography.CngPropertyOptions]::None)
-                    $readerName = [System.Text.Encoding]::Unicode.GetString($prop.GetValue()).TrimEnd([char]0)
-                    if ($readerName) { [Console]::Out.WriteLine("Reader=$readerName") }
-                } catch { }
-            }
-        } elseif ($rsaKey -and $rsaKey.CspKeyContainerInfo) {
-            [Console]::Out.WriteLine("Provider=$($rsaKey.CspKeyContainerInfo.ProviderName)")
-            [Console]::Out.WriteLine("Reader=$($rsaKey.CspKeyContainerInfo.Reader)")
-            [Console]::Out.WriteLine("IsHardware=$([bool]$rsaKey.CspKeyContainerInfo.HardwareDevice)")
-            [Console]::Out.WriteLine("Container=$($rsaKey.CspKeyContainerInfo.KeyContainerName)")
+        $pi = [VscKeyMap]::ProvInfo($cert.Handle)
+        if ($pi) {
+            $container = $pi[0]; $provider = $pi[1]
+            [Console]::Out.WriteLine("Provider=$provider")
+            [Console]::Out.WriteLine("Container=$container")
+            $reader = $null
+            if ($container -match '^\\\\\.\\([^\\]+)\\(.+)$') { $reader = $Matches[1]; $container = $Matches[2] }
+            elseif ($map.ContainsKey($container)) { $reader = $map[$container] }
+            if ($reader) { [Console]::Out.WriteLine("Reader=$reader"); [Console]::Out.WriteLine('IsHardware=True') }
         }
     } catch {
         [Console]::Out.WriteLine("Error=$($_.Exception.Message -replace '[\r\n]+', ' ')")

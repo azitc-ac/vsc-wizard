@@ -375,6 +375,20 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   ohne Vorbelegung (Gegenprobe ok).
 - **Offen:** auf dem Test-PC mit per -Provision angelegter Karte bestätigen.
 
+## Zuletzt erledigt (2026-09-30): Kein "Smartcard auswählen"-Aufblitzen mehr
+- Ursache: Die Zertifikats-/Kartenzuordnung (`Get-SmartCardCngProviderInfoBatch`) öffnete
+  je Zertifikat den privaten Schlüssel (GetRSAPrivateKey). Bei einem Zertifikat ohne
+  vorhandene Karte zeigte Windows "Smartcard auswählen" und wartete, bis der Hänger-
+  Schutz den Prozess beendete. Sichtbar wurde das erst, seit Sicherheitsdialoge nach
+  vorn geholt werden (vorher lag er dahinter).
+- Neu: Schlüssel-VERWEIS aus dem Zertifikat (CERT_KEY_PROV_INFO, kein Kartenzugriff) +
+  stille Container-Liste jeder Karte (NCryptEnumKeys, NCRYPT_SILENT_FLAG), Zuordnung
+  über den Containernamen. Kein Dialog, kein Warten; 3,9 statt ~8 s bei 18 Zertifikaten.
+- Verifiziert: alle 5 Smartcard-Zertifikate identisch zugeordnet wie vorher;
+  nachgestelltes verwaistes Zertifikat (Verweis auf nicht vorhandenen Container) in
+  2,4 s ohne Timeout als "ohne Karte" erkannt. Nebenbei erkennt der Lookup jetzt auch
+  ECC-Schlüssel (vorher nur RSA).
+
 ## Betriebs-Reminder
 
 - Nach jedem `git pull` auf dem **Einreich-Host**: `.\build.ps1` — die `.exe` wird
