@@ -421,4 +421,6 @@
     'Die Smartcard konnte nicht angelegt werden ({0}). Versuche es bitte erneut; bleibt der Fehler, hilft deine IT (Protokoll: {1}).' = 'The smart card could not be created ({0}). Please try again; if the error persists, your IT department can help (log: {1}).'
     'Die Smartcard wurde (noch) nicht angelegt. Versuche es gleich erneut; bleibt es dabei, hilft deine IT (Protokoll: {0}).' = 'The smart card has not been created (yet). Try again in a moment; if it stays that way, your IT department can help (log: {0}).'
     'Später erinnern' = 'Remind me later'
+    'Smartcard verwalten' = 'Manage smart card'
+    'Meine Smartcard' = 'My smart card'
 }

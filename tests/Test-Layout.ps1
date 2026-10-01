@@ -197,6 +197,9 @@ Show-SimpleStart; Test-Layout $form 'Simple-Startseite (Per-Benutzer, neue Karte
 $script:SimpleNotice = [pscustomobject]@{ Text = ((T 'Die Smartcard konnte nicht angelegt werden ({0}). Versuche es bitte erneut; bleibt der Fehler, hilft deine IT (Protokoll: {1}).') -f 'CreateVirtualSmartCardWithPinPolicy: HRESULT 0x80090030 (NTE_DEVICE_NOT_READY) - TpmVirtualSmartCardManager returned no instance id after 3 attempts', 'C:\ProgramData\VSC-Wizard\provision.log'); Color = $script:UI.Danger; CanRetry = $true }
 Show-SimpleStart; Test-Layout $form 'Simple-Startseite (Per-Benutzer, Fehlerhinweis)'
 $script:SimpleNotice = $null; $script:PerUserMode = $false
+# Simple-Modus: Zusammenfassung mit "Fertig"
+$script:SimpleMode = $true; $script:SimpleCard = [pscustomobject]@{ FriendlyName = $long; PcscName = $pcsc; InstanceId = 'ROOT\SMARTCARDREADER\0001' }; Enter-PlanARenewal -Reader $script:SimpleCard -TargetAccount $null; Show-PlanAStep -Index 2; Test-Layout $form 'Simple-Zusammenfassung'; $script:SimpleMode = $false; $tabPlanA.Visible = $false
+$script:SimpleCardState = [pscustomobject]@{ State = 'Own'; Entry = $occEntry }; Show-SimpleStart; Test-Layout $form 'Simple-Startseite (eingerichtet, verwalten)'; $script:SimpleCardState = $null
 foreach ($case in 'Karte', 'Mehrere', 'Keine') {
     $script:SimpleCard = if ($case -eq 'Karte') { [pscustomobject]@{ FriendlyName = $long; PcscName = $pcsc; InstanceId = 'ROOT\SMARTCARDREADER\0001' } } else { $null }
     $script:SimpleReaderCount = if ($case -eq 'Mehrere') { 3 } else { 0 }
@@ -212,6 +215,7 @@ $fakeCerts = @(1..3 | ForEach-Object { [pscustomobject]@{ Subject = 'CN=administ
 try { $null = Show-VscPickerDialog -Readers $fakeReaders -Certs $fakeCerts } catch { $global:Findings.Add("Show-VscPickerDialog Fehler: $($_.Exception.Message)") }
 try { $null = Show-VscChoiceDialog } catch { $global:Findings.Add("Show-VscChoiceDialog Fehler: $($_.Exception.Message)") }
 try { Show-VscPinChangeDialog -Reader $fakeReaders[0] -Owner $form } catch { $global:Findings.Add("Show-VscPinChangeDialog Fehler: $($_.Exception.Message)") }
+try { $own = @(Get-VirtualSmartCardReaders | Where-Object PcscName) | Select-Object -First 1; if ($own) { Show-VscInventoryDialog -Owner $form -UserView -OnlyInstanceId "$($own.InstanceId)" } } catch { $global:Findings.Add("Show-VscInventoryDialog -UserView Fehler: $($_.Exception.Message)") }
 try { Show-VscInventoryDialog -Owner $form } catch { $global:Findings.Add("Show-VscInventoryDialog Fehler: $($_.Exception.Message)") }
 try { Show-SettingsDialog -Owner $form } catch { $global:Findings.Add("Show-SettingsDialog Fehler: $($_.Exception.Message)") }
 

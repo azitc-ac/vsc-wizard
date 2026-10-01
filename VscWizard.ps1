@@ -2568,6 +2568,12 @@ function Show-PlanAStep {
     }
     $btnBackShared.Enabled = $true
     $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
+    # Simple-Modus: auf der Zusammenfassung schließt "Fertig" den Wizard; "Weitere
+    # Smartcard"/"Zum Startbildschirm" und "Zurück" sind dort nichts für normale Benutzer.
+    $simpleEnd = $script:SimpleMode -and $Index -eq $panels.Count - 1
+    $btnResetA.Visible = -not $simpleEnd; $btnStartA.Visible = -not $simpleEnd
+    $btnNextShared.Text = if ($simpleEnd) { T 'Fertig' } else { T 'Weiter' }
+    if ($simpleEnd) { $btnNextShared.Enabled = $true; $btnBackShared.Enabled = $false }
 
     switch ($Index) {
         1 {
@@ -2597,6 +2603,11 @@ function Invoke-PlanANextClick {
                 return
             }
             Show-PlanAStep -Index 2
+        }
+        2 {
+            # Simple-Modus: "Fertig" auf der Zusammenfassung schließt den Wizard (normale
+            # Benutzer sollen nicht zur Startseite zurück).
+            if ($script:SimpleMode) { Close-WizardWindow }
         }
     }
 }
@@ -3406,13 +3417,16 @@ function Show-VscInventoryDialog {
     # "VSCs verwalten" (Szenario 04): oben die Karten, unten die Zertifikate der
     # gewählten Karte; Aktionen jeweils direkt darunter. Selbsterklärend - die frühere
     # Ablaufbeschreibung ("Tool: Inventar ... / Du: Auswählen und löschen") entfällt.
-    param([System.Windows.Forms.Form]$Owner)
+    # -UserView -OnlyInstanceId: Benutzeransicht im Simple-Modus - nur die EIGENE Karte,
+    # nur PIN ändern + Zertifikat anzeigen (kein Löschen, keine Diagnosezeilen).
+    param([System.Windows.Forms.Form]$Owner, [switch]$UserView, [string]$OnlyInstanceId)
 
     # Die Zertifikatserkennung kann (Hänger-Schutz, siehe Get-SmartCardCngProviderInfoBatch)
     # einige Sekunden dauern - die Kernfunktionen zeigen dafür selbst den Warte-Hinweis.
     Set-Busy -Text (T 'Lese virtuelle Smartcards und Zertifikate...')
     try {
         $readers = @(Get-VirtualSmartCardReaders)
+        if ($OnlyInstanceId) { $readers = @($readers | Where-Object { "$($_.InstanceId)" -eq $OnlyInstanceId }) }
         $certs = @(Get-SmartCardCertificates)
     } finally { Clear-Busy }
     Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegerät(e), $($certs.Count) Zertifikat(e) mit privatem Schlüssel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
@@ -3428,7 +3442,7 @@ function Show-VscInventoryDialog {
     }
 
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = (T 'Virtuelle Smartcards verwalten')
+    $dlg.Text = if ($UserView) { T 'Meine Smartcard' } else { T 'Virtuelle Smartcards verwalten' }
     $dlg.Size = New-Object System.Drawing.Size(940, 700)
     $dlg.MinimumSize = New-Object System.Drawing.Size(760, 540)
     $dlg.StartPosition = 'CenterParent'
@@ -3480,7 +3494,7 @@ function Show-VscInventoryDialog {
     }
 
     # --- Karten ---------------------------------------------------------------------
-    $dlgLayout.Controls.Add((New-InvHeader ((T 'Smartcards auf diesem Gerät ({0})') -f $readers.Count)), 0, 0)
+    $dlgLayout.Controls.Add((New-InvHeader $(if ($UserView) { T 'Meine Smartcard' } else { (T 'Smartcards auf diesem Gerät ({0})') -f $readers.Count })), 0, 0)
     $lvReaders = New-InvList
     [void]$lvReaders.Columns.Add((T 'Karte'), 250)
     [void]$lvReaders.Columns.Add((T 'In Windows-Dialogen'), 250)
@@ -3512,7 +3526,7 @@ function Show-VscInventoryDialog {
     $unmatchedSmartCardCerts = @($certs | Where-Object { $_.IsSmartCard -and (-not $_.Reader -or ($readerPcscNames -notcontains $_.Reader)) })
     $otherCerts = @($certs | Where-Object { -not $_.IsSmartCard })
     foreach ($m in @(@($unmatchedSmartCardCerts, $unmatchedSmartCardMarker, (T 'Smartcard-Zertifikate ohne Karte')), @($otherCerts, $nonSmartCardMarker, (T 'Sonstige Zertifikate (keine Smartcard)')))) {
-        if ($m[0].Count -eq 0) { continue }
+        if ($m[0].Count -eq 0 -or $UserView) { continue }   # Benutzeransicht: nur die eigene Karte
         $item = New-Object System.Windows.Forms.ListViewItem($m[2])
         $item.ForeColor = $script:UI.Muted
         [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add("$($m[0].Count)"); [void]$item.SubItems.Add('')
@@ -3528,6 +3542,7 @@ function Show-VscInventoryDialog {
     $btnDeleteReader = New-InvButton (T 'Karte löschen...')
     $btnChangePin.Enabled = $false; $btnDeleteReader.Enabled = $false
     $cardBar.Controls.AddRange(@($btnChangePin, $btnDeleteReader))
+    if ($UserView) { $btnDeleteReader.Visible = $false }
     $dlgLayout.Controls.Add($cardBar, 0, 2)
 
     # --- Zertifikate der gewählten Karte --------------------------------------------
@@ -3545,6 +3560,7 @@ function Show-VscInventoryDialog {
     $btnDeleteCert = New-InvButton (T 'Von Karte entfernen...')
     $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
     $certBar.Controls.AddRange(@($btnShowCert, $btnDeleteCert))
+    if ($UserView) { $btnDeleteCert.Visible = $false }
     $dlgLayout.Controls.Add($certBar, 0, 5)
 
     $dlgBtnPanel = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -3694,7 +3710,7 @@ function Show-VscInventoryDialog {
     if ($Owner) { [void]$dlg.ShowDialog($Owner) } else { [void]$dlg.ShowDialog() }
     if ($script:InventoryReopen) {
         $script:InventoryReopen = $false
-        Show-VscInventoryDialog -Owner $Owner
+        Show-VscInventoryDialog -Owner $Owner -UserView:$UserView -OnlyInstanceId $OnlyInstanceId
     }
 }
 
@@ -4368,6 +4384,11 @@ function Get-SimpleCardState {
     return [pscustomobject]@{ State = 'Free'; Entry = $null }
 }
 
+function Close-WizardWindow {
+    # Wizard beenden (Simple-Modus: "Fertig", "Schließen", "Später erinnern").
+    $form.Close()
+}
+
 function Show-SimpleStart {
     # Startseite des Simple-Modus (VscWizard.exe -Simple / -AutoStart) statt der
     # Szenario-Übersicht. Zwei Wege:
@@ -4449,6 +4470,12 @@ function Show-SimpleStart {
     }
     $btnSimpleStart.Enabled = $ready; Update-PrimaryEnabledLook $btnSimpleStart
     $btnNextShared.Enabled = $ready
+    # Eingerichtet: nur noch "Smartcard verwalten" (eigene Karte: PIN ändern, Zertifikat
+    # anzeigen) + "Schließen". Bewusst NICHT vor Abschluss der Einrichtung - eine dort
+    # selbst geänderte PIN würde die gemerkte Start-PIN entwerten.
+    $own = [bool]($script:SimpleCard -and $script:SimpleCardState -and $script:SimpleCardState.State -eq 'Own' -and -not $script:SimpleNotice)
+    $btnSimpleStart.Visible = -not $own; $btnSimpleLater.Visible = -not $own
+    $btnSimpleManage.Visible = $own; $btnSimpleClose.Visible = $own
 }
 
 function Set-SimpleNotice {
@@ -4621,12 +4648,22 @@ Set-ButtonStyle -Button $btnSimpleLater -Kind Secondary
 $btnSimpleLater.Add_Click({
     try { Set-VscSnooze -Hours 24 } catch { }
     Write-WizardLog -Message 'Simple-Modus: auf später zurückgestellt (24 h).' -Level Info
-    $form.Close()
+    Close-WizardWindow
 })
 $simpleButtons = New-Object System.Windows.Forms.FlowLayoutPanel
 $simpleButtons.AutoSize = $true; $simpleButtons.AutoSizeMode = 'GrowAndShrink'; $simpleButtons.WrapContents = $false
 $simpleButtons.Margin = New-Object System.Windows.Forms.Padding(0)
-$simpleButtons.Controls.AddRange(@($btnSimpleStart, $btnSimpleLater))
+$btnSimpleManage = New-Object System.Windows.Forms.Button
+$btnSimpleManage.Text = (T 'Smartcard verwalten'); $btnSimpleManage.Size = New-Object System.Drawing.Size(200, 36)
+$btnSimpleManage.Margin = New-Object System.Windows.Forms.Padding(0, 0, 12, 0); $btnSimpleManage.Visible = $false
+Set-ButtonStyle -Button $btnSimpleManage -Kind Primary
+$btnSimpleManage.Add_Click({ if ($script:SimpleCard) { Show-VscInventoryDialog -Owner $form -UserView -OnlyInstanceId "$($script:SimpleCard.InstanceId)" } })
+$btnSimpleClose = New-Object System.Windows.Forms.Button
+$btnSimpleClose.Text = (T 'Schließen'); $btnSimpleClose.Size = New-Object System.Drawing.Size(140, 36)
+$btnSimpleClose.Margin = New-Object System.Windows.Forms.Padding(0); $btnSimpleClose.Visible = $false
+Set-ButtonStyle -Button $btnSimpleClose -Kind Secondary
+$btnSimpleClose.Add_Click({ Close-WizardWindow })
+$simpleButtons.Controls.AddRange(@($btnSimpleStart, $btnSimpleLater, $btnSimpleManage, $btnSimpleClose))
 $simpleBox.Controls.AddRange(@($lblSimpleTitle, $lblSimpleStep1, $lblSimpleStep2, $lblSimpleCard, $simpleButtons))
 # Texte in der verfügbaren Breite umbrechen.
 $pnlSimple.Add_Resize({

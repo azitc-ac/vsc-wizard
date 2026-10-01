@@ -315,6 +315,32 @@ foreach ($ans in 'Yes', 'No') {
     $script:SimpleReqTimer.Stop(); while ($script:BusyDepth -gt 0) { Clear-Busy }
 }
 $script:PerUserMode = $false
+# --- Simple-Modus: eingerichtete Karte -> nur "verwalten"/"Schließen"; Ende -> "Fertig" schließt ---
+$global:Log.Add('=== Simple: Ende + eingerichtet ===')
+Reset-Run
+$script:SimpleCardResolved = $true; $script:PerUserMode = $true; $script:SimpleNotice = $null
+$script:SimpleCard = [pscustomobject]@{ FriendlyName = 'VSC-alex'; PcscName = 'Microsoft Virtual Smart Card 7'; InstanceId = 'ROOT\SMARTCARDREADER\0007' }
+$script:SimpleCardState = [pscustomobject]@{ State = 'Own'; Entry = [pscustomobject]@{ Upn = 'me@contoso.com'; Subject = 'CN=me'; NotAfter = (Get-Date).AddYears(1) } }
+Step 'Simple eingerichtet' { Show-SimpleStart }
+if ((OwnVisible $btnSimpleStart) -or -not (OwnVisible $btnSimpleManage) -or -not (OwnVisible $btnSimpleClose)) { $global:Errors.Add('[Simple eingerichtet] erwartet nur "Smartcard verwalten" + "Schließen"') }
+$script:SimpleCardState = [pscustomobject]@{ State = 'Free'; Entry = $null }
+Step 'Simple frei' { Show-SimpleStart }
+if (-not (OwnVisible $btnSimpleStart) -or (OwnVisible $btnSimpleManage)) { $global:Errors.Add('[Simple frei] "Einrichtung starten" fehlt bzw. "verwalten" sichtbar') }
+# Zusammenfassung: "Fertig" schließt (Schließen hier abfangen, damit der Test weiterläuft).
+$global:FormClosing = $false
+function Close-WizardWindow { $global:FormClosing = $true }   # Fenster ist im Test nie angezeigt - Close() würde es verwerfen
+$script:SimpleMode = $true
+Step 'Simple Ende' { Enter-PlanARenewal -Reader $script:SimpleCard -TargetAccount $null; $script:PlanA_CertIssued = $true; Invoke-PlanANextClick }
+if ($btnNextShared.Text -ne (T 'Fertig') -or -not $btnNextShared.Enabled) { $global:Errors.Add("[Simple Ende] Knopf '$($btnNextShared.Text)' aktiv=$($btnNextShared.Enabled), erwartet 'Fertig' aktiv") }
+if ((OwnVisible $btnResetA) -or (OwnVisible $btnStartA) -or $btnBackShared.Enabled) { $global:Errors.Add('[Simple Ende] "Weitere Smartcard"/"Zum Startbildschirm"/"Zurück" noch angeboten') }
+Step 'Simple Fertig' { Invoke-PlanANextClick }
+if (-not $global:FormClosing) { $global:Errors.Add('[Simple Ende] "Fertig" schließt den Wizard nicht') }
+$script:SimpleMode = $false
+Step 'normaler Modus Ende' { Show-PlanAStep -Index 2 }
+if (-not (OwnVisible $btnStartA) -or $btnNextShared.Text -ne (T 'Weiter')) { $global:Errors.Add('[normaler Modus Ende] Startbildschirm-Knopf/Weiter fehlt') }
+# Verwaltung in der Benutzeransicht: nur die eigene Karte, ohne Löschen.
+$global:ClickInDialog = $null
+function global:Invoke-HarnessDialogInv($d) { $global:InvDlg = $d; return [System.Windows.Forms.DialogResult]::Cancel }
 # Resume-Datei des Benutzers wiederherstellen
 & $restoreResume
 
