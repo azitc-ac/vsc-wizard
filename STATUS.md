@@ -83,6 +83,20 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Backlog / offene Punkte
 
+00. **IDEE (2026-10-05): Integration Microsoft Cloud PKI** — Form noch offen. Vorab zu
+    klären, bevor entschieden wird:
+    - Cloud PKI stellt über **Intune-SCEP-Profile** aus; die Profile können (Stand bisher,
+      siehe Variante-2-Doku) **nicht** in den Smartcard-KSP einer VSC schreiben. Der
+      SCEP-Challenge erzeugt Intune pro Gerät/Profil — ein eigener SCEP-Client im Wizard
+      ist daher nicht ohne Weiteres möglich. Prüfen, ob sich daran etwas geändert hat.
+    - Mögliche Formen: (a) Cloud PKI als **ausstellende CA** statt der On-Prem-CA (Wizard
+      reicht ein, falls es einen dafür nutzbaren Weg gibt); (b) **BYOCA**: Cloud PKI unter
+      der vorhandenen Root (Kette/Vertrauen in Entra und AD); (c) nur Vertrauen/
+      **Sperrlisten** (CRL in der Cloud erreichbar — betrifft auch den CBA-Stolperstein
+      „CRL für Entra erreichbar“); (d) Wizard erkennt Cloud-PKI-Zertifikate und ordnet sie zu.
+    - Auswirkung auf On-Prem-Logon (starke Zuordnung KB5014754: SID-Erweiterung) und auf
+      Entra CBA (Binding, vertrauenswürdige CA) jeweils bewerten.
+
 0. **Rollout per Intune-Win32-App** — Design in **`docs/intune-rollout.md`** (2026-09-29).
    Kurz: ZWEI Apps — App 1 (Device/SYSTEM) legt leere VSC mit Start-PIN aus dem
    Computernamen an (silent); App 2 (User) `-Simple`-Assistent: PIN-Änderung ERZWINGEN,
