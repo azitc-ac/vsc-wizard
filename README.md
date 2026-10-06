@@ -430,3 +430,7 @@ geloescht.
 - Die PIN-Mindestlaenge von 6 setzt `ITpmVirtualSmartCardManager2` voraus;
   ohne diese Schnittstelle greift automatisch die Basis-API mit Minimum 8
   (der PIN-Dialog zeigt die jeweils geltende Grenze an).
+
+## Lizenz
+
+MIT – siehe [LICENSE](LICENSE).

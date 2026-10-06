@@ -243,8 +243,9 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   (PnP-Status OK) - ein nicht provisioniertes TPM fällt erst bei der Erstellung auf.
 - **Tests ohne Durchklicken:** `tests\Test-Layout.ps1` (28 Zustände + alle Dialoge,
   mehrere Fenstergrößen; auf Englisch zusätzlich "deutscher Text übrig?"),
-  `tests\Test-Flows.ps1` (alle Szenarien mit Weiter/Zurück, Resume, Laufzeitfehler) und
-  `tests\Test-Strings.ps1` (Übersetzungen) - vor jeder Auslieferung laufen lassen, die
+  `tests\Test-Flows.ps1` (alle Szenarien mit Weiter/Zurück, Resume, Laufzeitfehler),
+  `tests\Test-Strings.ps1` (Übersetzungen) und `tests\Test-Config.ps1` (config.psd1
+  ohne org-spezifische Werte) - vor jeder Auslieferung laufen lassen, die
   ersten beiden auch mit `$env:VSCWIZARD_LANG='en'`.
 
 ## Zuletzt erledigt (Ergänzung)
