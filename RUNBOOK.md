@@ -263,6 +263,11 @@ Bekommt **nicht** die GUI-Exe, sondern die schlanke `VscWizard.Submit.ps1`
 
 ## Anhang: Konfigurationsschluessel (`config.psd1`)
 
+Zwei Ebenen: `config.psd1` neben dem Programm ist die Vorgabe (im Repo leer, fuer einen
+Rollout von der IT vorbefuellbar). Der Einstellungen-Dialog speichert nur in
+`%APPDATA%\VSC-Wizard\config.psd1`, und zwar nur abweichende Werte; diese gehen beim
+Laden vor. Systemkontext (Intune-Aufgabe) liest nur die Vorgabe.
+
 | Schluessel | Bedeutung |
 |---|---|
 | `Template` | Zertifikatstemplate fuer die VSC-Anmeldung |

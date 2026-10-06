@@ -98,6 +98,10 @@ Kindprozess, der die CNG-Schluesselinfos ermittelt.
    automatisch den **Einstellungen**-Dialog (jederzeit ueber den Knopf in der
    Kopfleiste erreichbar) - dort entweder manuell eintragen oder per "PKI
    automatisch erkennen" befuellen lassen (siehe unten), dann "Speichern".
+   Gespeichert wird **pro Benutzer** in `%APPDATA%\VSC-Wizard\config.psd1` -
+   nur die Werte, die von der `config.psd1` neben dem Programm abweichen. Die
+   Datei neben dem Programm bleibt unveraendert; die IT kann sie fuer einen
+   Rollout vorbefuellen (sie gilt dann als Vorgabe fuer alle Benutzer).
 3. In Schritt 1 Konto und Ablauf (Plan A/Plan B) waehlen (Plan wird anhand des
    erkannten Domaenen-Status vorausgewaehlt) und dem Wizard mit "Weiter" folgen.
 
@@ -114,7 +118,8 @@ Kindprozess, der die CNG-Schluesselinfos ermittelt.
   `csc.exe` zu einer fensterlosen winexe kompiliert, siehe "Ablauf im Detail"
 - `helper/VscCreateHelper.csproj` - baut denselben Helfer-Quellcode als native,
   self-contained ARM64-App (`build.ps1`, benoetigt .NET 8 SDK nur zur Build-Zeit)
-- `config.psd1` - Konfiguration (CA, Template, RDP-Zielserver, etc.)
+- `config.psd1` - Vorgabe-Konfiguration (CA, Template, RDP-Zielserver, etc.);
+  Benutzer-Einstellungen liegen in `%APPDATA%\VSC-Wizard\config.psd1`
 - `VscWizard.bat` - Launcher
 - `VscWizard.Submit.ps1` - eigenstaendiger Einreichungshelfer fuer die RDP-Sitzung
   in Plan B, siehe Abschnitt "Einreichungshelfer" unten
@@ -320,8 +325,8 @@ Zertifikatstemplate-Dropdown mit allen auf der CA verfuegbaren Templates
 befuellt (erstes als Vorschlag vorausgewaehlt - im Dropdown ggf. das
 passende auswaehlen, z.B. ein "SmartcardLogon"/"SmartcardUser"-artiges
 Template statt eines fuer Verschluesselung/Webserver/etc.). Anschliessend
-noch "Speichern" klicken, um die Werte dauerhaft in `config.psd1` zu
-uebernehmen.
+noch "Speichern" klicken, um die Werte dauerhaft zu uebernehmen (in
+`%APPDATA%\VSC-Wizard\config.psd1`, siehe "Verwendung").
 Schlaegt die Erkennung fehl, zeigt das Ergebnisfeld die konkrete Ursache
 (LDAP-Fehler, CA gefunden aber per RPC nicht erreichbar, Zeitueberschreitung).
 

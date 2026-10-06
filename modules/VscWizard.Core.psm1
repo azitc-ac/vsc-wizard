@@ -31,40 +31,70 @@ foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.Power
 
 $script:Config = $null
 $script:ConfigPath = $null
+$script:UserConfigPath = $null
+$script:BaseConfig = @{}
 $script:LogBox = $null
 $script:LogFilePath = $null
 
 #region Konfiguration
 
-function Import-VscWizardConfig {
-    param([Parameter(Mandatory)][string]$Path)
+function Get-VscUserConfigPath {
+    # Benutzer-Einstellungen: %APPDATA%\VSC-Wizard\config.psd1. NUR hier wird gespeichert -
+    # die config.psd1 neben dem Programm bleibt so, wie sie ausgeliefert wurde (leer im
+    # Repo bzw. von der IT vorbefüllt in %ProgramFiles%, dort für Benutzer ohnehin nicht
+    # schreibbar). Früher landeten org-spezifische Werte so im Repo.
+    return (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'VSC-Wizard\config.psd1')
+}
 
-    if (-not (Test-Path $Path)) {
+function Read-VscConfigFile {
+    # Eine PSD1 lesen; fehlt sie oder ist sie unlesbar -> leere Tabelle (nicht werfen: der
+    # Wizard behandelt die Werte dann als fehlend und öffnet die Einstellungen).
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path $Path)) { return @{} }
+    try { return (Import-PowerShellDataFile -Path $Path -ErrorAction Stop) } catch { return @{} }
+}
+
+function Import-VscWizardConfig {
+    # Zwei Ebenen: Basis = config.psd1 neben dem Programm, darüber die Benutzer-
+    # Einstellungen aus %APPDATA% (Schlüssel für Schlüssel). Im Systemkontext (Intune-
+    # Aufgabe) gibt es keine Benutzerdatei -> nur die Basis.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$UserPath = (Get-VscUserConfigPath)
+    )
+
+    if (-not (Test-Path $Path) -and -not ($UserPath -and (Test-Path $UserPath))) {
         throw "Konfigurationsdatei nicht gefunden: $Path"
     }
-    try {
-        $data = Import-PowerShellDataFile -Path $Path -ErrorAction Stop
-    } catch {
-        # Nicht erneut werfen: ein leeres $data führt dazu, dass der Wizard die Werte
-        # als fehlend behandelt und automatisch den Einstellungen-Tab öffnet (siehe
-        # STARTUP-Region in VscWizard.ps1) - das ist nachvollziehbarer als ein
-        # uncaught Fehler vor dem eigentlichen GUI-Start.
-        $data = @{}
-    }
+    $base = Read-VscConfigFile -Path $Path
+    $data = @{}
+    foreach ($k in @($base.Keys)) { $data[$k] = $base[$k] }
+    $user = Read-VscConfigFile -Path $UserPath
+    foreach ($k in @($user.Keys)) { $data[$k] = $user[$k] }
+
+    $script:BaseConfig = $base
     $script:Config = $data
     $script:ConfigPath = $Path
+    $script:UserConfigPath = $UserPath
     return $data
 }
 
 function Save-VscWizardConfig {
+    # Speichert in die Benutzerdatei - und zwar nur die Schlüssel, die von der Basis
+    # abweichen. So wirken spätere Änderungen der IT an der Basis weiter, solange der
+    # Benutzer den Wert nicht selbst geändert hat.
     param(
         [Parameter(Mandatory)][hashtable]$Config,
-        [string]$Path = $script:ConfigPath
+        [string]$Path = $script:UserConfigPath,
+        [hashtable]$Base = $script:BaseConfig
     )
+    if (-not $Path) { $Path = Get-VscUserConfigPath }
+    if (-not $Base) { $Base = @{} }
 
     $lines = @('@{')
-    foreach ($key in $Config.Keys) {
+    foreach ($key in @($Config.Keys | Sort-Object)) {
         $value = $Config[$key]
+        if ($Base.ContainsKey($key) -and ("$(@($Base[$key]) -join "`n")" -ceq "$(@($value) -join "`n")")) { continue }
         # Apostrophe verdoppeln (PSD1-Stringliteral) - sonst wäre die Datei danach unlesbar
         # und der Wizard startete mit leerer Konfiguration.
         if ($value -is [array]) {
@@ -75,6 +105,8 @@ function Save-VscWizardConfig {
         }
     }
     $lines += '}'
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     Set-Content -Path $Path -Value ($lines -join "`r`n") -Encoding UTF8
     $script:Config = $Config
 }

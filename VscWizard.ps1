@@ -59,11 +59,15 @@ if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
 
 # --- Sprache GANZ AM ANFANG festlegen (einzige Entscheidung, gilt für alles) ---------
 # Der Splash läuft vor dem Laden des Kernmoduls (wo T/Übersetzungen leben) - daher hier:
-#   1. VSCWIZARD_LANG (Tests)  2. 'Language' aus config.psd1 (Wahl über den Umschalter)
+#   1. VSCWIZARD_LANG (Tests)  2. 'Language' aus der Konfiguration (Wahl über den Umschalter;
+#      Benutzerdatei in %APPDATA% vor config.psd1 neben dem Programm - gleiche Reihenfolge
+#      wie Import-VscWizardConfig/Get-VscUserConfigPath im Kernmodul, das hier noch nicht geladen ist)
 #   3. Windows-Anzeigesprache: Deutsch -> de, sonst en.
 $script:StartLang = $env:VSCWIZARD_LANG
 if (-not $script:StartLang) {
-    try { $script:StartLang = (Import-PowerShellDataFile -Path (Join-Path $script:BaseDir 'config.psd1') -ErrorAction Stop).Language } catch { }
+    foreach ($p in (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'VSC-Wizard\config.psd1'), (Join-Path $script:BaseDir 'config.psd1')) {
+        try { $l = (Import-PowerShellDataFile -Path $p -ErrorAction Stop).Language; if ($l) { $script:StartLang = $l; break } } catch { }
+    }
 }
 if (-not $script:StartLang) {
     $script:StartLang = if ((Get-UICulture).TwoLetterISOLanguageName -eq 'de') { 'de' } else { 'en' }
@@ -893,7 +897,7 @@ function Switch-WizardLanguage {
     $newConfig = @{}
     if ($config) { foreach ($k in @($config.Keys)) { $newConfig[$k] = $config[$k] } }
     $newConfig['Language'] = $Language
-    try { Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath } catch { }
+    try { Save-VscWizardConfig -Config $newConfig } catch { }
     # Neu starten: als PS2EXE-Exe dieselbe Exe, sonst das Skript über powershell.exe.
     $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $env:VSCWIZARD_UILANG = $null
@@ -4116,7 +4120,7 @@ function Show-SettingsDialog {
         $newConfig['EATemplate']      = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
         $newConfig['PinMinLength']    = [int]$numCfgPinMin.Value
         $newConfig['WorkingDir']      = $config.WorkingDir
-        Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
+        Save-VscWizardConfig -Config $newConfig
         $script:config = $newConfig
 
         Set-TemplateComboItem -ComboBox $cboTemplateA -Template $newConfig.Template
