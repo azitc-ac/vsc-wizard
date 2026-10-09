@@ -1,4 +1,8 @@
-﻿<#
+﻿# Ordner dieses Moduls - auch beim Rückfall-Laden aus dem Text (VscWizard.ps1, strenge
+# Gruppenrichtlinie), wo $PSScriptRoot leer ist: dann aus VSCWIZARD_MODULEDIR.
+$script:CoreModuleDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($env:VSCWIZARD_MODULEDIR) { $env:VSCWIZARD_MODULEDIR } else { (Get-Location).Path }
+
+<#
     VscWizard.Core.psm1
 
     Nicht-GUI-Logik für den VSC-Wizard: Konfiguration, Logging, Prozessausführung,
@@ -187,7 +191,7 @@ function Set-WizardLanguage {
     $env:VSCWIZARD_UILANG = $script:Lang
     $script:EnStrings = @{}
     if ($script:Lang -eq 'en') {
-        $path = Join-Path $PSScriptRoot 'VscWizard.Strings.en.psd1'
+        $path = Join-Path $script:CoreModuleDir 'VscWizard.Strings.en.psd1'
         if (Test-Path $path) {
             try { $script:EnStrings = Import-PowerShellDataFile -Path $path -ErrorAction Stop } catch { $script:EnStrings = @{} }
         }
@@ -934,7 +938,7 @@ function Get-NativeCreateHelperPath {
     # Ordner (ausgelieferter EXE-Fall: dist\helper-<arch>) und im dist-Ordner des
     # Repos (Start als .ps1 aus dem Repo nach einem build.ps1-Lauf).
     param([Parameter(Mandatory)][ValidateSet('arm64')][string]$Architecture)
-    $appRoot = Split-Path -Parent $PSScriptRoot
+    $appRoot = Split-Path -Parent $script:CoreModuleDir
     foreach ($dir in @((Join-Path $appRoot "helper-$Architecture"), (Join-Path $appRoot "dist\helper-$Architecture"))) {
         $exe = Join-Path $dir 'VscCreateHelper.exe'
         if (Test-Path $exe) { return $exe }
@@ -1035,7 +1039,7 @@ function New-VirtualSmartCard {
         }
         Write-WizardLog -Message "ARM64 erkannt: verwende nativen COM-Helfer ($nativeHelper)." -Level Info
     } else {
-        $helperSource = Join-Path $PSScriptRoot 'VscWizard.CreateHelper.cs'
+        $helperSource = Join-Path $script:CoreModuleDir 'VscWizard.CreateHelper.cs'
         if (-not (Test-Path $helperSource)) {
             $msg = (T 'Helfer-Quelldatei nicht gefunden: {0}') -f $helperSource
             Write-WizardLog -Message $msg -Level Error

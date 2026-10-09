@@ -154,6 +154,12 @@ function Close-Splash {
 if (-not ($script:HeadlessMode -or $AutoStart)) { $null = Show-SplashScreen }
 
 Update-Splash -Text (L 'Kernmodul laden...' 'Loading core module...') -Percent 25
+# Ausführungsrichtlinie NUR für diesen Prozess (Bereich "Process") freigeben: Die EXE lädt
+# ihr Kernmodul als .psm1 nach - unter der Windows-Standardrichtlinie "Restricted"
+# (frische Clients) wird das sonst blockiert. Über die Umgebungsvariable gilt das auch für
+# Start-Job-Hintergrundaufträge und Kindprozesse. Systemweit ändert sich nichts.
+# (Unter Intune/PSADT fiel es nicht auf: dort erben Kindprozesse bereits "Bypass".)
+$env:PSExecutionPolicyPreference = 'Bypass'
 $script:ModulePath = Join-Path $script:BaseDir 'modules\VscWizard.Core.psm1'
 if (-not (Test-Path $script:ModulePath)) {
     Close-Splash
@@ -162,9 +168,20 @@ if (-not (Test-Path $script:ModulePath)) {
         (L 'VSC-Wizard - Start fehlgeschlagen' 'VSC Wizard - start failed'), 'OK', 'Error') | Out-Null
     exit 1
 }
+$script:ModuleLoadError = $null
 try {
     Import-Module $script:ModulePath -Force -ErrorAction Stop
-} catch {
+} catch [System.Management.Automation.PSSecurityException] {
+    # Gruppenrichtlinie erzwingt eine strengere Richtlinie (z.B. AllSigned) - der Bereich
+    # "Process" greift dann nicht. Rückfall: Modul aus dem Dateiinhalt laden.
+    try {
+        $env:VSCWIZARD_MODULEDIR = Split-Path -Parent $script:ModulePath
+        $coreText = [IO.File]::ReadAllText($script:ModulePath, [Text.Encoding]::UTF8)
+        New-Module -Name 'VscWizard.Core' -ScriptBlock ([scriptblock]::Create($coreText)) | Import-Module -Force -ErrorAction Stop
+    } catch { $script:ModuleLoadError = $_ }
+} catch { $script:ModuleLoadError = $_ }
+if ($script:ModuleLoadError) {
+    $_ = $script:ModuleLoadError
     Close-Splash
     [System.Windows.Forms.MessageBox]::Show(
         ((L "Das Kernmodul konnte nicht geladen werden:`r`n{0}`r`n`r`nPfad: {1}" "The core module could not be loaded:`r`n{0}`r`n`r`nPath: {1}") -f $_.Exception.Message, $script:ModulePath),
