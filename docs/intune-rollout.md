@@ -140,7 +140,7 @@ angelegten Karten, keine Start-PIN aus der Seriennummer.
 
 **Intune: nur EINE Win32-App (Gerät, SYSTEM)**
 - Install: `VscWizard.exe -Install` · Uninstall: `"%ProgramFiles%\VSC-Wizard\VscWizard.exe" -Uninstall`
-- Erkennung: **`dist\intune\Detect-VscWizard.ps1`** (von `build.ps1` mit der gebauten
+- Erkennung: **IntuneWin32Helper-Standard** (ArpName `VSC-Wizard`, vergleicht `DisplayVersion` mit der Spalte `Version` in `Apps.csv` — **pro Release auf die Build-Version setzen**, sonst erkennt Intune die alte Installation als aktuell). Alternativ **`dist\intune\Detect-VscWizard.ps1`** (von `build.ps1` mit der gebauten
   Version erzeugt — mit **jedem** Paket neu hochladen). Erkannt nur, wenn installierte
   Version **>=** Paketversion (+ EXE + SYSTEM-Aufgabe vorhanden); liest die 64-Bit-
   Registry auch als 32-Bit-Skript. Alternativ ArpName `VSC-Wizard` (ohne Versionsprüfung).

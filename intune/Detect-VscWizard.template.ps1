@@ -1,7 +1,7 @@
 ﻿# Intune-Erkennungsskript für die VSC-Wizard-Geräte-App (VscWizard.exe -Install).
 # Intune wertet eine App als installiert, wenn das Skript mit 0 endet UND etwas ausgibt.
 #
-# VERSION: build.ps1 schreibt eine Kopie mit der gebauten Version nach
+# VORLAGE - nicht direkt hochladen! build.ps1 schreibt eine Kopie mit der gebauten Version nach
 # dist\intune\Detect-VscWizard.ps1 - DIESE Kopie zum jeweiligen Paket in Intune
 # hochladen. Erkannt wird nur "installierte Version >= erwartete Version": ein neues Paket
 # erkennt die ältere Installation als fehlend, Intune installiert drüber (Update ohne

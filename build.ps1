@@ -140,7 +140,7 @@ try {
         Write-Host "version.txt: 1.0.$($verCount.ToString().Trim()) ($verCommit, $verDate)"
         # Intune-Erkennungsskript mit DIESER Version (zum Paket hochladen): erkannt wird nur
         # "installierte Version >= gebaute Version" -> neue Pakete installieren über ältere.
-        $detSrc = Join-Path $PSScriptRoot 'intune\Detect-VscWizard.ps1'
+        $detSrc = Join-Path $PSScriptRoot 'intune\Detect-VscWizard.template.ps1'
         if (Test-Path $detSrc) {
             $detDir = Join-Path $OutputDir 'intune'
             if (-not (Test-Path $detDir)) { New-Item -ItemType Directory -Path $detDir -Force | Out-Null }
@@ -170,6 +170,7 @@ Write-Host ''
 Write-Host "Fertig. Ausgabe in: $OutputDir"
 Write-Host '  VscWizard.Submit.exe  - eigenstaendig (auf den RDP-/Einreich-Host kopieren).'
 Write-Host '  VscWizard.exe         - zusammen mit dem Ordner modules\ und config.psd1 verteilen.'
+if ($script:BuildVersion) { Write-Host "  Intune (IntuneWin32Helper): in Apps.csv Version = $($script:BuildVersion) setzen und dist\* in den Files-Ordner von 'VSC-Wizard - $($script:BuildVersion)' legen." }
 if ($helperArm64Exe) {
     Write-Host '  helper-arm64\         - mitverteilen (nativer PIN-Dialog/COM-Weg auf ARM64-Geraeten).'
 }
