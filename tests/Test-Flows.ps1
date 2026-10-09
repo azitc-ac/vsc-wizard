@@ -344,6 +344,23 @@ if (-not (OwnVisible $btnStartA) -or $btnNextShared.Text -ne (T 'Weiter')) { $gl
 # Verwaltung in der Benutzeransicht: nur die eigene Karte, ohne Löschen.
 $global:ClickInDialog = $null
 function global:Invoke-HarnessDialogInv($d) { $global:InvDlg = $d; return [System.Windows.Forms.DialogResult]::Cancel }
+# --- Nach erfolgreicher Ausstellung kein zweiter Antrag (Plan A "Anfordern", Plan B "Übernehmen") ---
+$global:Log.Add('=== Ausstellung: Knöpfe nach Erfolg gesperrt ===')
+Reset-Run
+$script:SimpleMode = $false
+$card = [pscustomobject]@{ FriendlyName = 'VSC-T'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' }
+Step 'A: Anfordern vor Ausstellung' { Enter-PlanARenewal -Reader $card -TargetAccount $null }
+if (-not $btnRequestCertA.Enabled) { $global:Errors.Add('[Ausstellung A] "Zertifikat anfordern" vor der Ausstellung gesperrt') }
+$script:PlanA_CertIssued = $true
+Step 'A: nach Ausstellung' { Show-PlanAStep -Index 1 }
+if ($btnRequestCertA.Enabled) { $global:Errors.Add('[Ausstellung A] "Zertifikat anfordern" nach erfolgreicher Ausstellung noch aktiv') }
+Step 'A: neuer Durchlauf' { Enter-PlanARenewal -Reader $card -TargetAccount $null }
+if (-not $btnRequestCertA.Enabled) { $global:Errors.Add('[Ausstellung A] neuer Durchlauf: "Zertifikat anfordern" bleibt gesperrt') }
+$script:PlanB_CertIssued = $true
+Step 'B: nach Übernahme' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdoe@contoso.com'; $script:PlanB_CertIssued = $true; Show-PlanBStep -Index 5 }
+if ($btnCompleteB.Enabled -or $btnCompleteFromTextB.Enabled) { $global:Errors.Add('[Ausstellung B] "Übernehmen" nach erfolgreicher Übernahme noch aktiv') }
+Step 'B: neuer Durchlauf' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdoe@contoso.com'; Show-PlanBStep -Index 5 }
+if (-not $btnCompleteB.Enabled) { $global:Errors.Add('[Ausstellung B] neuer Durchlauf: "Übernehmen" bleibt gesperrt (Zustand des vorigen Durchlaufs)') }
 # Resume-Datei des Benutzers wiederherstellen
 & $restoreResume
 

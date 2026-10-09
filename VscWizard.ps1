@@ -1828,6 +1828,16 @@ function Show-VscPickerDialog {
 # offen ist, ist "Anfordern"/"Einreichen" gesperrt (ein zweiter Klick erzeugte einen
 # weiteren Antrag mit neuem Schlüssel); nur "Zertifikat abrufen" ist sinnvoll. Wieder
 # frei nach Ablehnung durch die CA oder beim Neustart eines Ablaufs.
+function Update-IssueButtons {
+    # EINE Stelle für "darf jetzt (noch) ausgestellt/übernommen werden?": nach erfolgreicher
+    # Ausstellung sind "Zertifikat anfordern" (Plan A) bzw. "Übernehmen" (Plan B) gesperrt -
+    # ein zweiter Klick erzeugte einen weiteren Antrag mit neuem Schlüssel auf derselben
+    # Karte. Bei wartendem Antrag bleibt "Anfordern" ebenfalls gesperrt (nur "Abrufen").
+    $btnRequestCertA.Enabled = -not $script:PlanA_CertIssued -and -not $script:PlanA_PendingRequestId
+    $btnCompleteB.Enabled = -not $script:PlanB_CertIssued
+    $btnCompleteFromTextB.Enabled = -not $script:PlanB_CertIssued
+}
+
 function Reset-PlanARequestUi {
     $script:PlanA_PendingRequestId = $null
     $lblCertResultA.Text = ''
@@ -1889,6 +1899,7 @@ function Enter-PlanBRenewal {
     $script:PlanB_CardName = $Reader.FriendlyName
     $script:PlanB_PcscName = $Reader.PcscName
     $script:PlanB_CsrPath = $null
+    $script:PlanB_CertIssued = $false   # vorher fehlte das: Zustand des vorigen Durchlaufs
     Reset-PlanBSubmitUi
     $script:PlanB_RenewMode = $true
     $script:PlanEntryFrom = 'Scenario'
@@ -2408,7 +2419,7 @@ $btnRequestCertA.Add_Click({
         $lblCertResultA.ForeColor = [System.Drawing.Color]::Firebrick
         $lblCertResultA.Text = (T 'Übernahme des Zertifikats fehlgeschlagen. Details siehe Log.')
     }
-    $btnRequestCertA.Enabled = $true
+    Update-IssueButtons   # nach Erfolg gesperrt, nach Fehler wieder frei
 })
 
 $btnRetrieveA.Add_Click({
@@ -2587,6 +2598,7 @@ function Show-PlanAStep {
         $panels[$i].Visible = ($i -eq $Index)
     }
     $script:PlanACurrentStep = $Index
+    Update-IssueButtons
     # Globale Schrittnummer: +2, da Schritt 1 (Szenario) davor liegt.
     $lblGlobalStep.Text = $planAStepTitles[$Index]
     if ($script:SimpleMode) {
@@ -3122,7 +3134,7 @@ $btnCompleteFromTextB.Add_Click({
     Set-Content -Path $pastedCerPath -Value $cerClean -Encoding ASCII -NoNewline
     Complete-PlanBEnrollment -CerPath $pastedCerPath
     Remove-Item -Path $pastedCerPath -ErrorAction SilentlyContinue
-    $btnCompleteFromTextB.Enabled = $true
+    Update-IssueButtons   # nach Erfolg gesperrt, nach Fehler wieder frei
 })
 
 $btnCompleteB.Add_Click({
@@ -3145,7 +3157,7 @@ $btnCompleteB.Add_Click({
     } catch { }
     $btnCompleteB.Enabled = $false
     Complete-PlanBEnrollment -CerPath $cerPathToUse
-    $btnCompleteB.Enabled = $true
+    Update-IssueButtons   # nach Erfolg gesperrt, nach Fehler wieder frei
 })
 
 $btnResetB.Add_Click({
@@ -3212,6 +3224,7 @@ function Show-PlanBStep {
         $panels[$i].Visible = ($i -eq $Index)
     }
     $script:PlanBCurrentStep = $Index
+    Update-IssueButtons
     # Globale Schrittnummer: +1, da Schritt 1 (Moduswahl) davor liegt.
     $lblGlobalStep.Text = $planBStepTitles[$Index]
     Update-Stepper -Labels (@((T 'Szenario')) + $planBStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 2 = "$($script:PlanB_CardName)" }
