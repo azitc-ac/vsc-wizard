@@ -2531,7 +2531,9 @@ function Get-VscServicePaths {
         RegRoot    = 'HKLM:\SOFTWARE\VSC-Wizard'
         CreateTask = 'VSC-Wizard CreateCard'
         LogonTask  = 'VSC-Wizard Setup'
-        Shortcut   = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Smartcard einrichten.lnk'
+        # Startmenü-Eintrag in der Gerätesprache (Install -ShortcutName); Uninstall räumt alle Varianten.
+        StartMenuDir   = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+        ShortcutNames  = @('Smartcard einrichten', 'Set up smart card')
         # Eintrag in "Apps & Features" (Intune-Erkennung/-Deinstallation per ArpName "VSC-Wizard").
         ArpKey     = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VSC-Wizard'
     }
@@ -2771,7 +2773,10 @@ function Install-VscCardService {
     # Rechten, SYSTEM-Aufgabe "CreateCard" (nur startbar für Benutzer), Anmelde-Aufgabe
     # "Setup" (startet -Simple -AutoStart), Startmenü-Eintrag, HKLM-Marker.
     # Rückgabe: 0 ok, 3 nicht eleviert, 1618 Assistent gerade offen (später erneut), 1 Fehler.
-    param([Parameter(Mandatory)][string]$SourceDir, $Paths = (Get-VscServicePaths), [int]$LogonDelaySeconds = 30)
+    param([Parameter(Mandatory)][string]$SourceDir, $Paths = (Get-VscServicePaths), [int]$LogonDelaySeconds = 30,
+        # Name des Startmenü-Eintrags (Sprache: VscWizard.ps1 übergibt "Smartcard einrichten"
+        # bzw. "Set up smart card" je nach Konfiguration/Gerätesprache).
+        [string]$ShortcutName = 'Smartcard einrichten')
     $log = { param($m) Write-VscServiceLog -Message $m -LogFile $Paths.LogFile }
     if (-not (Test-Path $Paths.DataDir)) { New-Item -ItemType Directory -Path $Paths.DataDir -Force | Out-Null }
     if (-not (Test-IsElevated)) { & $log 'Install: nicht eleviert - muss als Admin/SYSTEM laufen.'; return 3 }
@@ -2819,7 +2824,9 @@ function Install-VscCardService {
 
         # Startmenü: "Smartcard einrichten" (Weg zurück, z.B. nach "Später").
         try {
-            $sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut($Paths.Shortcut)
+            # Variante der anderen Sprache (z.B. aus einer früheren Installation) entfernen.
+            foreach ($n in $Paths.ShortcutNames) { $old = Join-Path $Paths.StartMenuDir "$n.lnk"; if ($n -ne $ShortcutName -and (Test-Path $old)) { [IO.File]::Delete($old) } }
+            $sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut((Join-Path $Paths.StartMenuDir "$ShortcutName.lnk"))
             if (Test-Path $exe) { $lnk.TargetPath = $exe; $lnk.Arguments = '-Simple' }
             else { $lnk.TargetPath = 'powershell.exe'; $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $Paths.ProgramDir 'VscWizard.ps1')`" -Simple" }
             $lnk.WorkingDirectory = $Paths.ProgramDir; $lnk.Save()
@@ -2857,7 +2864,7 @@ function Uninstall-VscCardService {
     $log = { param($m) Write-VscServiceLog -Message $m -LogFile $Paths.LogFile }
     if (-not (Test-IsElevated)) { & $log 'Uninstall: nicht eleviert.'; return 3 }
     foreach ($t in $Paths.CreateTask, $Paths.LogonTask) { try { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction Stop } catch { } }
-    try { if (Test-Path $Paths.Shortcut) { [IO.File]::Delete($Paths.Shortcut) } } catch { }
+    foreach ($n in $Paths.ShortcutNames) { try { $lnkPath = Join-Path $Paths.StartMenuDir "$n.lnk"; if (Test-Path $lnkPath) { [IO.File]::Delete($lnkPath) } } catch { } }
     try { Remove-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion', 'ServiceInstalledAt' -ErrorAction SilentlyContinue } catch { }
     try { [Microsoft.Win32.Registry]::LocalMachine.DeleteSubKeyTree('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VSC-Wizard', $false) } catch { & $log "Uninstall: Eintrag in Apps & Features nicht entfernt: $($_.Exception.Message)" }
     if (Test-Path $Paths.ProgramDir) {

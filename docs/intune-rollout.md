@@ -166,7 +166,7 @@ angelegten Karten, keine Start-PIN aus der Seriennummer.
      starten** (`D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)`).
   4. Aufgabe **„VSC-Wizard Setup“**: Gruppe „Benutzer“, Auslöser **bei jeder Anmeldung**
      (30 s verzögert), `-Simple -AutoStart`, in der Sitzung des Benutzers.
-  5. Startmenü „Smartcard einrichten“ (`-Simple`) als Weg zurück (z.B. nach „Später“).
+  5. Startmenü „Smartcard einrichten“ bzw. „Set up smart card“ (Sprache aus config/Gerät, `-Simple`) als Weg zurück (z.B. nach „Später“).
 
 **Ablauf beim Benutzer**
 1. Anmeldung → nach 30 s startet „VSC-Wizard Setup“ → `-AutoStart` beendet sich **still**,

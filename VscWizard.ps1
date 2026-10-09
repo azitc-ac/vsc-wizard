@@ -65,6 +65,13 @@ try {
     if ($selfExe -notmatch '\\(powershell|pwsh)\.exe$') { $script:AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($selfExe) }
     elseif (Test-Path (Join-Path $script:BaseDir 'assets\VscWizard.ico')) { $script:AppIcon = New-Object System.Drawing.Icon((Join-Path $script:BaseDir 'assets\VscWizard.ico')) }
 } catch { }
+# Großes Kartenbild (256-px-PNG, build.ps1 legt es neben die EXE) für die Schritt-Seiten;
+# sonst das Programm-Icon.
+$script:CardImage = $null
+foreach ($img in @((Join-Path $script:BaseDir 'VscWizard.png'), (Join-Path $script:BaseDir 'assets\VscWizard.png'))) {
+    if (-not $script:CardImage -and (Test-Path $img)) { try { $script:CardImage = [System.Drawing.Image]::FromFile($img) } catch { } }
+}
+if (-not $script:CardImage -and $script:AppIcon) { try { $script:CardImage = $script:AppIcon.ToBitmap() } catch { } }
 
 # --- Sprache GANZ AM ANFANG festlegen (einzige Entscheidung, gilt für alles) ---------
 # Der Splash läuft vor dem Laden des Kernmoduls (wo T/Übersetzungen leben) - daher hier:
@@ -253,7 +260,7 @@ if ($Provision) {
     exit (Invoke-VscProvision)
 }
 # Per-Benutzer-Karten (Variante 2): fensterlose Modi für Intune und die SYSTEM-Aufgabe.
-if ($Install) { exit (Install-VscCardService -SourceDir $script:BaseDir) }
+if ($Install) { exit (Install-VscCardService -SourceDir $script:BaseDir -ShortcutName (L 'Smartcard einrichten' 'Set up smart card')) }   # Startmenü in Konfigurations-/Gerätesprache
 if ($Uninstall) { exit (Uninstall-VscCardService) }
 if ($ProcessRequests) {
     try { Initialize-WizardLog -LogBox $null } catch { }
@@ -270,6 +277,22 @@ if ($AutoStart) {
 }
 
 Update-Splash -Text (T 'Oberfläche wird aufgebaut...') -Percent 55
+
+function New-CardPicture {
+    # Großes Kartensymbol (96 px) für die Schritt-Seiten mit Kartenbezug.
+    param([int]$X, [int]$Y, [int]$Size = 96)
+    $pb = New-Object System.Windows.Forms.PictureBox
+    $pb.Location = New-Object System.Drawing.Point($X, $Y); $pb.Size = New-Object System.Drawing.Size($Size, $Size)
+    $pb.SizeMode = 'Zoom'; $pb.BackColor = [System.Drawing.Color]::Transparent
+    if ($script:CardImage) { $pb.Image = $script:CardImage }
+    return $pb
+}
+
+function Get-VscCardCount {
+    # Anzahl virtueller Smartcards: erst ab ZWEI zeigt Windows einen Kartenauswahl-Dialog -
+    # nur dann ist der Hinweis "Karte ... wählen" sinnvoll (bei einer Karte verwirrt er).
+    try { return @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName }).Count } catch { return 0 }
+}
 
 function New-WizardLabel {
     param(
@@ -2286,7 +2309,10 @@ $pnlA3 = New-Object System.Windows.Forms.Panel
 $pnlA3.Dock = 'Fill'
 $pnlStepsA.Controls.Add($pnlA3)
 
-$lblCardHintA = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 44
+# Großes Kartensymbol links; rechts daneben der Kartenhinweis (nur bei mehreren VSCs,
+# siehe Show-PlanAStep). Die Zeilenhöhe bestimmt das Symbol - mit und ohne Hinweis gleich.
+$picCardA = New-CardPicture -X 20 -Y 16
+$lblCardHintA = New-WizardLabel -Text '' -X 136 -Y 40 -Width 664 -Height 44
 $lblCardHintA.ForeColor = [System.Drawing.Color]::ForestGreen
 $lblCardHintA.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
 
@@ -2326,7 +2352,7 @@ $btnRetrieveA.Location = New-Object System.Drawing.Point(20, 248)
 $btnRetrieveA.Size = New-Object System.Drawing.Size(260, 32)
 $btnRetrieveA.Visible = $false
 
-$pnlA3.Controls.AddRange(@($lblCardHintA, $lblTemplateA, $cboTemplateA, $lblTemplateHintA, $btnRequestCertA, $lblPinHintA, $lblCertResultA, $btnRetrieveA))
+$pnlA3.Controls.AddRange(@($picCardA, $lblCardHintA, $lblTemplateA, $cboTemplateA, $lblTemplateHintA, $btnRequestCertA, $lblPinHintA, $lblCertResultA, $btnRetrieveA))
 
 $btnRequestCertA.Add_Click({
     # Fuer ein separates Zielkonto gibt es zwei direkte Wege:
@@ -2620,7 +2646,7 @@ function Show-PlanAStep {
         1 {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N".
-            $lblCardHintA.Text = if ($script:PlanA_PcscName) {
+            $lblCardHintA.Text = if ($script:PlanA_PcscName -and (Get-VscCardCount) -gt 1) {
                 ((T "➜ Im Windows-Kartenauswahl-Dialog die Karte `"{0}`" wählen  (= '{1}').") -f $script:PlanA_PcscName, $script:PlanA_CardName)
             } else { '' }
             Update-OfflineTemplateChoices
@@ -2756,7 +2782,8 @@ $pnlB3 = New-Object System.Windows.Forms.Panel
 $pnlB3.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB3)
 
-$lblCsrInfoB = New-WizardLabel -Text (T 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Windows fragt dabei ggf. mehrmals nach der PIN der Smartcard - das ist normal.') -X 20 -Y 20 -Width 780 -Height 48
+$picCardB = New-CardPicture -X 20 -Y 16
+$lblCsrInfoB = New-WizardLabel -Text (T 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Windows fragt dabei ggf. mehrmals nach der PIN der Smartcard - das ist normal.') -X 136 -Y 40 -Width 664 -Height 48
 
 $btnCreateCsrB = New-Object System.Windows.Forms.Button
 $btnCreateCsrB.Text = (T 'CSR erstellen')
@@ -2793,7 +2820,7 @@ $btnCopyCsrTextB.Text = (T 'CSR-Text kopieren')
 $btnCopyCsrTextB.Location = New-Object System.Drawing.Point(20, 380)
 $btnCopyCsrTextB.Size = New-Object System.Drawing.Size(160, 28)
 
-$pnlB3.Controls.AddRange(@($lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB))
+$pnlB3.Controls.AddRange(@($picCardB, $lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB))
 
 $btnCreateCsrB.Add_Click({
     if (-not $script:PlanB_VscCreated) {
@@ -3237,7 +3264,7 @@ function Show-PlanBStep {
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N" -
             # deshalb auffällig hervorheben (gemeinsamer Stil, siehe Set-CardHintLook).
-            if ($script:PlanB_PcscName) {
+            if ($script:PlanB_PcscName -and (Get-VscCardCount) -gt 1) {
                 Set-CardHintLook -Label $lblCsrInfoB -Active $true
                 $lblCsrInfoB.Text = ((T "➜ Im Windows-Kartenauswahl-Dialog die Karte `"{0}`" wählen  (= '{1}'). Danach ggf. PIN-Dialog.") -f $script:PlanB_PcscName, $script:PlanB_CardName)
             } else {
@@ -4255,6 +4282,9 @@ function Test-OwnVisible([System.Windows.Forms.Control]$Control) {
     return [bool]$script:StateMethod.Invoke($Control, @(2))
 }
 $script:Reflow = @{}   # Seite -> @{ Rows; Orig; Busy }
+# Control -> Anker: das Control wird in seiner Zeile vertikal mittig zum Anker gesetzt
+# (Kartenhinweis neben dem großen Kartensymbol, ein- oder zweizeilig).
+$script:ReflowVCenter = @{}
 function Initialize-PageReflow {
     param([System.Windows.Forms.Panel]$Page)
     $orig = @{}
@@ -4300,11 +4330,24 @@ function Invoke-PageReflow {
                 $c.Top = $top + ($o.Top - $row.Top)
                 if ($c.Bottom -gt $bottom) { $bottom = $c.Bottom }
             }
+            foreach ($c in $items) {
+                $anchor = $script:ReflowVCenter[$c]
+                if ($anchor -and ($items -contains $anchor)) { $c.Top = [int]($anchor.Top + ($anchor.Height - $c.Height) / 2) }
+            }
             $prevBottom = $bottom
         }
         $h = if ($null -eq $prevBottom) { 40 } else { $prevBottom + 20 }
         if ($Page.Height -ne $h) { $Page.Height = $h }
     } finally { $info.Busy = $false }
+}
+$script:ReflowVCenter[$lblCardHintA] = $picCardA
+$script:ReflowVCenter[$lblCsrInfoB] = $picCardB
+# Kartensymbol-Zeile (96 px) oben: alle übrigen Elemente dieser Seiten darunter einreihen,
+# sonst zöge die Zeilenbildung (nach ursprünglicher Höhe) sie in dieselbe Zeile.
+foreach ($pg in @(@($pnlA3, $picCardA, $lblCardHintA), @($pnlB3, $picCardB, $lblCsrInfoB))) {
+    $minTop = @($pg[0].Controls | Where-Object { $_ -ne $pg[1] -and $_ -ne $pg[2] } | ForEach-Object { $_.Top } | Measure-Object -Minimum).Minimum
+    $shift = ($pg[1].Bottom + 16) - $minTop
+    if ($shift -gt 0) { foreach ($c in @($pg[0].Controls | Where-Object { $_ -ne $pg[1] -and $_ -ne $pg[2] })) { $c.Top += $shift } }
 }
 foreach ($stepHost in @($pnlStepsA, $pnlStepsB)) {
     $stepHost.AutoScroll = $true

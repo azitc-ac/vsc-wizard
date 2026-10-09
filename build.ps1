@@ -102,6 +102,7 @@ if (Test-Path $logoSrc) {
     $logoDir = Join-Path $OutputDir 'intune'
     if (-not (Test-Path $logoDir)) { New-Item -ItemType Directory -Path $logoDir -Force | Out-Null }
     Copy-Item -Path $logoSrc -Destination (Join-Path $logoDir 'VscWizard.png') -Force
+    Copy-Item -Path $logoSrc -Destination (Join-Path $OutputDir 'VscWizard.png') -Force   # großes Kartensymbol in den Schritt-Seiten
 }
 $configLocal = Join-Path $PSScriptRoot 'config.local.psd1'
 $configSrc = if (Test-Path $configLocal) { $configLocal } else { Join-Path $PSScriptRoot 'config.psd1' }
