@@ -471,6 +471,76 @@ $r = Select-ExistingVscReal
 if (-not @($global:Msgs | Select-Object -Skip $before | Where-Object { $_ -like '*Keine VSC vorhanden*' })) { $global:Errors.Add('[Andere Karten] Einstellung aus: bisherige Meldung "Keine VSC vorhanden" fehlt') }
 $config.Remove('AllowPhysicalCards')
 
+# --- Zertifikate nur auf der Karte (CertPropSvc hat sie noch nicht in den Speicher kopiert) ---
+$global:Log.Add('=== Kartenzertifikate: Speicher + Karte zusammenführen ===')
+$rd7 = 'Microsoft Virtual Smart Card 7'
+$stA = [pscustomobject]@{ Subject = 'CN=a'; Upn = 'a@contoso.com'; Thumbprint = 'AAAA'; NotBefore = (Get-Date).AddDays(-30); NotAfter = (Get-Date).AddYears(1); Provider = 'Microsoft Smart Card Key Storage Provider'; Reader = $rd7; KeyContainerName = 'tq-a'; IsSmartCard = $true; DetectionError = $null }
+$stB = [pscustomobject]@{ Subject = 'CN=b'; Upn = $null; Thumbprint = 'BBBB'; NotBefore = (Get-Date).AddDays(-60); NotAfter = (Get-Date).AddYears(1); Provider = $null; Reader = $null; KeyContainerName = $null; IsSmartCard = $false; DetectionError = 'x' }
+$cdA = [pscustomobject]@{ Reader = $rd7; Container = 'tq-a'; Thumbprint = 'AAAA'; Subject = 'CN=a'; Upn = 'a@contoso.com'; NotBefore = $stA.NotBefore; NotAfter = $stA.NotAfter; RawData = [byte[]](1, 2) }
+$cdB = [pscustomobject]@{ Reader = $rd7; Container = 'tq-b'; Thumbprint = 'BBBB'; Subject = 'CN=b'; Upn = $null; NotBefore = $stB.NotBefore; NotAfter = $stB.NotAfter; RawData = [byte[]](3) }
+$cdD = [pscustomobject]@{ Reader = $rd7; Container = 'tq-d'; Thumbprint = 'DDDD'; Subject = 'CN=d'; Upn = 'd@contoso.com'; NotBefore = (Get-Date); NotAfter = (Get-Date).AddYears(2); RawData = [byte[]](4, 5, 6) }
+$cdW = [pscustomobject]@{ Reader = 'Windows Hello for Business 1'; Container = '{x}'; Thumbprint = 'EEEE'; Subject = 'CN=w'; Upn = $null; NotBefore = (Get-Date); NotAfter = (Get-Date).AddYears(30); RawData = [byte[]](7) }
+$m = @(Merge-SmartCardCertificateSources -StoreEntries @($stA, $stB) -CardEntries @($cdA, $cdB, $cdD, $cdD, $cdW))
+if ($m.Count -ne 3) { $global:Errors.Add("[Kartenzertifikate] erwartet 3 Einträge (A, B, D), erhalten $($m.Count): $(($m | ForEach-Object Thumbprint) -join ',')") }
+$mD = @($m | Where-Object Thumbprint -eq 'DDDD')
+if ($mD.Count -ne 1 -or $mD[0].InStore -ne $false -or $mD[0].Reader -ne $rd7 -or $mD[0].KeyContainerName -ne 'tq-d' -or -not $mD[0].IsSmartCard -or $mD[0].RawData.Length -ne 3) { $global:Errors.Add('[Kartenzertifikate] nur auf der Karte liegendes Zertifikat fehlt oder ist falsch markiert') }
+if (@($m | Where-Object { $_.Thumbprint -in 'AAAA', 'BBBB' -and $_.InStore -ne $true }).Count) { $global:Errors.Add('[Kartenzertifikate] Speicher-Zertifikat als "nicht im Speicher" markiert bzw. doppelt') }
+$mB = $m | Where-Object Thumbprint -eq 'BBBB'
+if ($mB.Reader -ne $rd7 -or $mB.KeyContainerName -ne 'tq-b' -or -not $mB.IsSmartCard) { $global:Errors.Add('[Kartenzertifikate] Speicher-Zertifikat ohne Leser wurde nicht über die Karte zugeordnet') }
+if (@($m | Where-Object Thumbprint -eq 'EEEE').Count) { $global:Errors.Add('[Kartenzertifikate] Windows-Hello-Zertifikat als Smartcard-Zertifikat übernommen') }
+# Gegenprobe: ohne Kartenfunde bleibt alles wie bisher (kein Eintrag "nur auf der Karte", nichts zugeordnet).
+$g = @(Merge-SmartCardCertificateSources -StoreEntries @($stA, $stB) -CardEntries @())
+if ($g.Count -ne 2 -or @($g | Where-Object { $_.InStore -ne $true }).Count -or ($g | Where-Object Thumbprint -eq 'BBBB').Reader) { $global:Errors.Add('[Kartenzertifikate Gegenprobe] ohne Kartenfunde verändert die Zusammenführung den Speicherbestand') }
+if ($stB.Reader) { $global:Errors.Add('[Kartenzertifikate] Eingabeobjekt verändert (Speicher-Eintrag B)') }
+# Lookup-Zeilen -> Objekte: leerer Container übersprungen, Müll ignoriert.
+$conv = @(ConvertFrom-SmartCardCertificateLines -Line @("Card=$rd7|tq-leer|", "Card=$rd7|tq-kaputt|@@@", 'Begin=AAAA'))
+if ($conv.Count -ne 0) { $global:Errors.Add("[Kartenzertifikate] Zeilen ohne gültiges Zertifikat ergeben $($conv.Count) Einträge") }
+
+# Inventar: "nur auf der Karte" -> Hinweis + "In Speicher übernehmen"; danach (Gegenprobe) gesperrt.
+$global:Log.Add('=== Kartenzertifikate: Inventar ===')
+$cardOnlyCert = (Merge-SmartCardCertificateSources -StoreEntries @($stA) -CardEntries @($cdD))
+$stD = [pscustomobject]@{ Subject = 'CN=d'; Upn = 'd@contoso.com'; Thumbprint = 'DDDD'; NotBefore = $cdD.NotBefore; NotAfter = $cdD.NotAfter; Provider = 'Microsoft Smart Card Key Storage Provider'; Reader = $rd7; KeyContainerName = 'tq-d'; IsSmartCard = $true; DetectionError = $null }
+$afterImport = Merge-SmartCardCertificateSources -StoreEntries @($stA, $stD) -CardEntries @($cdD)
+function Get-SmartCardCertificates { param([string]$StoreLocation) if ($global:ImportedRaw) { $afterImport } else { $cardOnlyCert } }
+function Import-SmartCardCertificateToStore { param([byte[]]$RawData, [string]$ContainerName, [string]$Provider) $global:ImportedRaw = $RawData; $global:ImportedContainer = $ContainerName; return [pscustomobject]@{ Success = $true; Message = '' } }
+$global:ImportedRaw = $null; $global:InvRounds = @()
+$origHarness = ${function:global:Invoke-HarnessDialog}
+function global:Invoke-HarnessDialog($d) {
+    $ctl = @(); $stack = New-Object System.Collections.Stack; $stack.Push($d)
+    while ($stack.Count) { $c = $stack.Pop(); $ctl += $c; foreach ($k in $c.Controls) { $stack.Push($k) } }
+    $btn = $ctl | Where-Object { $_ -is [System.Windows.Forms.Button] -and $_.Text -eq (T 'In Speicher übernehmen') } | Select-Object -First 1
+    $lbl = $ctl | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq (T 'Liegt auf der Karte, fehlt im Zertifikatsspeicher.') } | Select-Object -First 1
+    $lv = @($ctl | Where-Object { $_ -is [System.Windows.Forms.ListView] })
+    # Ohne Fenster-Handle feuert die Auswahl nicht: Handles anlegen, Karte wie ein Benutzer wählen.
+    foreach ($x in $lv) { $null = $x.Handle }
+    $cardItem = @($lv[0].Items) | Select-Object -First 1
+    if ($cardItem) { $cardItem.Selected = $false; $cardItem.Selected = $true }
+    $status = @($lv | ForEach-Object { $_.Items } | Where-Object { $_.SubItems.Count -gt 2 } | ForEach-Object { $_.SubItems[2].Text })
+    $global:InvRounds += [pscustomobject]@{ Enabled = [bool]($btn -and $btn.Enabled); Hint = [bool]($lbl -and (OwnVisible $lbl)); Status = $status }
+    if ($btn -and $btn.Enabled -and $global:InvRounds.Count -eq 1) { $onClick.Invoke($btn, @([EventArgs]::Empty)) }
+    $d.Dispose(); return [System.Windows.Forms.DialogResult]::Cancel
+}
+Step 'Inventar mit Zertifikat nur auf der Karte' { Show-VscInventoryDialog -Owner $form }
+Set-Item -Path function:global:Invoke-HarnessDialog -Value $origHarness
+if ($global:InvRounds.Count -ne 2) { $global:Errors.Add("[Kartenzertifikate Inventar] erwartet Übernahme + Neuaufbau (2 Durchläufe), erhalten $($global:InvRounds.Count): $(($global:InvRounds | ForEach-Object { "Knopf=$($_.Enabled) Hinweis=$($_.Hint) Status=$($_.Status -join '/')" }) -join '; ')") }
+elseif (-not $global:InvRounds[0].Enabled -or -not $global:InvRounds[0].Hint -or $global:InvRounds[0].Status -notcontains (T 'nicht im Speicher')) { $global:Errors.Add("[Kartenzertifikate Inventar] Hinweis/Knopf fehlt: $($global:InvRounds[0] | Out-String)") }
+elseif ($global:InvRounds[1].Enabled -or $global:InvRounds[1].Hint -or $global:InvRounds[1].Status -contains (T 'nicht im Speicher')) { $global:Errors.Add('[Kartenzertifikate Inventar Gegenprobe] nach der Übernahme noch als "nicht im Speicher" angeboten') }
+if (-not $global:ImportedRaw -or $global:ImportedRaw.Length -ne 3 -or $global:ImportedContainer -ne 'tq-d') { $global:Errors.Add('[Kartenzertifikate Inventar] Übernahme nicht mit Zertifikat/Container der Karte aufgerufen') }
+
+# Aufräumen: ein ÄLTERES Zertifikat nur auf der Karte wird mit angeboten (früher erst, nachdem
+# CertPropSvc es kopiert hatte); Gegenprobe nur mit dem Speicher-Zertifikat -> keine Abfrage.
+$global:Log.Add('=== Kartenzertifikate: Aufräumen ===')
+$cdOld = [pscustomobject]@{ Reader = $rd7; Container = 'tq-old'; Thumbprint = 'CCCC'; Subject = 'CN=alt'; Upn = $null; NotBefore = (Get-Date).AddDays(-400); NotAfter = (Get-Date).AddDays(-35); RawData = [byte[]](9) }
+$cleanupCerts = Merge-SmartCardCertificateSources -StoreEntries @($stA) -CardEntries @($cdOld)
+function Get-SmartCardCertificates { param([string]$StoreLocation) $cleanupCerts }
+$global:Msgs.Clear(); $global:MsgAnswer = [System.Windows.Forms.DialogResult]::No
+Step 'Aufräumen mit Zertifikat nur auf der Karte' { Invoke-RenewalCleanup -PcscName $rd7 -UpnOrTerm 'x' }
+$cleanMsg = "$($global:Msgs)"
+if ($cleanMsg -notmatch 'CCCC' -or $cleanMsg -notmatch [regex]::Escape((T 'liegt auf der Karte, fehlt im Zertifikatsspeicher')) -or $cleanMsg -match 'Thumbprint AAAA') { $global:Errors.Add("[Kartenzertifikate Aufräumen] altes Zertifikat nur auf der Karte nicht (richtig) angeboten: '$cleanMsg'") }
+function Get-SmartCardCertificates { param([string]$StoreLocation) @($stA) }
+$global:Msgs.Clear()
+Step 'Aufräumen Gegenprobe (nur Speicher, ein Zertifikat)' { Invoke-RenewalCleanup -PcscName $rd7 -UpnOrTerm 'x' }
+if ($global:Msgs.Count) { $global:Errors.Add('[Kartenzertifikate Aufräumen Gegenprobe] Abfrage trotz nur einem Zertifikat') }
 # Resume-Datei des Benutzers wiederherstellen
 & $restoreResume
 

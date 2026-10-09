@@ -450,7 +450,14 @@
     'Empfohlener Weg: Die Karte wird per RDP zum Server durchgereicht und dort direkt als Zielkonto beschriftet - ohne Antragsdatei und ohne Einreicher.' = 'Recommended: the card is redirected to the server via RDP and written there directly as the target account - no request file, no submitter.'
     "1. `"RDP-Verbindung starten`" - verbindet mit {0} und reicht diese Smartcard durch. Dort anmelden als {1}.`r`n2. Auf dem Server certmgr.msc öffnen: Eigene Zertifikate > Rechtsklick > Alle Aufgaben > Neues Zertifikat anfordern.`r`n3. Active Directory-Registrierungsrichtlinie, Template `"{2}`" ankreuzen, `"Registrieren`".`r`n4. Bei der Kartenauswahl `"{3}`" wählen und die PIN DIESER Karte eingeben.`r`n5. RDP-Sitzung abmelden, dann hier `"Karte prüfen`"." = "1. `"Start RDP connection`" - connects to {0} and redirects this smart card. Sign in there as {1}.`r`n2. On the server open certmgr.msc: Personal > right-click > All Tasks > Request New Certificate.`r`n3. Active Directory Enrollment Policy, tick template `"{2}`", `"Enroll`".`r`n4. In the card selection choose `"{3}`" and enter the PIN of THIS card.`r`n5. Sign out of the RDP session, then `"Check card`" here."
     'Zertifikat für {0} liegt auf der Karte (gültig bis {1}). Fertig.' = 'Certificate for {0} is on the card (valid until {1}). Done.'
-    'Noch kein neues Zertifikat für dieses Konto auf der Karte gefunden. Windows übernimmt Kartenzertifikate erst kurz nach dem Ende der RDP-Sitzung in den Zertifikatsspeicher - einige Sekunden warten und erneut prüfen.' = 'No new certificate for this account found on the card yet. Windows copies card certificates to the certificate store shortly after the RDP session ends - wait a few seconds and check again.'
+    'Noch kein neues Zertifikat für dieses Konto auf der Karte gefunden. Wurde der Antrag in der RDP-Sitzung abgeschlossen und dabei diese Karte gewählt? Danach erneut prüfen.' = 'No new certificate for this account found on the card yet. Was the request completed in the RDP session with this card selected? Then check again.'
     'In der RDP-Sitzung beantragen' = 'Request in the RDP session'
     'Beantragen per RDP' = 'Request via RDP'
+    'nicht im Speicher' = 'not in store'
+    'Liegt auf der Karte, fehlt im Zertifikatsspeicher.' = 'On the card, missing from the certificate store.'
+    'liegt auf der Karte, fehlt im Zertifikatsspeicher' = 'on the card, missing from the certificate store'
+    'In Speicher übernehmen' = 'Add to store'
+    'Zertifikat wurde in den Zertifikatsspeicher übernommen.' = 'The certificate was added to the certificate store.'
+    'Übernahme fehlgeschlagen: {0} Details siehe Log.' = 'Adding to the store failed: {0} See log for details.'
+    '({0} nur auf der Karte)' = '({0} only on the card)'
 }
