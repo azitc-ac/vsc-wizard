@@ -1899,6 +1899,7 @@ function Update-IssueButtons {
 function Reset-PlanBRdpUi {
     # Direktweg (Antrag in der RDP-Sitzung) für einen neuen Durchlauf zurücksetzen.
     $script:PlanB_Fallback = $false
+    $script:PlanB_ForceDirect = $false
     $script:PlanB_RdpEntered = $null
     $lblRdpResultB.Text = ''; $lblRdpSummaryB.Text = ''
 }
@@ -2881,7 +2882,22 @@ $btnCopyCsrTextB.Text = (T 'CSR-Text kopieren')
 $btnCopyCsrTextB.Location = New-Object System.Drawing.Point(20, 380)
 $btnCopyCsrTextB.Size = New-Object System.Drawing.Size(160, 28)
 
-$pnlB3.Controls.AddRange(@($picCardB, $lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB))
+# Physische Karte + fremdes Konto: hier ist CSR + Einreicher der Standardweg; der
+# RDP-Direktweg bleibt als Option (Kartentreiber muss dann auch auf dem Server liegen).
+$lnkTryRdpB = New-Object System.Windows.Forms.LinkLabel
+$lnkTryRdpB.Text = (T 'Stattdessen direkt in der RDP-Sitzung beantragen (der Kartentreiber muss dafür auch auf dem Server installiert sein)')
+$lnkTryRdpB.Location = New-Object System.Drawing.Point(20, 420)
+$lnkTryRdpB.Size = New-Object System.Drawing.Size(780, 22)
+$lnkTryRdpB.Visible = $false
+
+$pnlB3.Controls.AddRange(@($picCardB, $lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB, $lnkTryRdpB))
+
+$lnkTryRdpB.Add_LinkClicked({
+    Write-WizardLog -Message 'Physische Karte: Direktantrag per RDP auf Wunsch gewählt.' -Level Info
+    $script:PlanB_ForceDirect = $true
+    $script:PlanB_Fallback = $false
+    Show-PlanBStep -Index 6
+})
 
 $btnCreateCsrB.Add_Click({
     if (-not $script:PlanB_VscCreated) {
@@ -3409,6 +3425,7 @@ $btnRdpCheckB.Add_Click({
 $lnkRdpFallbackB.Add_LinkClicked({
     Write-WizardLog -Message 'Direktantrag per RDP: Ausweichweg Antrag (CSR) + Einreicher gewählt.' -Level Info
     $script:PlanB_Fallback = $true
+    $script:PlanB_ForceDirect = $false
     Show-PlanBStep -Index 2
 })
 
@@ -3431,10 +3448,17 @@ $planBStepTitles += (T 'In der RDP-Sitzung beantragen')
 # Fremdes Konto, Direktweg: Status -> Smartcard -> Beantragen per RDP (Index 0, 1, 6).
 $planBDirectStepperLabels = @((T 'Status'), (T 'Smartcard'), (T 'Beantragen per RDP'))
 
+function Test-PlanBVirtualCard {
+    # Gewählte Karte ist eine VSC (oder noch keine gewählt = neue VSC wird erstellt).
+    return (-not $script:PlanB_PcscName -or $script:PlanB_PcscName -like 'Microsoft Virtual Smart Card*')
+}
+
 function Test-PlanBDirect {
     # Direktweg (Antrag in der RDP-Sitzung) für fremde Konten - außer der Ausweichweg
-    # CSR + Einreicher wurde gewählt.
-    return [bool]($script:TargetAccount -and -not $script:PlanB_Fallback)
+    # CSR + Einreicher wurde gewählt. Physische Karten (z.B. YubiKey) gehen standardmäßig
+    # den Weg CSR + Einreicher: der Server bräuchte sonst ihren Kartentreiber (und der
+    # macht dort erfahrungsgemäß Ärger); direkt per RDP nur auf ausdrücklichen Wunsch.
+    return [bool]($script:TargetAccount -and -not $script:PlanB_Fallback -and ((Test-PlanBVirtualCard) -or $script:PlanB_ForceDirect))
 }
 
 function Update-PlanBStatus {
@@ -3474,6 +3498,7 @@ function Show-PlanBStep {
     switch ($Index) {
         0 { Update-PlanBStatus }
         2 {
+            $lnkTryRdpB.Visible = [bool]($script:TargetAccount -and -not (Test-PlanBVirtualCard))
             # Windows-Kartenauswahl-/PIN-Dialoge zeigen NICHT den vergebenen
             # Kartennamen, sondern den PC/SC-Namen "Microsoft Virtual Smart Card N" -
             # deshalb auffällig hervorheben (gemeinsamer Stil, siehe Set-CardHintLook).
@@ -3482,7 +3507,7 @@ function Show-PlanBStep {
                 $lblCsrInfoB.Text = ((T "➜ Im Windows-Kartenauswahl-Dialog die Karte `"{0}`" wählen  (= '{1}'). Danach ggf. PIN-Dialog.") -f $script:PlanB_PcscName, $script:PlanB_CardName)
             } else {
                 Set-CardHintLook -Label $lblCsrInfoB -Active $false
-                $lblCsrInfoB.Text = (T 'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.')
+                $lblCsrInfoB.Text = (T 'Erstellt eine an die Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.')
             }
         }
         3 { Update-PlanBHandoff }
@@ -3543,6 +3568,8 @@ function Invoke-PlanBBackClick {
     }
     # Direktweg: zurück zur Karte bzw. (Verlängerung, Karte übersprungen) zur Szenario-Auswahl.
     if ($script:PlanBCurrentStep -eq 6) {
+        # Physische Karte, Direktweg nur auf Wunsch: zurück zum Standardweg (CSR).
+        if ($script:PlanB_ForceDirect) { $script:PlanB_ForceDirect = $false; Show-PlanBStep -Index 2; return }
         if ($script:PlanB_RenewMode) { $tabPlanB.Visible = $false; Show-ScenarioStep } else { Show-PlanBStep -Index 1 }
         return
     }

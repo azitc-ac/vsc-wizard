@@ -413,6 +413,18 @@ Step 'B fremd: Verlängerung' { Enter-PlanBRenewal -Reader $card -TargetAccount 
 if ($script:PlanBCurrentStep -ne 6 -or $script:PlanB_CertIssued) { $global:Errors.Add("[RDP-Direktweg] Verlängerung: erwartet frischer Schritt 6, ist $($script:PlanBCurrentStep) (CertIssued=$($script:PlanB_CertIssued))") }
 Step 'B fremd: Verlängerung Zurück' { Invoke-PlanBBackClick }
 if ((OwnVisible $tabPlanB)) { $global:Errors.Add('[RDP-Direktweg] Verlängerung: Zurück führt nicht zur Startseite') }
+# Physische Karte (YubiKey) für ein fremdes Konto: Standard ist CSR + Einreicher
+$yk = [pscustomobject]@{ FriendlyName = 'YubiKey  (Yubico 0)'; PcscName = 'Yubico YubiKey OTP+FIDO+CCID 0'; Kind = 'Physical'; Usable = $true }
+Step 'B fremd YubiKey: Verlängerung' { Enter-PlanBRenewal -Reader $yk -TargetAccount 'jdoe@contoso.com' }
+if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[YubiKey] erwartet CSR (Schritt 2) als Standardweg, ist $($script:PlanBCurrentStep)") }
+if (-not (Test-OwnVisible $lnkTryRdpB)) { $global:Errors.Add('[YubiKey] Link "direkt in der RDP-Sitzung" fehlt') }
+Step 'B fremd YubiKey: trotzdem RDP' { Invoke-Ctl $lnkTryRdpB 'OnLinkClicked' (New-Object System.Windows.Forms.LinkLabelLinkClickedEventArgs($lnkTryRdpB.Links[0])) }
+if ($script:PlanBCurrentStep -ne 6 -or $lblRdpDriverHintB.Text -notmatch 'Minidriver') { $global:Errors.Add("[YubiKey] Direktweg auf Wunsch: Schritt $($script:PlanBCurrentStep), Treiber-Hinweis '$($lblRdpDriverHintB.Text)'") }
+Step 'B fremd YubiKey: Zurück' { Invoke-PlanBBackClick }
+if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[YubiKey] Zurück aus dem Direktweg führt nicht zur CSR (Schritt $($script:PlanBCurrentStep))") }
+# Gegenprobe VSC: kein Link auf der CSR-Seite (dort ist der Direktweg ohnehin Standard)
+Step 'B fremd VSC: Verlängerung' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdoe@contoso.com'; $script:PlanB_Fallback = $true; Show-PlanBStep -Index 2 }
+if ((Test-OwnVisible $lnkTryRdpB)) { $global:Errors.Add('[YubiKey Gegenprobe] Link "direkt in der RDP-Sitzung" bei einer VSC sichtbar') }
 # Gegenprobe: eigenes Konto (kein Zielkonto) -> wie bisher CSR
 Reset-Run
 $script:TargetAccount = $null

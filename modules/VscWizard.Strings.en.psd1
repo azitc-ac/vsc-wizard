@@ -223,7 +223,7 @@
     'Smartcard wird beantragt für: {0} (VSC/CSR trotzdem in deinem eigenen Konto)' = 'The smart card is requested for: {0} (VSC/CSR still in your own account)'
     'CA-naher Server (RDP-Ziel): {0}' = 'Server near the CA (RDP target): {0}'
     '➜ Im Windows-Kartenauswahl-Dialog die Karte "{0}" wählen  (= ''{1}''). Danach ggf. PIN-Dialog.' = '➜ In the Windows card selection dialog choose the card "{0}"  (= ''{1}''). A PIN dialog may follow.'
-    'Erstellt eine an die virtuelle Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.' = 'Creates a certificate request (CSR) bound to the virtual smart card. A PIN dialog of the smart card may appear.'
+    'Erstellt eine an die Smartcard gebundene Zertifikatsanforderung (CSR). Es erscheint ggf. ein PIN-Dialog der Smartcard.' = 'Creates a certificate request (CSR) bound to the smart card. A PIN dialog of the smart card may appear.'
     'Bitte zuerst die CSR erstellen.' = 'Please create the CSR first.'
     'In diesem Schritt wurde kein Zertifikat ausgestellt. Wurde der Antrag anderweitig eingereicht (z.B. mit dem Einreichungshelfer in der RDP-Sitzung) und liegt das Zertifikat als Datei oder Text vor?' = 'No certificate was issued in this step. Was the request submitted another way (e.g. with the submission helper in the RDP session) and is the certificate available as a file or text?'
     'Schritt überspringen' = 'Skip step'
@@ -461,4 +461,5 @@
     'Übernahme fehlgeschlagen: {0} Details siehe Log.' = 'Adding to the store failed: {0} See log for details.'
     '({0} nur auf der Karte)' = '({0} only on the card)'
     "Hinweis: `"{0}`" ist keine virtuelle Smartcard. Der Server beschreibt sie mit seinem eigenen Kartentreiber - der Treiber der Karte (z.B. Yubico-Minidriver) muss daher auch auf dem Server installiert sein. Erscheint die Karte dort schreibgeschützt, den Ausweichweg unten verwenden." = "Note: `"{0}`" is not a virtual smart card. The server writes to it with its own card driver - so the card's driver (e.g. Yubico minidriver) must also be installed on the server. If the card appears read-only there, use the fallback below."
+    'Stattdessen direkt in der RDP-Sitzung beantragen (der Kartentreiber muss dafür auch auf dem Server installiert sein)' = 'Request directly in the RDP session instead (the card driver must then also be installed on the server)'
 }
