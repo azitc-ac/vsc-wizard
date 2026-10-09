@@ -1428,6 +1428,195 @@ function Set-VscPin {
     return [pscustomobject]@{ Status = $status; Attempts = $left; Code = $code; Message = "$detail $code".Trim() }
 }
 
+function Get-PhysicalSmartCards {
+    # Andere (physische) Smartcards, z.B. YubiKey mit Yubico-Minidriver: je Lesegerät
+    # Karte vorhanden? Kartentyp (ATR) bekannt? Minidriver registriert? Kann der Treiber
+    # SCHLÜSSEL ERZEUGEN (CardQueryCapabilities.fKeyGen) und ist Platz (CardQueryFreeSpace)?
+    # Still, ohne PIN - über dieselbe CARD_DATA-Anbindung wie Set-VscPin. Eigener Prozess
+    # mit Zeitlimit: fremde Treiber können hängen. VSC- und Windows-Hello-Leser ausgelassen.
+    # Ergebnis je Leser: Reader, CardName, Module, State (Usable|NoCard|UnknownCard|
+    # NoMinidriver|ReadOnly|Full|DriverError), Usable, KeyGen, FreeContainers, MaxContainers, Error.
+    param([int]$TimeoutSeconds = 25)
+    $scriptPath = Join-Path (Get-WizardWorkingDir) 'physical-cards.ps1'
+    $probe = @'
+Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class VscPhysProbe {
+    [DllImport("winscard.dll")] static extern int SCardEstablishContext(uint scope, IntPtr r1, IntPtr r2, out IntPtr ctx);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardListReadersW(IntPtr ctx, string groups, char[] readers, ref uint len);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardConnectW(IntPtr ctx, string reader, uint share, uint proto, out IntPtr card, out uint active);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardStatusW(IntPtr card, StringBuilder names, ref uint len, out uint state, out uint proto, byte[] atr, ref uint atrLen);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardListCardsW(IntPtr ctx, byte[] atr, IntPtr guids, uint cguids, char[] cards, ref uint len);
+    [DllImport("winscard.dll", CharSet = CharSet.Unicode)] static extern int SCardGetCardTypeProviderNameW(IntPtr ctx, string card, uint provId, StringBuilder prov, ref uint len);
+    [DllImport("winscard.dll")] static extern int SCardDisconnect(IntPtr card, uint disp);
+    [DllImport("winscard.dll")] static extern int SCardReleaseContext(IntPtr ctx);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadLibraryW(string name);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr mod, string name);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate IntPtr AllocFn(UIntPtr size);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate IntPtr ReAllocFn(IntPtr p, UIntPtr size);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate void FreeFn(IntPtr p);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate uint CacheAddFn(IntPtr ctx, IntPtr name, uint flags, IntPtr data, UIntPtr cb);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate uint CacheLookupFn(IntPtr ctx, IntPtr name, uint flags, IntPtr ppData, IntPtr pcb);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] public delegate uint CacheDeleteFn(IntPtr ctx, IntPtr name, uint flags);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint AcquireFn(IntPtr cardData, uint flags);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint DeleteCtxFn(IntPtr cardData);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint QueryCapsFn(IntPtr cardData, IntPtr caps);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint QueryFreeFn(IntPtr cardData, uint flags, IntPtr info);
+    static AllocFn sAlloc = s => Marshal.AllocHGlobal((IntPtr)(long)s.ToUInt64());
+    static ReAllocFn sReAlloc = (p, s) => Marshal.ReAllocHGlobal(p, (IntPtr)(long)s.ToUInt64());
+    static FreeFn sFree = p => { if (p != IntPtr.Zero) Marshal.FreeHGlobal(p); };
+    static CacheAddFn sAdd = (c, n, f, d, cb) => 0;
+    static CacheLookupFn sLookup = (c, n, f, pp, pcb) => 0x80100024;
+    static CacheDeleteFn sDelete = (c, n, f) => 0;
+
+    public static List<string> Run() {
+        var lines = new List<string>();
+        IntPtr ctx;
+        if (SCardEstablishContext(0, IntPtr.Zero, IntPtr.Zero, out ctx) != 0) { lines.Add("Fatal=SCardEstablishContext"); return lines; }
+        try {
+            uint len = 16384; var buf = new char[len];
+            int lr = SCardListReadersW(ctx, null, buf, ref len);
+            if (lr != 0) { lines.Add("Readers=0"); return lines; }
+            foreach (string reader in new string(buf, 0, (int)len).Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries)) {
+                if (reader.StartsWith("Microsoft Virtual Smart Card") || reader.StartsWith("Windows Hello")) continue;
+                lines.Add(Probe(ctx, reader));
+            }
+        } finally { SCardReleaseContext(ctx); }
+        return lines;
+    }
+
+    static string Probe(IntPtr ctx, string reader) {
+        string head = "Reader=" + reader;
+        IntPtr card; uint active;
+        int rc = SCardConnectW(ctx, reader, 2, 3, out card, out active);
+        if (rc != 0) return head + "|State=NoCard|Error=0x" + rc.ToString("X8");
+        IntPtr cd = IntPtr.Zero, nameW = IntPtr.Zero, atrMem = IntPtr.Zero;
+        try {
+            uint nl = 512, st, pr, al = 36; var names = new StringBuilder(512); var atr = new byte[36];
+            if (SCardStatusW(card, names, ref nl, out st, out pr, atr, ref al) != 0) return head + "|State=NoCard";
+            Array.Resize(ref atr, (int)al);
+            uint cl = 1024; var cards = new char[1024];
+            string cardName = "";
+            if (SCardListCardsW(ctx, atr, IntPtr.Zero, 0, cards, ref cl) == 0) cardName = new string(cards, 0, (int)cl).Split('\0')[0];
+            if (cardName == "") return head + "|State=UnknownCard|Atr=" + BitConverter.ToString(atr);
+            head += "|Card=" + cardName;
+            uint pl = 512; var prov = new StringBuilder(512);
+            if (SCardGetCardTypeProviderNameW(ctx, cardName, 0x80000001, prov, ref pl) != 0 || prov.Length == 0) return head + "|State=NoMinidriver";
+            head += "|Module=" + prov;
+            IntPtr mod = LoadLibraryW(prov.ToString());
+            if (mod == IntPtr.Zero) return head + "|State=NoMinidriver|Error=DLL nicht ladbar";
+            long modBase = mod.ToInt64(), modEnd = modBase;
+            foreach (ProcessModule pm in Process.GetCurrentProcess().Modules) if (pm.BaseAddress == mod) modEnd = modBase + pm.ModuleMemorySize;
+            Func<IntPtr, bool> inModule = p => p.ToInt64() >= modBase && p.ToInt64() < modEnd;
+            IntPtr acq = GetProcAddress(mod, "CardAcquireContext");
+            if (!inModule(acq)) return head + "|State=DriverError|Error=CardAcquireContext fehlt";
+            cd = Marshal.AllocHGlobal(4096);
+            for (int i = 0; i < 4096; i += 8) Marshal.WriteInt64(cd, i, 0);
+            nameW = Marshal.StringToHGlobalUni(cardName);
+            atrMem = Marshal.AllocHGlobal(atr.Length); Marshal.Copy(atr, 0, atrMem, atr.Length);
+            Marshal.WriteInt32(cd, 0, 7); Marshal.WriteIntPtr(cd, 8, atrMem); Marshal.WriteInt32(cd, 16, atr.Length); Marshal.WriteIntPtr(cd, 24, nameW);
+            Marshal.WriteIntPtr(cd, 32, Marshal.GetFunctionPointerForDelegate(sAlloc)); Marshal.WriteIntPtr(cd, 40, Marshal.GetFunctionPointerForDelegate(sReAlloc));
+            Marshal.WriteIntPtr(cd, 48, Marshal.GetFunctionPointerForDelegate(sFree)); Marshal.WriteIntPtr(cd, 56, Marshal.GetFunctionPointerForDelegate(sAdd));
+            Marshal.WriteIntPtr(cd, 64, Marshal.GetFunctionPointerForDelegate(sLookup)); Marshal.WriteIntPtr(cd, 72, Marshal.GetFunctionPointerForDelegate(sDelete));
+            Marshal.WriteIntPtr(cd, 96, ctx); Marshal.WriteIntPtr(cd, 104, card);
+            uint r = ((AcquireFn)Marshal.GetDelegateForFunctionPointer(acq, typeof(AcquireFn)))(cd, 0);
+            if (r != 0) return head + "|State=DriverError|Error=CardAcquireContext 0x" + r.ToString("X8");
+            IntPtr pDel = Marshal.ReadIntPtr(cd, 120), pCaps = Marshal.ReadIntPtr(cd, 128), pFree = Marshal.ReadIntPtr(cd, 288);
+            string result = head;
+            try {
+                bool keyGen = false;
+                if (inModule(pCaps)) {
+                    IntPtr caps = Marshal.AllocHGlobal(16);
+                    try {
+                        Marshal.WriteInt32(caps, 0, 1); Marshal.WriteInt32(caps, 4, 0); Marshal.WriteInt32(caps, 8, 0);
+                        if (((QueryCapsFn)Marshal.GetDelegateForFunctionPointer(pCaps, typeof(QueryCapsFn)))(cd, caps) == 0) keyGen = Marshal.ReadInt32(caps, 8) != 0;
+                    } finally { Marshal.FreeHGlobal(caps); }
+                }
+                result += "|KeyGen=" + keyGen;
+                int freeC = -1, maxC = -1;
+                if (inModule(pFree)) {
+                    IntPtr fi = Marshal.AllocHGlobal(16);
+                    try {
+                        Marshal.WriteInt32(fi, 0, 1); Marshal.WriteInt32(fi, 4, 0); Marshal.WriteInt32(fi, 8, 0); Marshal.WriteInt32(fi, 12, 0);
+                        if (((QueryFreeFn)Marshal.GetDelegateForFunctionPointer(pFree, typeof(QueryFreeFn)))(cd, 0, fi) == 0) { freeC = Marshal.ReadInt32(fi, 8); maxC = Marshal.ReadInt32(fi, 12); }
+                    } finally { Marshal.FreeHGlobal(fi); }
+                }
+                result += "|Free=" + freeC + "|Max=" + maxC;
+                string state = !keyGen ? "ReadOnly" : (freeC == 0 ? "Full" : "Usable");
+                result += "|State=" + state;
+            } finally {
+                if (inModule(pDel)) ((DeleteCtxFn)Marshal.GetDelegateForFunctionPointer(pDel, typeof(DeleteCtxFn)))(cd);
+            }
+            return result;
+        } catch (Exception ex) {
+            return head + "|State=DriverError|Error=" + ex.Message.Replace("|", "/");
+        } finally {
+            SCardDisconnect(card, 0);
+            if (cd != IntPtr.Zero) Marshal.FreeHGlobal(cd);
+            if (nameW != IntPtr.Zero) Marshal.FreeHGlobal(nameW);
+            if (atrMem != IntPtr.Zero) Marshal.FreeHGlobal(atrMem);
+        }
+    }
+}
+"@
+foreach ($l in [VscPhysProbe]::Run()) { [Console]::Out.WriteLine($l) }
+[Console]::Out.WriteLine('Done=1')
+'@
+    Set-Content -Path $scriptPath -Value $probe -Encoding UTF8
+    $res = Invoke-ExternalCommand -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -TimeoutSeconds $TimeoutSeconds -Silent
+    $out = if ($res.StdErr -eq 'Timeout') { "$($res.PartialStdOut)" } else { "$($res.StdOut)" }
+    $cards = foreach ($line in ($out -split "`r?`n")) {
+        if ($line -notmatch '^Reader=') { continue }
+        $f = @{}; foreach ($part in ($line -split '\|')) { $i = $part.IndexOf('='); if ($i -gt 0) { $f[$part.Substring(0, $i)] = $part.Substring($i + 1) } }
+        [pscustomobject]@{
+            Reader = $f['Reader']; CardName = $f['Card']; Module = $f['Module']; State = $f['State']
+            Usable = ($f['State'] -eq 'Usable'); KeyGen = ($f['KeyGen'] -eq 'True')
+            FreeContainers = $(if ($f['Free']) { [int]$f['Free'] } else { -1 }); MaxContainers = $(if ($f['Max']) { [int]$f['Max'] } else { -1 })
+            Error = $f['Error']
+        }
+    }
+    if ($res.StdErr -eq 'Timeout') { Write-WizardLog -Message "Andere Smartcards: Prüfung nach $TimeoutSeconds s abgebrochen (Treiber hängt?)." -Level Warn }
+    foreach ($c in @($cards)) { Write-WizardLog -Message "Andere Smartcard: '$($c.Reader)' Karte '$($c.CardName)' Treiber '$($c.Module)' -> $($c.State)$(if ($c.Error) { " ($($c.Error))" })." -Level Info }
+    return @($cards)
+}
+
+# Einstellung "Auch andere Smartcards zulassen" für Kernfunktionen ohne Konfiguration
+# (z.B. Install-CertificateOnSmartCard) - die GUI setzt sie beim Laden/Speichern.
+$script:AllowPhysicalCards = $false
+function Set-VscPhysicalCardsAllowed { param([bool]$Allowed) $script:AllowPhysicalCards = $Allowed }
+
+function Test-PhysicalCardsAllowed {
+    # Einstellung "Auch andere Smartcards zulassen" (config.psd1: AllowPhysicalCards).
+    # Ohne -Config: der zuletzt per Set-VscPhysicalCardsAllowed gesetzte Wert.
+    param($Config)
+    if ($null -eq $Config) { return [bool]$script:AllowPhysicalCards }
+    return [bool]("$($Config.AllowPhysicalCards)" -match '^(True|1|Ja|Yes)$')
+}
+
+function Get-SmartCardTargets {
+    # EINE Kartenliste für alle Stellen, die bisher nur VSCs kannten: virtuelle Smartcards
+    # (Kind = Virtual) + - wenn erlaubt - geeignete andere Karten (Kind = Physical, mit
+    # PcscName = Lesegerät, das Windows im Kartenauswahl-Dialog zeigt). -IncludeUnusable
+    # liefert auch ungeeignete Karten (mit Grund), z.B. für Hinweise im Auswahldialog.
+    param($Config, [switch]$IncludeUnusable)
+    $list = @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName } | ForEach-Object {
+        [pscustomobject]@{ FriendlyName = $_.FriendlyName; PcscName = $_.PcscName; InstanceId = $_.InstanceId; Status = $_.Status; Kind = 'Virtual'; Usable = $true; State = 'Usable'; CardName = $null }
+    })
+    if (Test-PhysicalCardsAllowed -Config $Config) {
+        foreach ($p in @(Get-PhysicalSmartCards)) {
+            if ($p.State -eq 'NoCard') { continue }
+            if (-not $p.Usable -and -not $IncludeUnusable) { continue }
+            $label = if ($p.CardName) { "$($p.CardName)  ($($p.Reader))" } else { $p.Reader }
+            $list += [pscustomobject]@{ FriendlyName = $label; PcscName = $p.Reader; InstanceId = $null; Status = 'OK'; Kind = 'Physical'; Usable = $p.Usable; State = $p.State; CardName = $p.CardName }
+        }
+    }
+    return @($list)
+}
+
 function Remove-VirtualSmartCard {
     # tpmvscmgr destroy /instance <InstanceId> - die InstanceId ist dieselbe
     # PnP-Gerätepfad-Kennung, die auch Get-VirtualSmartCardReaders liefert
@@ -2207,7 +2396,9 @@ function Install-CertificateOnSmartCard {
         [switch]$DryRun)
 
     $readers = @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName } | ForEach-Object { $_.PcscName })
-    if (-not $readers) { Write-WizardLog -Message 'Direkt-Installation: keine virtuelle Smartcard gefunden.' -Level Error; return [pscustomobject]@{ Success = $false } }
+    # Andere Smartcards (Einstellung): der Schlüssel kann auch dort liegen.
+    if (Test-PhysicalCardsAllowed) { $readers += @(Get-PhysicalSmartCards | Where-Object { $_.State -ne 'NoCard' } | ForEach-Object { $_.Reader }) }
+    if (-not $readers) { Write-WizardLog -Message 'Direkt-Installation: keine Smartcard gefunden.' -Level Error; return [pscustomobject]@{ Success = $false } }
 
     $scriptPath = Join-Path (Get-WizardWorkingDir) 'install-on-card.ps1'
     $installScript = @'

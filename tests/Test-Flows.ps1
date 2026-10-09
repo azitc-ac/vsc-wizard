@@ -361,6 +361,59 @@ Step 'B: nach Übernahme' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdo
 if ($btnCompleteB.Enabled -or $btnCompleteFromTextB.Enabled) { $global:Errors.Add('[Ausstellung B] "Übernehmen" nach erfolgreicher Übernahme noch aktiv') }
 Step 'B: neuer Durchlauf' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdoe@contoso.com'; Show-PlanBStep -Index 5 }
 if (-not $btnCompleteB.Enabled) { $global:Errors.Add('[Ausstellung B] neuer Durchlauf: "Übernehmen" bleibt gesperrt (Zustand des vorigen Durchlaufs)') }
+# --- Andere Smartcards (Einstellung AllowPhysicalCards) ---
+$global:Log.Add('=== Andere Smartcards ===')
+foreach ($case in @(@(@{ AllowPhysicalCards = 'True' }, $true), @(@{ AllowPhysicalCards = 'False' }, $false), @(@{}, $false))) {
+    if ((Test-PhysicalCardsAllowed -Config $case[0]) -ne $case[1]) { $global:Errors.Add("[Andere Karten] Test-PhysicalCardsAllowed '$($case[0].AllowPhysicalCards)' -> nicht $($case[1])") }
+}
+# Kernfunktion Get-SmartCardTargets mit gestellter Prüfung (im Modul-Bereich ersetzt, danach zurück).
+$coreMod = Get-Module VscWizard.Core
+$origPhys = & $coreMod { ${function:Get-PhysicalSmartCards} }
+$origVsc = & $coreMod { ${function:Get-VirtualSmartCardReaders} }
+& $coreMod {
+    ${function:script:Get-VirtualSmartCardReaders} = { @([pscustomobject]@{ FriendlyName = 'VSC-T'; PcscName = 'Microsoft Virtual Smart Card 0'; InstanceId = 'ROOT\SMARTCARDREADER\0000'; Status = 'OK' }) }
+    ${function:script:Get-PhysicalSmartCards} = { @(
+        [pscustomobject]@{ Reader = 'Yubico YubiKey OTP+FIDO+CCID 0'; CardName = 'YubiKey Smart Card Minidriver'; Module = 'ykmd.dll'; State = 'Usable'; Usable = $true }
+        [pscustomobject]@{ Reader = 'Generic USB Reader 0'; CardName = $null; Module = $null; State = 'UnknownCard'; Usable = $false }
+        [pscustomobject]@{ Reader = 'Generic USB Reader 1'; CardName = $null; Module = $null; State = 'NoCard'; Usable = $false }) }
+}
+try {
+    $t = @(Get-SmartCardTargets -Config @{ AllowPhysicalCards = 'True' })
+    if ($t.Count -ne 2 -or @($t | Where-Object Kind -eq 'Physical')[0].PcscName -ne 'Yubico YubiKey OTP+FIDO+CCID 0') { $global:Errors.Add("[Andere Karten] erlaubt: erwartet VSC + YubiKey, erhalten $($t.Count): $(($t | ForEach-Object FriendlyName) -join ', ')") }
+    $t = @(Get-SmartCardTargets -Config @{ AllowPhysicalCards = 'True' } -IncludeUnusable)
+    if ($t.Count -ne 3) { $global:Errors.Add("[Andere Karten] -IncludeUnusable: erwartet 3 (ohne leeren Leser), erhalten $($t.Count)") }
+    # Gegenprobe: nicht erlaubt -> nur VSCs
+    $t = @(Get-SmartCardTargets -Config @{ AllowPhysicalCards = 'False' })
+    if ($t.Count -ne 1 -or $t[0].Kind -ne 'Virtual') { $global:Errors.Add("[Andere Karten] nicht erlaubt: erwartet nur die VSC, erhalten $($t.Count)") }
+} finally {
+    & $coreMod { param($p, $v) ${function:script:Get-PhysicalSmartCards} = $p; ${function:script:Get-VirtualSmartCardReaders} = $v } $origPhys $origVsc
+}
+# Echte Select-ExistingVsc (oben für die Abläufe ersetzt) aus dem Quelltext holen.
+$fnAst = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$null, [ref]$null).Find({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Select-ExistingVsc' }, $true)
+. ([scriptblock]::Create(($fnAst.Extent.Text -replace '^function Select-ExistingVsc', 'function Select-ExistingVscReal')))
+function Show-VscPickerDialog { param($Readers, $Certs) $global:PickerCount = @($Readers).Count; return @($Readers)[0] }
+function Get-SmartCardCertificates { @() }
+$config['AllowPhysicalCards'] = 'True'
+function Get-SmartCardTargets { param($Config, [switch]$IncludeUnusable) @(
+    [pscustomobject]@{ FriendlyName = 'VSC-T'; PcscName = 'Microsoft Virtual Smart Card 0'; Kind = 'Virtual'; Usable = $true; State = 'Usable' }
+    [pscustomobject]@{ FriendlyName = 'YubiKey  (Yubico 0)'; PcscName = 'Yubico 0'; Kind = 'Physical'; Usable = $true; State = 'Usable'; CardName = 'YubiKey' }) }
+$global:PickerCount = 0
+$r = Select-ExistingVscReal
+if ($global:PickerCount -ne 2) { $global:Errors.Add("[Andere Karten] Auswahl: Picker sollte VSC + YubiKey zeigen, zeigte $($global:PickerCount)") }
+function Get-SmartCardTargets { param($Config, [switch]$IncludeUnusable) @(
+    [pscustomobject]@{ FriendlyName = 'Generic USB Reader 0'; PcscName = 'Generic USB Reader 0'; Kind = 'Physical'; Usable = $false; State = 'NoMinidriver' }) | Where-Object { $IncludeUnusable -or $_.Usable } }
+$before = $global:Msgs.Count
+$r = Select-ExistingVscReal
+if ($r) { $global:Errors.Add('[Andere Karten] ungeeignete Karte wurde ausgewählt') }
+if (-not @($global:Msgs | Select-Object -Skip $before | Where-Object { $_ -like '*Keine Smartcard vorhanden*Minidriver*' })) { $global:Errors.Add('[Andere Karten] keine Meldung mit Grund (kein Kartentreiber) bei nur ungeeigneter Karte') }
+# Gegenprobe: Einstellung aus -> bisherige VSC-Meldung
+$config['AllowPhysicalCards'] = 'False'
+function Get-SmartCardTargets { param($Config, [switch]$IncludeUnusable) @() }
+$before = $global:Msgs.Count
+$r = Select-ExistingVscReal
+if (-not @($global:Msgs | Select-Object -Skip $before | Where-Object { $_ -like '*Keine VSC vorhanden*' })) { $global:Errors.Add('[Andere Karten] Einstellung aus: bisherige Meldung "Keine VSC vorhanden" fehlt') }
+$config.Remove('AllowPhysicalCards')
+
 # Resume-Datei des Benutzers wiederherstellen
 & $restoreResume
 

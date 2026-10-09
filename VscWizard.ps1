@@ -215,6 +215,8 @@ try {
 } catch {
     $config = @{}
 }
+# Einstellung "Auch andere Smartcards" auch für Kernfunktionen ohne $config.
+Set-VscPhysicalCardsAllowed -Allowed (Test-PhysicalCardsAllowed -Config $config)
 # Sprache der Oberfläche: die EINE Entscheidung vom Skriptanfang ($script:StartLang).
 Set-WizardLanguage -Language $script:StartLang
 
@@ -291,7 +293,8 @@ function New-CardPicture {
 function Get-VscCardCount {
     # Anzahl virtueller Smartcards: erst ab ZWEI zeigt Windows einen Kartenauswahl-Dialog -
     # nur dann ist der Hinweis "Karte ... wählen" sinnvoll (bei einer Karte verwirrt er).
-    try { return @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName }).Count } catch { return 0 }
+    # Mit "andere Smartcards" zählen eingesteckte geeignete Karten mit.
+    try { return @(Get-SmartCardTargets -Config $config).Count } catch { return 0 }
 }
 
 function New-WizardLabel {
@@ -1799,19 +1802,34 @@ function Show-AccountInputDialog {
     return $null
 }
 
+function Get-PhysicalCardStateText {
+    # Klartext zum Prüfergebnis einer anderen Smartcard (Get-PhysicalSmartCards).
+    param([string]$State)
+    switch ($State) {
+        'Usable'       { T 'geeignet' }
+        'UnknownCard'  { T 'Kartentyp unbekannt - kein passender Kartentreiber (Minidriver) installiert' }
+        'NoMinidriver' { T 'kein Kartentreiber (Minidriver) installiert' }
+        'ReadOnly'     { T 'der Kartentreiber kann keine Schlüssel erzeugen' }
+        'Full'         { T 'kein freier Schlüsselplatz mehr auf der Karte' }
+        'DriverError'  { T 'der Kartentreiber meldet einen Fehler' }
+        default        { "$State" }
+    }
+}
+
 function Show-VscPickerDialog {
     # Auswahl der zu verlängernden Karte aus den vorhandenen VSCs, mit Restlaufzeit
     # des (frühesten) Zertifikats auf der jeweiligen Karte.
     param($Readers, $Certs)
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = (T 'Vorhandene virtuelle Smartcard wählen')
+    $anyPhysical = [bool]@($Readers | Where-Object { $_.PSObject.Properties['Kind'] -and $_.Kind -eq 'Physical' })
+    $dlg.Text = if ($anyPhysical) { T 'Vorhandene Smartcard wählen' } else { T 'Vorhandene virtuelle Smartcard wählen' }
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.StartPosition = 'CenterParent'
     $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
     $dlg.ClientSize = New-Object System.Drawing.Size(560, 320)
 
     $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text = (T 'Welche vorhandene virtuelle Smartcard verwenden?')
+    $lbl.Text = if ($anyPhysical) { T 'Welche vorhandene Smartcard verwenden?' } else { T 'Welche vorhandene virtuelle Smartcard verwenden?' }
     $lbl.Location = New-Object System.Drawing.Point(12, 12)
     $lbl.Size = New-Object System.Drawing.Size(536, 20)
 
@@ -1826,9 +1844,17 @@ function Show-VscPickerDialog {
             ((T 'gültig bis {0}') -f $soonest.ToString('yyyy-MM-dd'))
         } else { (T 'kein Zertifikat gefunden') }
         $pcsc = if ($r.PcscName) { $r.PcscName } else { '?' }
-        [void]$list.Items.Add("$($r.FriendlyName)  [$pcsc]  -  $expiryNote")
+        if ($r.PSObject.Properties['Kind'] -and $r.Kind -eq 'Physical') {
+            # Physische Karte: Lesegerät steht schon im Namen; ungeeignete mit Grund.
+            $line = if ($r.Usable) { "$($r.FriendlyName)  -  $expiryNote" } else { "$($r.FriendlyName)  -  " + ((T 'nicht verwendbar: {0}') -f (Get-PhysicalCardStateText $r.State)) }
+            [void]$list.Items.Add($line)
+        } else {
+            [void]$list.Items.Add("$($r.FriendlyName)  [$pcsc]  -  $expiryNote")
+        }
     }
-    if ($list.Items.Count -gt 0) { $list.SelectedIndex = 0 }
+    $firstUsable = 0
+    for ($i = 0; $i -lt $Readers.Count; $i++) { if (-not $Readers[$i].PSObject.Properties['Usable'] -or $Readers[$i].Usable) { $firstUsable = $i; break } }
+    if ($list.Items.Count -gt 0) { $list.SelectedIndex = $firstUsable }
 
     $ok = New-Object System.Windows.Forms.Button
     $ok.Text = (T 'Verwenden'); $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -1842,7 +1868,12 @@ function Show-VscPickerDialog {
     Set-DialogStyle -Dialog $dlg
     $res = $dlg.ShowDialog($form)
     if ($res -eq [System.Windows.Forms.DialogResult]::OK -and $list.SelectedIndex -ge 0) {
-        return $Readers[$list.SelectedIndex]
+        $sel = $Readers[$list.SelectedIndex]
+        if ($sel.PSObject.Properties['Usable'] -and -not $sel.Usable) {
+            [System.Windows.Forms.MessageBox]::Show(((T "Diese Karte kann nicht verwendet werden:`r`n{0}") -f (Get-PhysicalCardStateText $sel.State)), (T 'Smartcard nicht verwendbar'), 'OK', 'Information') | Out-Null
+            return $null
+        }
+        return $sel
     }
     return $null
 }
@@ -1937,14 +1968,14 @@ function Show-VscChoiceDialog {
     # Fragt, ob eine NEUE virtuelle Smartcard erstellt oder eine BESTEHENDE verwendet
     # werden soll. Gibt 'new', 'existing' oder $null (abgebrochen) zurueck.
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = (T 'Virtuelle Smartcard')
+    $dlg.Text = if (Test-PhysicalCardsAllowed -Config $config) { T 'Smartcard' } else { T 'Virtuelle Smartcard' }
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.StartPosition = 'CenterParent'
     $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
     $dlg.ClientSize = New-Object System.Drawing.Size(460, 150)
 
     $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text = (T 'Neue virtuelle Smartcard erstellen oder eine vorhandene verwenden?')
+    $lbl.Text = if (Test-PhysicalCardsAllowed -Config $config) { T 'Neue virtuelle Smartcard erstellen oder eine vorhandene Karte verwenden (virtuell oder z.B. YubiKey)?' } else { T 'Neue virtuelle Smartcard erstellen oder eine vorhandene verwenden?' }
     $lbl.Location = New-Object System.Drawing.Point(16, 16)
     $lbl.Size = New-Object System.Drawing.Size(428, 40)
     $dlg.Controls.Add($lbl)
@@ -1973,14 +2004,25 @@ function Show-VscChoiceDialog {
 function Select-ExistingVsc {
     # Waehlt eine vorhandene VSC als Schluesseltraeger (fuer "bestehende verwenden").
     # Gibt den gewaehlten Reader zurueck oder $null (keine vorhanden / abgebrochen).
-    $readers = @(Get-VirtualSmartCardReaders | Where-Object { $_.PcscName })
+    # Mit "andere Smartcards" (Einstellung) auch eingesteckte physische Karten; ungeeignete
+    # erscheinen im Auswahldialog mit Grund, sind aber nicht wählbar.
+    $physical = Test-PhysicalCardsAllowed -Config $config
+    $all = @(Invoke-Busy -Text (T 'Suche Smartcards...') -Action { Get-SmartCardTargets -Config $config -IncludeUnusable })
+    $readers = @($all | Where-Object { $_.Usable })
     if ($readers.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show((T 'Auf diesem Gerät wurde keine virtuelle Smartcard gefunden. Bitte stattdessen "Neue VSC erstellen" wählen.'), (T 'Keine VSC vorhanden'), 'OK', 'Information') | Out-Null
+        if ($physical) {
+            $msg = T 'Auf diesem Gerät wurde keine geeignete Smartcard gefunden (virtuell oder eingesteckt). Bitte stattdessen "Neue VSC erstellen" wählen oder eine Karte einstecken.'
+            $why = @($all | Where-Object { -not $_.Usable } | ForEach-Object { "- $($_.FriendlyName): $(Get-PhysicalCardStateText $_.State)" })
+            if ($why) { $msg += "`r`n`r`n" + ($why -join "`r`n") }
+            [System.Windows.Forms.MessageBox]::Show($msg, (T 'Keine Smartcard vorhanden'), 'OK', 'Information') | Out-Null
+        } else {
+            [System.Windows.Forms.MessageBox]::Show((T 'Auf diesem Gerät wurde keine virtuelle Smartcard gefunden. Bitte stattdessen "Neue VSC erstellen" wählen.'), (T 'Keine VSC vorhanden'), 'OK', 'Information') | Out-Null
+        }
         return $null
     }
-    if ($readers.Count -eq 1) { return $readers[0] }
+    if ($readers.Count -eq 1 -and $all.Count -eq 1) { return $readers[0] }
     $certs = @(Invoke-Busy -Text (T 'Lese vorhandene Smartcards und Zertifikate...') -Action { Get-SmartCardCertificates })
-    return (Show-VscPickerDialog -Readers $readers -Certs $certs)
+    return (Show-VscPickerDialog -Readers $all -Certs $certs)
 }
 
 function Invoke-RenewalCleanup {
@@ -3495,6 +3537,10 @@ function Show-VscInventoryDialog {
     Set-Busy -Text (T 'Lese virtuelle Smartcards und Zertifikate...')
     try {
         $readers = @(Get-VirtualSmartCardReaders)
+        # Andere Smartcards (Einstellung): eingesteckte Karten mit Kartentreiber dazu.
+        if (-not $UserView -and (Test-PhysicalCardsAllowed -Config $config)) {
+            $readers += @(Get-SmartCardTargets -Config $config -IncludeUnusable | Where-Object { $_.Kind -eq 'Physical' })
+        }
         if ($OnlyInstanceId) { $readers = @($readers | Where-Object { "$($_.InstanceId)" -eq $OnlyInstanceId }) }
         $certs = @(Get-SmartCardCertificates)
     } finally { Clear-Busy }
@@ -3643,12 +3689,16 @@ function Show-VscInventoryDialog {
     function Test-IsVirtualCard($Reader) {
         return [bool]($Reader -and -not $Reader.PSObject.Properties['IsMarker'] -and $Reader.PcscName -and "$($Reader.InstanceId)" -like 'ROOT\SMARTCARDREADER\*')
     }
+    function Test-IsPhysicalCard($Reader) {
+        return [bool]($Reader -and $Reader.PSObject.Properties['Kind'] -and $Reader.Kind -eq 'Physical' -and $Reader.CardName)
+    }
 
     function Update-CertListForSelection {
         $lvCerts.Items.Clear()
         $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
         $sel =if ($lvReaders.SelectedItems.Count -gt 0) { $lvReaders.SelectedItems[0].Tag } else { $null }
-        $btnChangePin.Enabled = Test-IsVirtualCard $sel
+        # PIN ändern geht über jeden Kartentreiber (auch YubiKey); löschen nur bei VSCs.
+        $btnChangePin.Enabled = (Test-IsVirtualCard $sel) -or (Test-IsPhysicalCard $sel)
         $btnDeleteReader.Enabled = Test-IsVirtualCard $sel
         if (-not $sel) { $lblCertsHeader.Text = (T 'Zertifikate (oben eine Karte auswählen)'); return }
         $matching = @()
@@ -3712,7 +3762,7 @@ function Show-VscInventoryDialog {
     $btnChangePin.Add_Click({
         if ($lvReaders.SelectedItems.Count -eq 0) { return }
         $r = $lvReaders.SelectedItems[0].Tag
-        if (-not (Test-IsVirtualCard $r)) { return }
+        if (-not ((Test-IsVirtualCard $r) -or (Test-IsPhysicalCard $r))) { return }
         Show-VscPinChangeDialog -Reader $r -Owner $dlg | Out-Null
     })
 
@@ -3892,6 +3942,15 @@ function Show-SettingsDialog {
     $numCfgPinMin.Maximum = 20
     $numCfgPinMin.Value = (Get-ConfiguredPinMinLength)
     Add-SettingsRow -LabelText (T 'PIN-Mindestlänge (COM: ab 6; tpmvscmgr/ARM64: /PINPOLICY):') -InputControl $numCfgPinMin
+
+    # Andere Smartcards (z.B. YubiKey): nur Karten, deren Kartentreiber (Minidriver)
+    # installiert ist und Schlüssel erzeugen kann - geprüft bei jeder Kartenauswahl.
+    $chkCfgPhysical = New-Object System.Windows.Forms.CheckBox
+    $chkCfgPhysical.Text = (T 'Auch andere Smartcards beschreiben (z.B. YubiKey) - sofern ihr Kartentreiber installiert ist und Schlüssel erzeugen kann')
+    $chkCfgPhysical.Checked = (Test-PhysicalCardsAllowed -Config $config)
+    $chkCfgPhysical.AutoSize = $true
+    $chkCfgPhysical.MaximumSize = New-Object System.Drawing.Size(640, 0)
+    Add-SettingsFullRow -Control $chkCfgPhysical
 
     $txtCfgJump = New-Object System.Windows.Forms.TextBox
     Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder (T 'z.B. pki-jump.contoso.local') -Value $config.RdpJumpServer
@@ -4184,9 +4243,11 @@ function Show-SettingsDialog {
         $newConfig['DiscoveryDomain'] = Get-TextBoxRealValue -TextBox $txtCfgDomain
         $newConfig['EATemplate']      = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
         $newConfig['PinMinLength']    = [int]$numCfgPinMin.Value
+        $newConfig['AllowPhysicalCards'] = "$($chkCfgPhysical.Checked)"
         $newConfig['WorkingDir']      = $config.WorkingDir
         Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
         $script:config = $newConfig
+        Set-VscPhysicalCardsAllowed -Allowed $chkCfgPhysical.Checked
 
         Set-TemplateComboItem -ComboBox $cboTemplateA -Template $newConfig.Template
         Set-TemplateComboItem -ComboBox $cboTemplateSubmitB -Template $newConfig.Template
