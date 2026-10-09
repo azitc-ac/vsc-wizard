@@ -142,6 +142,8 @@ function Find-ReachableCA {
 #region MAIN FORM
 
 $form = New-Object System.Windows.Forms.Form
+# Programm-Icon aus der eigenen EXE (build.ps1 bettet assets\VscWizard.ico ein).
+try { $selfExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName; if ($selfExe -notmatch '\\(powershell|pwsh)\.exe$') { $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($selfExe) } } catch { }
 $form.Text = 'VSC-Wizard Einreichungshelfer (RDP-Sitzung)'
 $form.Size = New-Object System.Drawing.Size(760, 760)
 $form.MinimumSize = New-Object System.Drawing.Size(680, 640)

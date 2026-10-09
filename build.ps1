@@ -61,6 +61,10 @@ function Build-Exe {
         Product    = 'VSC-Wizard'
     }
     if ($RequireAdmin) { $p2Args['RequireAdmin'] = $true }
+    # Programm-Icon (assets\VscWizard.ico, erzeugt von assets\New-VscWizardIcon.ps1):
+    # erscheint in Explorer, Taskleiste, Startmenü und "Apps & Features".
+    $iconFile = Join-Path $PSScriptRoot 'assets\VscWizard.ico'
+    if (Test-Path $iconFile) { $p2Args['IconFile'] = $iconFile }
     Invoke-PS2EXE @p2Args
     if (-not (Test-Path $OutputFile)) { throw "Build fehlgeschlagen: $OutputFile wurde nicht erzeugt." }
 }
@@ -79,6 +83,13 @@ Copy-Item -Path (Join-Path $PSScriptRoot 'modules\*') -Destination $modulesTarge
 # config.psd1 liegt im Repo bewusst LEER (keine Organisationswerte im Git). Die echten
 # Werte (CA, Template, Domäne) stehen in config.local.psd1 (per .gitignore ausgeschlossen)
 # und kommen - falls vorhanden - als config.psd1 in die Ausgabe (z.B. für das Intune-Paket).
+# Intune-Logo (256 px PNG) neben das Erkennungsskript.
+$logoSrc = Join-Path $PSScriptRoot 'assets\VscWizard.png'
+if (Test-Path $logoSrc) {
+    $logoDir = Join-Path $OutputDir 'intune'
+    if (-not (Test-Path $logoDir)) { New-Item -ItemType Directory -Path $logoDir -Force | Out-Null }
+    Copy-Item -Path $logoSrc -Destination (Join-Path $logoDir 'VscWizard.png') -Force
+}
 $configLocal = Join-Path $PSScriptRoot 'config.local.psd1'
 $configSrc = if (Test-Path $configLocal) { $configLocal } else { Join-Path $PSScriptRoot 'config.psd1' }
 if (Test-Path $configSrc) {

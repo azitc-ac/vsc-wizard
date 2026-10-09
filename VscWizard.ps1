@@ -57,6 +57,15 @@ if (-not $script:BaseDir) {
 }
 if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
 
+# Programm-Icon für alle Fenster: als EXE das eingebettete Symbol (build.ps1), als Skript
+# assets\VscWizard.ico aus dem Repo. Fehlt beides, bleibt das Standard-Symbol.
+$script:AppIcon = $null
+try {
+    $selfExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ($selfExe -notmatch '\\(powershell|pwsh)\.exe$') { $script:AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($selfExe) }
+    elseif (Test-Path (Join-Path $script:BaseDir 'assets\VscWizard.ico')) { $script:AppIcon = New-Object System.Drawing.Icon((Join-Path $script:BaseDir 'assets\VscWizard.ico')) }
+} catch { }
+
 # --- Sprache GANZ AM ANFANG festlegen (einzige Entscheidung, gilt für alles) ---------
 # Der Splash läuft vor dem Laden des Kernmoduls (wo T/Übersetzungen leben) - daher hier:
 #   1. VSCWIZARD_LANG (Tests)  2. 'Language' aus config.psd1 (Wahl über den Umschalter)
@@ -78,6 +87,7 @@ function L([string]$De, [string]$En) { if ($script:StartLang -eq 'en') { $En } e
 # Deshalb sofort einen kleinen Splash zeigen und an den Meilensteinen aktualisieren.
 function Show-SplashScreen {
     $sp = New-Object System.Windows.Forms.Form
+    if ($script:AppIcon) { $sp.Icon = $script:AppIcon }
     $sp.FormBorderStyle = 'None'
     $sp.StartPosition = 'CenterScreen'
     $sp.Size = New-Object System.Drawing.Size(440, 168)
@@ -605,6 +615,7 @@ function Set-DialogStyle {
     # Dialoge an das Hauptfenster angleichen (vor ShowDialog aufrufen): Schrift, und alle
     # Buttons im neuen Stil - die Standard-Schaltfläche (AcceptButton) als Primary.
     param([Parameter(Mandatory)][System.Windows.Forms.Form]$Dialog)
+    if ($script:AppIcon) { $Dialog.Icon = $script:AppIcon }   # Programm-Icon auch in Dialogen
     $walk = {
         param($root)
         foreach ($c in $root.Controls) {
@@ -634,6 +645,7 @@ function Add-BorderPaint {
 }
 
 $form = New-Object System.Windows.Forms.Form
+if ($script:AppIcon) { $form.Icon = $script:AppIcon }
 $form.Text = (T 'VSC-Wizard - Virtuelle Smartcard beantragen - https://blog.zarenko.net')
 $form.Size = New-Object System.Drawing.Size(1120, 820)
 $form.StartPosition = 'CenterScreen'
