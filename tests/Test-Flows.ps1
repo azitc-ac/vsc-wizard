@@ -374,6 +374,10 @@ Step 'B fremd: Weiter nach Karte' { Invoke-PlanBNextClick }
 if ($script:PlanBCurrentStep -ne 6) { $global:Errors.Add("[RDP-Direktweg] nach der Karte erwartet Schritt 6 (RDP), ist $($script:PlanBCurrentStep)") }
 if ($btnNextShared.Enabled) { $global:Errors.Add('[RDP-Direktweg] "Weiter" im letzten Schritt aktiv') }
 if ($lblRdpStepsB.Text -notmatch 'certmgr\.msc' -or $lblRdpStepsB.Text -notmatch 'jdoe@contoso\.com') { $global:Errors.Add("[RDP-Direktweg] Anleitung ohne certmgr/Zielkonto: $($lblRdpStepsB.Text)") }
+if ($lblRdpDriverHintB.Text) { $global:Errors.Add('[RDP-Direktweg] Treiber-Hinweis bei einer VSC angezeigt') }
+$script:PlanB_PcscName = 'Yubico YubiKey OTP+FIDO+CCID 0'; Update-PlanBRdpPage
+if ($lblRdpDriverHintB.Text -notmatch 'Minidriver') { $global:Errors.Add('[RDP-Direktweg] Treiber-Hinweis fehlt bei physischer Karte') }
+$script:PlanB_PcscName = 'Microsoft Virtual Smart Card 2'; Update-PlanBRdpPage
 Step 'B fremd: Ausweichweg' { Invoke-Ctl $lnkRdpFallbackB 'OnLinkClicked' (New-Object System.Windows.Forms.LinkLabelLinkClickedEventArgs($lnkRdpFallbackB.Links[0])) }
 if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[RDP-Direktweg] Ausweichweg führt nicht zur CSR (Schritt $($script:PlanBCurrentStep))") }
 Step 'B fremd: Zurück aus CSR' { Invoke-PlanBBackClick }

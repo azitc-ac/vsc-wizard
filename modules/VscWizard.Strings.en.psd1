@@ -460,4 +460,5 @@
     'Zertifikat wurde in den Zertifikatsspeicher übernommen.' = 'The certificate was added to the certificate store.'
     'Übernahme fehlgeschlagen: {0} Details siehe Log.' = 'Adding to the store failed: {0} See log for details.'
     '({0} nur auf der Karte)' = '({0} only on the card)'
+    "Hinweis: `"{0}`" ist keine virtuelle Smartcard. Der Server beschreibt sie mit seinem eigenen Kartentreiber - der Treiber der Karte (z.B. Yubico-Minidriver) muss daher auch auf dem Server installiert sein. Erscheint die Karte dort schreibgeschützt, den Ausweichweg unten verwenden." = "Note: `"{0}`" is not a virtual smart card. The server writes to it with its own card driver - so the card's driver (e.g. Yubico minidriver) must also be installed on the server. If the card appears read-only there, use the fallback below."
 }

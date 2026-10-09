@@ -3294,32 +3294,34 @@ $pnlStepsB.Controls.Add($pnlB7)
 $picCardRdpB = New-CardPicture -X 20 -Y 16
 $lblRdpHintB = New-WizardLabel -Text '' -X 136 -Y 40 -Width 664 -Height 48
 $lblRdpStepsB = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 190
+# Physische Karte (z.B. YubiKey): der Server beschreibt sie mit SEINEM Kartentreiber.
+$lblRdpDriverHintB = New-WizardLabel -Text '' -X 20 -Y 216 -Width 780 -Height 44
 
 $btnRdpConnectB = New-Object System.Windows.Forms.Button
 $btnRdpConnectB.Text = (T 'RDP-Verbindung starten')
-$btnRdpConnectB.Location = New-Object System.Drawing.Point(20, 220)
+$btnRdpConnectB.Location = New-Object System.Drawing.Point(20, 270)
 $btnRdpConnectB.Size = New-Object System.Drawing.Size(240, 32)
 
 $btnRdpCheckB = New-Object System.Windows.Forms.Button
 $btnRdpCheckB.Text = (T 'Karte prüfen')
-$btnRdpCheckB.Location = New-Object System.Drawing.Point(280, 220)
+$btnRdpCheckB.Location = New-Object System.Drawing.Point(280, 270)
 $btnRdpCheckB.Size = New-Object System.Drawing.Size(200, 32)
 
-$lblRdpResultB = New-WizardLabel -Text '' -X 20 -Y 266 -Width 780 -Height 44
-$lblRdpSummaryB = New-WizardLabel -Text '' -X 20 -Y 318 -Width 780 -Height 60
+$lblRdpResultB = New-WizardLabel -Text '' -X 20 -Y 316 -Width 780 -Height 44
+$lblRdpSummaryB = New-WizardLabel -Text '' -X 20 -Y 368 -Width 780 -Height 60
 
 $lnkRdpFallbackB = New-Object System.Windows.Forms.LinkLabel
 $lnkRdpFallbackB.Text = (T 'Karte lässt sich nicht durchreichen? Stattdessen Antrag (CSR) hier erstellen und auf dem Server mit dem Einreicher einreichen')
-$lnkRdpFallbackB.Location = New-Object System.Drawing.Point(20, 390)
+$lnkRdpFallbackB.Location = New-Object System.Drawing.Point(20, 440)
 $lnkRdpFallbackB.Size = New-Object System.Drawing.Size(780, 22)
 
 $btnRdpStartB = New-Object System.Windows.Forms.Button
 $btnRdpStartB.Text = (T 'Zum Startbildschirm')
-$btnRdpStartB.Location = New-Object System.Drawing.Point(20, 424)
+$btnRdpStartB.Location = New-Object System.Drawing.Point(20, 474)
 $btnRdpStartB.Size = New-Object System.Drawing.Size(200, 32)
 $btnRdpStartB.Visible = $false
 
-$pnlB7.Controls.AddRange(@($picCardRdpB, $lblRdpHintB, $lblRdpStepsB, $btnRdpConnectB, $btnRdpCheckB, $lblRdpResultB, $lblRdpSummaryB, $lnkRdpFallbackB, $btnRdpStartB))
+$pnlB7.Controls.AddRange(@($picCardRdpB, $lblRdpHintB, $lblRdpStepsB, $lblRdpDriverHintB, $btnRdpConnectB, $btnRdpCheckB, $lblRdpResultB, $lblRdpSummaryB, $lnkRdpFallbackB, $btnRdpStartB))
 
 function Update-PlanBRdpPage {
     $identity = Get-EnrollmentIdentity
@@ -3334,6 +3336,14 @@ function Update-PlanBRdpPage {
         $lblRdpHintB.Text = (T 'Empfohlener Weg: Die Karte wird per RDP zum Server durchgereicht und dort direkt als Zielkonto beschriftet - ohne Antragsdatei und ohne Einreicher.')
     }
     $lblRdpStepsB.Text = ((T "1. `"RDP-Verbindung starten`" - verbindet mit {0} und reicht diese Smartcard durch. Dort anmelden als {1}.`r`n2. Auf dem Server certmgr.msc öffnen: Eigene Zertifikate > Rechtsklick > Alle Aufgaben > Neues Zertifikat anfordern.`r`n3. Active Directory-Registrierungsrichtlinie, Template `"{2}`" ankreuzen, `"Registrieren`".`r`n4. Bei der Kartenauswahl `"{3}`" wählen und die PIN DIESER Karte eingeben.`r`n5. RDP-Sitzung abmelden, dann hier `"Karte prüfen`".") -f $server, $identity.DisplayName, $template, $cardLabel)
+    # Keine VSC (deren Treiber hat jeder Windows-Server): Treiber muss AUCH auf dem Server
+    # liegen, sonst bindet Windows dort z.B. den eingebauten, nur lesenden PIV-Treiber.
+    if ($script:PlanB_PcscName -and $script:PlanB_PcscName -notlike 'Microsoft Virtual Smart Card*') {
+        $lblRdpDriverHintB.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblRdpDriverHintB.Text = ((T "Hinweis: `"{0}`" ist keine virtuelle Smartcard. Der Server beschreibt sie mit seinem eigenen Kartentreiber - der Treiber der Karte (z.B. Yubico-Minidriver) muss daher auch auf dem Server installiert sein. Erscheint die Karte dort schreibgeschützt, den Ausweichweg unten verwenden.") -f $script:PlanB_CardName)
+    } else {
+        $lblRdpDriverHintB.Text = ''
+    }
     $done = [bool]$script:PlanB_CertIssued
     $btnRdpStartB.Visible = $done
     $btnRdpConnectB.Enabled = -not $done; $btnRdpCheckB.Enabled = -not $done; $lnkRdpFallbackB.Visible = -not $done
@@ -4504,7 +4514,7 @@ function Register-StatusLabel {
     $Label.Add_ForeColorChanged({ Update-StatusLook $this })
     Update-StatusLook $Label
 }
-foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB, $lblRdpResultB)) { Register-StatusLabel $l }
+foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB, $lblRdpResultB, $lblRdpDriverHintB)) { Register-StatusLabel $l }
 
 # Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" (Plan A und Plan B, EIN Stil):
 # Die falsche Karte zu wählen landet das Zertifikat auf der falschen VSC - deshalb
