@@ -1579,7 +1579,15 @@ function Get-SmartCardCngProviderInfoBatch {
         # legitim (sonst Bindungsfehler -> in der PS2EXE-Exe als Fehler-Popup).
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Thumbprint,
         # Grundbudget (Prozessstart); pro Zertifikat kommt ein kleiner Zuschlag dazu.
-        [int]$TimeoutSeconds = 3
+        [int]$TimeoutSeconds = 3,
+        # Optional: im SELBEN Kindprozess zusätzlich die Zertifikate lesen, die AUF DEN
+        # KARTEN liegen (NCrypt-Eigenschaft "SmartCardKeyCertificate", still, ohne PIN) -
+        # auch solche, die der Zertifikatverteilungsdienst (CertPropSvc) noch nicht in
+        # den Benutzerspeicher kopiert hat (z.B. per RDP-Smartcard-Umleitung in
+        # certmgr.msc beantragt). Erhält eine Liste @{ Reader; Container; Thumbprint;
+        # Subject; Upn; NotBefore; NotAfter; RawData }. Nie gecacht: die Karte kann sich
+        # ändern, ohne dass sich der VSC-Bestand ändert.
+        [ref]$CardCertificates
     )
 
     # Sitzungs-Cache: die Schlüssel-Zuordnung eines Zertifikats ändert sich nicht - nur
@@ -1597,7 +1605,8 @@ function Get-SmartCardCngProviderInfoBatch {
         if ($script:CngInfoCache.ContainsKey($tp)) { $results[$tp] = $script:CngInfoCache[$tp] }
     }
     $pending = @($Thumbprint | Where-Object { $_ -and -not $results.ContainsKey($_) } | Select-Object -Unique)
-    if ($pending.Count -eq 0) { return $results }
+    if ($CardCertificates) { $CardCertificates.Value = @() }
+    if ($pending.Count -eq 0 -and -not $CardCertificates) { return $results }
 
     # Dieses Skript läuft als EIGENER Prozess (siehe unten) und importiert Core.psm1
     # deshalb NICHT - braucht den nativen-Module-Fix vom Kopf dieser Datei also
@@ -1611,7 +1620,10 @@ function Get-SmartCardCngProviderInfoBatch {
 # Thumbprints kommagetrennt (ein -File-Parameter kann kein Array aufnehmen).
 # Ausgabe je Zertifikat: "Begin=<tp>", key=value-Zeilen, "End=<tp>" - nur Blöcke mit
 # End-Marker gelten als abgeschlossen (wichtig bei einem Timeout-Abbruch).
-param([Parameter(Mandatory)][string]$Thumbprints)
+# -CardCertificates: danach je Container der Karten eine Zeile
+# "Card=<reader>|<container>|<Base64 des Zertifikats auf der Karte>" (jede Zeile für sich
+# vollständig), am Ende "CardDone=1".
+param([string]$Thumbprints = '', [switch]$CardCertificates)
 foreach ($nativeModuleName in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.Management')) {
     $nativeModulePath = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules\$nativeModuleName\$nativeModuleName.psd1"
     if (Test-Path $nativeModulePath) {
@@ -1655,6 +1667,9 @@ public static class VscKeyMap {
         } finally { Marshal.FreeHGlobal(buf); }
     }
 
+    // Alle (Leser, Container)-Paare der letzten ContainerToReader()-Abfrage.
+    public static List<string[]> Pairs = new List<string[]>();
+
     // Containername -> PC/SC-Leser, für alle eingesteckten Karten (still, ohne PIN/Dialog).
     public static Dictionary<string, string> ContainerToReader() {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1674,6 +1689,7 @@ public static class VscKeyMap {
                         var kn = (NCryptKeyName)Marshal.PtrToStructure(pName, typeof(NCryptKeyName));
                         string name = Marshal.PtrToStringUni(kn.pszName);
                         if (name != null && !map.ContainsKey(name)) map[name] = reader;
+                        if (name != null) Pairs.Add(new[] { reader, name });
                         NCryptFreeBuffer(pName);
                     }
                     if (state != IntPtr.Zero) NCryptFreeBuffer(state);
@@ -1685,7 +1701,7 @@ public static class VscKeyMap {
 }
 "@
 $map = [VscKeyMap]::ContainerToReader()
-foreach ($Thumbprint in ($Thumbprints -split ',')) {
+foreach ($Thumbprint in @($Thumbprints -split ',' | Where-Object { $_ })) {
     [Console]::Out.WriteLine("Begin=$Thumbprint")
     try {
         $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction Stop
@@ -1705,19 +1721,50 @@ foreach ($Thumbprint in ($Thumbprints -split ',')) {
     [Console]::Out.WriteLine("End=$Thumbprint")
     [Console]::Out.Flush()
 }
+# Zertifikate AUF den Karten (unabhängig vom Benutzerspeicher): Schlüssel still öffnen
+# (CngKeyOpenOptions.Silent = NCRYPT_SILENT_FLAG, keine PIN - wie Get-SmartCardOccupancy)
+# und die Eigenschaft "SmartCardKeyCertificate" lesen. Container ohne Zertifikat
+# (z.B. Schlüssel eines noch offenen Antrags) liefern ein leeres Feld.
+if ($CardCertificates) {
+    $cngProv = New-Object System.Security.Cryptography.CngProvider('Microsoft Smart Card Key Storage Provider')
+    foreach ($pair in [VscKeyMap]::Pairs) {
+        $b64 = ''
+        try {
+            $k = [System.Security.Cryptography.CngKey]::Open("\\.\$($pair[0])\$($pair[1])", $cngProv, [System.Security.Cryptography.CngKeyOpenOptions]::Silent)
+            try { $b64 = [Convert]::ToBase64String($k.GetProperty('SmartCardKeyCertificate', [System.Security.Cryptography.CngPropertyOptions]::None).GetValue()) } catch { }
+            $k.Dispose()
+        } catch { }
+        [Console]::Out.WriteLine("Card=$($pair[0])|$($pair[1])|$b64")
+        [Console]::Out.Flush()
+    }
+    [Console]::Out.WriteLine('CardDone=1')
+}
 '@
-    Set-Content -Path $scriptPath -Value $lookupScript -Encoding UTF8
+    # Liest gerade ein anderer Lookup-Prozess (zweite Instanz) dieselbe Datei, ist sie
+    # gesperrt - dann genügt die vorhandene, sofern sie schon diese Version enthält.
+    try { Set-Content -Path $scriptPath -Value $lookupScript -Encoding UTF8 -ErrorAction Stop }
+    catch {
+        $existing = Get-Content -Path $scriptPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ("$existing".TrimEnd() -ne $lookupScript.TrimEnd()) { throw }
+    }
 
     $batchTimeout = $TimeoutSeconds + [int][math]::Ceiling($pending.Count / 4)
+    # Kartenzertifikate: kleiner Zuschlag (je Container ein stilles Öffnen).
+    if ($CardCertificates) { $batchTimeout += 2 }
     $result = Invoke-ExternalCommand -FilePath 'powershell.exe' -ArgumentList @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-Thumbprints', ($pending -join ',')
+        @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) +
+        $(if ($pending.Count -gt 0) { @('-Thumbprints', ($pending -join ',')) } else { @() }) +   # leeres Argument ginge verloren
+        $(if ($CardCertificates) { @('-CardCertificates') } else { @() })
     ) -TimeoutSeconds $batchTimeout -Silent
     $timedOut = ($result.StdErr -eq 'Timeout')
     $output = if ($timedOut) { $result.PartialStdOut } else { $result.StdOut }
 
     $current = $null
+    $cardLines = New-Object System.Collections.Generic.List[string]
     foreach ($line in ("$output" -split "`r?`n")) {
-        if ($line -match '^Begin=(.*)$') {
+        if ($line -match '^Card=') {
+            $cardLines.Add($line)
+        } elseif ($line -match '^Begin=(.*)$') {
             $current = [pscustomobject]@{ Provider = $null; Reader = $null; IsHardware = $false; Container = $null; DetectionError = $null; TimedOut = $false }
         } elseif (-not $current) {
             continue
@@ -1732,6 +1779,12 @@ foreach ($Thumbprint in ($Thumbprints -split ',')) {
         elseif ($line -match '^IsHardware=(.*)$') { $current.IsHardware = [bool]::Parse($Matches[1]) }
         elseif ($line -match '^Container=(.*)$') { $current.Container = $Matches[1] }
         elseif ($line -match '^Error=(.*)$') { $current.DetectionError = $Matches[1] }
+    }
+    if ($CardCertificates) {
+        $CardCertificates.Value = @(ConvertFrom-SmartCardCertificateLines -Line @($cardLines))
+        if ("$output" -notmatch 'CardDone=1') {
+            Write-WizardLog -Message "Kartenzertifikate: Abfrage unvollständig ($(if ($timedOut) { 'Zeitüberschreitung' } else { "$($result.StdErr)".Trim() })) - $(@($CardCertificates.Value).Count) gelesen." -Level Warn
+        }
     }
 
     $missing = @($pending | Where-Object { -not $results.ContainsKey($_) })
@@ -1753,6 +1806,142 @@ foreach ($Thumbprint in ($Thumbprints -split ',')) {
     return $results
 }
 
+function Get-CertificateUpn {
+    # UPN (Principal Name) aus dem SubjectAltName. Format($true) ist lokalisiert, daher
+    # über ein E-Mail-/UPN-Muster statt fester Feldnamen.
+    param([System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+    try {
+        $san = $Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } | Select-Object -First 1
+        if ($san -and $san.Format($true) -match '([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})') { return $Matches[1] }
+    } catch { }
+    return $null
+}
+
+function ConvertFrom-SmartCardCertificateLines {
+    # "Card=<reader>|<container>|<Base64>"-Zeilen des Lookup-Prozesses -> Objekte. Container
+    # ohne Zertifikat (leeres Base64) und unlesbare Daten werden übersprungen.
+    param([AllowEmptyCollection()][string[]]$Line)
+    foreach ($l in $Line) {
+        if ($l -notmatch '^Card=([^|]*)\|([^|]*)\|(.*)$') { continue }
+        $reader = $Matches[1]; $container = $Matches[2]; $b64 = $Matches[3].Trim()
+        if (-not $b64) { continue }
+        try {
+            $raw = [Convert]::FromBase64String($b64)
+            $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $raw)
+        } catch { continue }
+        [pscustomobject]@{
+            Reader     = $reader
+            Container  = $container
+            Thumbprint = $c.Thumbprint
+            Subject    = $c.Subject
+            Upn        = Get-CertificateUpn -Certificate $c
+            NotBefore  = $c.NotBefore
+            NotAfter   = $c.NotAfter
+            RawData    = $raw
+        }
+    }
+}
+
+function Merge-SmartCardCertificateSources {
+    # Führt die Zertifikate aus dem Benutzerspeicher (Read-SmartCardCertificates) mit den
+    # direkt von den Karten gelesenen zusammen. Ergebnis: alle Speicher-Einträge
+    # (InStore=$true; fehlt ihnen der Leser, ergänzt ihn der Kartenfund mit demselben
+    # Thumbprint) plus die Kartenzertifikate, die im Speicher (mit privatem Schlüssel)
+    # fehlen - als InStore=$false, mit RawData zum Anzeigen/Übernehmen.
+    param(
+        [AllowEmptyCollection()][object[]]$StoreEntries = @(),
+        [AllowEmptyCollection()][object[]]$CardEntries = @()
+    )
+    $storeTps = @{}
+    $merged = New-Object System.Collections.Generic.List[object]
+    foreach ($s in @($StoreEntries | Where-Object { $_ })) {
+        $storeTps[$s.Thumbprint] = $true
+        $e = $s | Select-Object *
+        $onCard = @($CardEntries | Where-Object { $_ -and $_.Thumbprint -eq $s.Thumbprint }) | Select-Object -First 1
+        if ($onCard -and -not $e.Reader) {
+            # Speicher-Eintrag ohne zuordenbare Karte, der Kartenfund kennt sie.
+            $e.Reader = $onCard.Reader
+            if (-not $e.KeyContainerName) { $e.KeyContainerName = $onCard.Container }
+            if (-not $e.Provider) { $e.Provider = 'Microsoft Smart Card Key Storage Provider' }
+            $e.IsSmartCard = $true
+            $e.DetectionError = $null
+        }
+        $e | Add-Member -NotePropertyName InStore -NotePropertyValue $true -Force
+        $merged.Add($e)
+    }
+    $seen = @{}
+    foreach ($c in @($CardEntries | Where-Object { $_ })) {
+        if ($storeTps.ContainsKey($c.Thumbprint)) { continue }
+        # Windows Hello for Business meldet sich ebenfalls als Leser - kein Smartcard-KSP,
+        # "In Speicher übernehmen" wäre dort falsch.
+        if ("$($c.Reader)" -like 'Windows Hello*') { continue }
+        $key = "$($c.Thumbprint)|$($c.Reader)"
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $merged.Add([pscustomobject]@{
+            Subject          = $c.Subject
+            Upn              = $c.Upn
+            Thumbprint       = $c.Thumbprint
+            NotBefore        = $c.NotBefore
+            NotAfter         = $c.NotAfter
+            Provider         = 'Microsoft Smart Card Key Storage Provider'
+            Reader           = $c.Reader
+            KeyContainerName = $c.Container
+            IsSmartCard      = $true
+            DetectionError   = $null
+            InStore          = $false
+            RawData          = $c.RawData
+        })
+    }
+    return $merged.ToArray()
+}
+
+function Import-SmartCardCertificateToStore {
+    # "In Speicher übernehmen": legt ein nur auf der Karte vorhandenes Zertifikat in
+    # CurrentUser\My ab und verknüpft es mit dem Kartenschlüssel (CERT_KEY_PROV_INFO:
+    # Container + Smartcard-KSP), wie es der Zertifikatverteilungsdienst täte. Öffnet den
+    # Schlüssel NICHT (keine PIN, kein Hänger wie bei certutil -repairstore).
+    param(
+        [Parameter(Mandatory)][byte[]]$RawData,
+        [Parameter(Mandatory)][string]$ContainerName,
+        [string]$Provider = 'Microsoft Smart Card Key Storage Provider'
+    )
+    if (-not ('VscProvInfoWriter' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class VscProvInfoWriter {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct CRYPT_KEY_PROV_INFO { public string pwszContainerName; public string pwszProvName; public uint dwProvType; public uint dwFlags; public uint cProvParam; public IntPtr rgProvParam; public uint dwKeySpec; }
+    [DllImport("crypt32.dll", SetLastError = true)] static extern bool CertSetCertificateContextProperty(IntPtr ctx, uint propId, uint flags, ref CRYPT_KEY_PROV_INFO pv);
+    // CERT_KEY_PROV_INFO_PROP_ID (2); CNG-Schlüssel: dwProvType 0, dwKeySpec 0.
+    public static int Set(IntPtr certCtx, string container, string provider) {
+        var info = new CRYPT_KEY_PROV_INFO { pwszContainerName = container, pwszProvName = provider };
+        return CertSetCertificateContextProperty(certCtx, 2, 0, ref info) ? 0 : Marshal.GetLastWin32Error();
+    }
+}
+"@
+    }
+    Clear-SmartCardInfoCache
+    $store = $null
+    try {
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $RawData)
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser')
+        $store.Open('ReadWrite')
+        $store.Add($cert)
+        $inStore = @($store.Certificates | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }) | Select-Object -First 1
+        if (-not $inStore) { throw 'Zertifikat nach dem Hinzufügen nicht im Speicher gefunden.' }
+        $err = [VscProvInfoWriter]::Set($inStore.Handle, $ContainerName, $Provider)
+        if ($err -ne 0) { throw "CertSetCertificateContextProperty: Fehler $err" }
+        $linked = Get-Item -Path "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
+        Write-WizardLog -Message "Zertifikat von der Karte in den Benutzerspeicher übernommen ($($cert.Thumbprint), Container $ContainerName, privater Schlüssel verknüpft: $([bool]($linked -and $linked.HasPrivateKey)))." -Level Success
+        return [pscustomobject]@{ Success = $true; Message = '' }
+    } catch {
+        Write-WizardLog -Message "Übernahme in den Benutzerspeicher fehlgeschlagen: $($_.Exception.Message)" -Level Error
+        return [pscustomobject]@{ Success = $false; Message = $_.Exception.Message }
+    } finally { if ($store) { $store.Close() } }
+}
+
 function Get-SmartCardCertificates {
     # Hülle: Busy-Anzeige um die eigentliche Erkennung (Read-SmartCardCertificates).
     param([string]$StoreLocation = 'Cert:\CurrentUser\My')
@@ -1761,7 +1950,10 @@ function Get-SmartCardCertificates {
 }
 
 function Read-SmartCardCertificates {
-    # Alle Zertifikate im Benutzer-Zertifikatsspeicher mit privatem Schlüssel.
+    # Alle Zertifikate im Benutzer-Zertifikatsspeicher mit privatem Schlüssel, ergänzt um
+    # die Zertifikate, die nur AUF einer Karte liegen (InStore=$false, siehe
+    # Merge-SmartCardCertificateSources) - sonst fehlten Zertifikate, die CertPropSvc noch
+    # nicht kopiert hat, in Inventar, Picker und Aufräumen.
     # IsSmartCard=true, wenn Provider-Name "Smart Card" enthält ODER die CSP-Info
     # das Gerät als Hardware-Schlüssel meldet. Zertifikate mit privatem Schlüssel,
     # die NICHT sicher als Smartcard erkannt wurden, werden trotzdem zurückgegeben
@@ -1780,25 +1972,17 @@ function Read-SmartCardCertificates {
     # CNG-Infos für ALLE Kandidaten in EINEM Kindprozess vorab holen (statt eines
     # powershell.exe-Starts pro Zertifikat - siehe Get-SmartCardCngProviderInfoBatch).
     $keyCerts = @($certs | Where-Object { $_.HasPrivateKey })
-    if ($keyCerts.Count -eq 0) { return @() }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $cngLookup = Get-SmartCardCngProviderInfoBatch -Thumbprint @($keyCerts | ForEach-Object { $_.Thumbprint })
-    Write-WizardLog -Message "Get-SmartCardCertificates: CNG-Sammelabfrage für $($keyCerts.Count) Zertifikat(e) in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s." -Level Info
+    $cardCerts = @()
+    $cngLookup = Get-SmartCardCngProviderInfoBatch -Thumbprint @($keyCerts | ForEach-Object { $_.Thumbprint }) -CardCertificates ([ref]$cardCerts)
+    Write-WizardLog -Message "Get-SmartCardCertificates: CNG-Sammelabfrage für $($keyCerts.Count) Zertifikat(e) im Speicher und $(@($cardCerts).Count) auf den Karten in $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s." -Level Info
     $results = foreach ($cert in $keyCerts) {
         $info = Get-SmartCardCertificateInfo -Certificate $cert -CngResult $cngLookup[$cert.Thumbprint]
         $isSmartCard = $info.IsHardware -or ($info.Provider -and $info.Provider -match 'Smart Card')
         # UPN (Principal Name) aus dem SubjectAltName lesen - identifiziert das KONTO,
         # fuer das die Karte ausgestellt wurde (wichtig fuer die Verlaengerung, damit
-        # nicht versehentlich fuer den falschen Benutzer re-enrollt wird). Format($true)
-        # ist lokalisiert, daher ueber ein E-Mail-/UPN-Muster statt fester Feldnamen.
-        $upn = $null
-        try {
-            $san = $cert.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.17' } | Select-Object -First 1
-            if ($san) {
-                $sanTxt = $san.Format($true)
-                if ($sanTxt -match '([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})') { $upn = $Matches[1] }
-            }
-        } catch { }
+        # nicht versehentlich fuer den falschen Benutzer re-enrollt wird).
+        $upn = Get-CertificateUpn -Certificate $cert
         [pscustomobject]@{
             Subject          = $cert.Subject
             Upn              = $upn
@@ -1812,7 +1996,12 @@ function Read-SmartCardCertificates {
             DetectionError   = $info.DetectionError
         }
     }
-    return @($results)
+    $merged = @(Merge-SmartCardCertificateSources -StoreEntries @($results) -CardEntries @($cardCerts))
+    $cardOnly = @($merged | Where-Object { -not $_.InStore })
+    if ($cardOnly.Count -gt 0) {
+        Write-WizardLog -Message "Get-SmartCardCertificates: $($cardOnly.Count) Zertifikat(e) nur auf der Karte, nicht im Zertifikatsspeicher: $(($cardOnly | ForEach-Object { "$($_.Thumbprint) ($($_.Reader))" }) -join ', ')." -Level Info
+    }
+    return $merged
 }
 
 function Remove-SmartCardCertificateFromCard {

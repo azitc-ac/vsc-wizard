@@ -1825,6 +1825,9 @@ function Show-VscPickerDialog {
             $soonest = ($cardCerts | Sort-Object NotAfter | Select-Object -First 1).NotAfter
             ((T 'gültig bis {0}') -f $soonest.ToString('yyyy-MM-dd'))
         } else { (T 'kein Zertifikat gefunden') }
+        # Zertifikate nur auf der Karte (noch nicht im Speicher) zählen für die Restlaufzeit mit.
+        $cardOnly = @($cardCerts | Where-Object { $_.InStore -eq $false }).Count
+        if ($cardOnly -gt 0) { $expiryNote += '  ' + ((T '({0} nur auf der Karte)') -f $cardOnly) }
         $pcsc = if ($r.PcscName) { $r.PcscName } else { '?' }
         [void]$list.Items.Add("$($r.FriendlyName)  [$pcsc]  -  $expiryNote")
     }
@@ -2016,7 +2019,13 @@ function Invoke-RenewalCleanup {
     $old  = @($sorted | Select-Object -Skip 1)   # das neueste (gerade ausgestellte) behalten
     Write-WizardLog -Message "Aufräumen: behalte '$($keep.Subject)' (gültig bis $($keep.NotAfter.ToString('yyyy-MM-dd'))), $($old.Count) ältere(s) zum Entfernen." -Level Info
 
-    $list = ($old | ForEach-Object { ((T "- {0}`r`n   gültig bis {1}, Thumbprint {2}") -f $_.Subject, $_.NotAfter.ToString('yyyy-MM-dd'), $_.Thumbprint) }) -join "`r`n"
+    # Auch Zertifikate, die nur auf der Karte liegen (noch nicht im Speicher), zählen mit -
+    # sonst tauchten sie erst beim nächsten Aufräumen auf, wenn CertPropSvc sie kopiert hat.
+    $list = ($old | ForEach-Object {
+        $line = (T "- {0}`r`n   gültig bis {1}, Thumbprint {2}") -f $_.Subject, $_.NotAfter.ToString('yyyy-MM-dd'), $_.Thumbprint
+        if ($_.InStore -eq $false) { $line += "`r`n   " + (T 'liegt auf der Karte, fehlt im Zertifikatsspeicher') }
+        $line
+    }) -join "`r`n"
     $confirm = [System.Windows.Forms.MessageBox]::Show(
         ((T "Auf der Karte liegen nach der Verlängerung noch {0} ältere(s) Zertifikat(e). Jetzt entfernen, damit nur das neue bleibt?`r`n`r`nBEHALTEN (neu):`r`n- {1}`r`n   gültig bis {2}`r`n`r`nENTFERNEN:`r`n{3}`r`n`r`nJe Entfernung erscheint ggf. eine UAC-/PIN-Abfrage.") -f $old.Count, $keep.Subject, $keep.NotAfter.ToString('yyyy-MM-dd'), $list),
         (T 'Karte aufräumen - altes Zertifikat entfernen'), 'YesNo', 'Question')
@@ -3498,7 +3507,7 @@ function Show-VscInventoryDialog {
         if ($OnlyInstanceId) { $readers = @($readers | Where-Object { "$($_.InstanceId)" -eq $OnlyInstanceId }) }
         $certs = @(Get-SmartCardCertificates)
     } finally { Clear-Busy }
-    Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegerät(e), $($certs.Count) Zertifikat(e) mit privatem Schlüssel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt." -Level Info
+    Write-WizardLog -Message "Smartcard-Inventar: $($readers.Count) Lesegerät(e), $($certs.Count) Zertifikat(e) mit privatem Schlüssel, davon $(@($certs | Where-Object IsSmartCard).Count) als Smartcard erkannt, $(@($certs | Where-Object { $_.InStore -eq $false }).Count) nur auf der Karte." -Level Info
 
     $now = Get-Date
     function Get-ExpiryState([datetime]$NotAfter) {
@@ -3627,9 +3636,17 @@ function Show-VscInventoryDialog {
     $certBar = New-InvActionBar
     $btnShowCert = New-InvButton (T 'Anzeigen...') 150
     $btnDeleteCert = New-InvButton (T 'Von Karte entfernen...')
-    $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
-    $certBar.Controls.AddRange(@($btnShowCert, $btnDeleteCert))
-    if ($UserView) { $btnDeleteCert.Visible = $false }
+    # Zertifikat nur auf der Karte (noch nicht vom Zertifikatverteilungsdienst kopiert):
+    # Hinweis + in den Benutzerspeicher übernehmen.
+    $btnImportCert = New-InvButton (T 'In Speicher übernehmen')
+    $lblCardOnly = New-Object System.Windows.Forms.Label
+    $lblCardOnly.Text = T 'Liegt auf der Karte, fehlt im Zertifikatsspeicher.'
+    $lblCardOnly.AutoSize = $true; $lblCardOnly.UseMnemonic = $false
+    $lblCardOnly.ForeColor = $script:UI.Warn
+    $lblCardOnly.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false; $btnImportCert.Enabled = $false; $lblCardOnly.Visible = $false
+    $certBar.Controls.AddRange(@($btnShowCert, $btnDeleteCert, $btnImportCert, $lblCardOnly))
+    if ($UserView) { $btnDeleteCert.Visible = $false; $btnImportCert.Visible = $false }
     $dlgLayout.Controls.Add($certBar, 0, 5)
 
     $dlgBtnPanel = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -3646,7 +3663,7 @@ function Show-VscInventoryDialog {
 
     function Update-CertListForSelection {
         $lvCerts.Items.Clear()
-        $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false
+        $btnShowCert.Enabled = $false; $btnDeleteCert.Enabled = $false; $btnImportCert.Enabled = $false; $lblCardOnly.Visible = $false
         $sel =if ($lvReaders.SelectedItems.Count -gt 0) { $lvReaders.SelectedItems[0].Tag } else { $null }
         $btnChangePin.Enabled = Test-IsVirtualCard $sel
         $btnDeleteReader.Enabled = Test-IsVirtualCard $sel
@@ -3673,6 +3690,11 @@ function Show-VscInventoryDialog {
             $state = Get-ExpiryState $c.NotAfter
             $stateText = switch ($state) { 'expired' { T 'abgelaufen' } 'soon' { T 'läuft bald ab' } default { T 'gültig' } }
             $sub = $item.SubItems.Add($stateText); $sub.ForeColor = Get-ExpiryColor $state
+            if ($c.InStore -eq $false) {
+                # Liegt nur auf der Karte (CertPropSvc hat es noch nicht kopiert).
+                $sub.Text = T 'nicht im Speicher'; $sub.ForeColor = $script:UI.Warn
+                $item.ToolTipText = T 'Liegt auf der Karte, fehlt im Zertifikatsspeicher.'
+            }
             [void]$item.SubItems.Add($c.Thumbprint)
             $item.Tag = $c
             [void]$lvCerts.Items.Add($item)
@@ -3686,6 +3708,9 @@ function Show-VscInventoryDialog {
         $btnShowCert.Enabled = [bool]($c -and $c.Thumbprint)
         # Entfernen nur für echte Smartcard-Zertifikate mit bekanntem Schlüssel-Container.
         $btnDeleteCert.Enabled = [bool]($c -and $c.KeyContainerName -and $c.Provider -and $c.IsSmartCard)
+        $cardOnly = [bool]($c -and $c.InStore -eq $false)
+        $btnImportCert.Enabled = [bool]($cardOnly -and $c.RawData -and $c.KeyContainerName)
+        $lblCardOnly.Visible = $cardOnly
     }
     $lvReaders.Add_SelectedIndexChanged({ Update-CertListForSelection })
 
@@ -3698,7 +3723,9 @@ function Show-VscInventoryDialog {
         if (-not ($c -and $c.Thumbprint)) { return }
         try {
             Add-Type -AssemblyName System.Security
-            $x = Get-Item -Path "Cert:\CurrentUser\My\$($c.Thumbprint)" -ErrorAction Stop
+            # Nur auf der Karte: aus den von der Karte gelesenen Daten anzeigen.
+            $x = if ($c.InStore -eq $false -and $c.RawData) { New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, [byte[]]$c.RawData) }
+                 else { Get-Item -Path "Cert:\CurrentUser\My\$($c.Thumbprint)" -ErrorAction Stop }
             [System.Security.Cryptography.X509Certificates.X509Certificate2UI]::DisplayCertificate($x, $dlg.Handle)
         } catch {
             Write-WizardLog -Message "Zertifikat anzeigen fehlgeschlagen: $($_.Exception.Message)" -Level Error
@@ -3762,6 +3789,20 @@ function Show-VscInventoryDialog {
         } else {
             [System.Windows.Forms.MessageBox]::Show(((T 'Entfernen fehlgeschlagen: {0} Details siehe Log.') -f $res.Message), (T 'Fehler'), 'OK', 'Error') | Out-Null
             $btnDeleteCert.Enabled = $true
+        }
+    })
+
+    $btnImportCert.Add_Click({
+        if ($lvCerts.SelectedItems.Count -eq 0) { return }
+        $c = $lvCerts.SelectedItems[0].Tag
+        if (-not ($c -and $c.InStore -eq $false -and $c.RawData -and $c.KeyContainerName)) { return }
+        $res = Import-SmartCardCertificateToStore -RawData ([byte[]]$c.RawData) -ContainerName $c.KeyContainerName -Provider $c.Provider
+        if ($res.Success) {
+            [System.Windows.Forms.MessageBox]::Show((T 'Zertifikat wurde in den Zertifikatsspeicher übernommen.'), (T 'Erledigt'), 'OK', 'Information') | Out-Null
+            $script:InventoryReopen = $true
+            $dlg.Close()
+        } else {
+            [System.Windows.Forms.MessageBox]::Show(((T 'Übernahme fehlgeschlagen: {0} Details siehe Log.') -f $res.Message), (T 'Fehler'), 'OK', 'Error') | Out-Null
         }
     })
 

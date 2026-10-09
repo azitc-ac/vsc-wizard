@@ -425,4 +425,11 @@
     'Meine Smartcard' = 'My smart card'
     'Active Directory über {0} nicht erreichbar.' = 'Active Directory not reachable via {0}.'
     'Active Directory nicht erreichbar - in den Einstellungen die Discovery-Domäne setzen.' = 'Active Directory not reachable - set the discovery domain in the settings.'
+    'nicht im Speicher' = 'not in store'
+    'Liegt auf der Karte, fehlt im Zertifikatsspeicher.' = 'On the card, missing from the certificate store.'
+    'liegt auf der Karte, fehlt im Zertifikatsspeicher' = 'on the card, missing from the certificate store'
+    'In Speicher übernehmen' = 'Add to store'
+    'Zertifikat wurde in den Zertifikatsspeicher übernommen.' = 'The certificate was added to the certificate store.'
+    'Übernahme fehlgeschlagen: {0} Details siehe Log.' = 'Adding to the store failed: {0} See log for details.'
+    '({0} nur auf der Karte)' = '({0} only on the card)'
 }
