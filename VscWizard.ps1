@@ -1756,6 +1756,7 @@ function Enter-Plan {
         $lblVscResultB.Text = ''
         $lblCompleteResultB.Text = ''
         Reset-PlanBSubmitUi
+        Reset-PlanBRdpUi
         $tabPlanB.Visible = $true
         Show-PlanBStep -Index 0
     }
@@ -1892,6 +1893,13 @@ function Update-IssueButtons {
     $btnCompleteFromTextB.Enabled = -not $script:PlanB_CertIssued
 }
 
+function Reset-PlanBRdpUi {
+    # Direktweg (Antrag in der RDP-Sitzung) für einen neuen Durchlauf zurücksetzen.
+    $script:PlanB_Fallback = $false
+    $script:PlanB_RdpEntered = $null
+    $lblRdpResultB.Text = ''; $lblRdpSummaryB.Text = ''
+}
+
 function Reset-PlanARequestUi {
     $script:PlanA_PendingRequestId = $null
     $lblCertResultA.Text = ''
@@ -1955,13 +1963,15 @@ function Enter-PlanBRenewal {
     $script:PlanB_CsrPath = $null
     $script:PlanB_CertIssued = $false   # vorher fehlte das: Zustand des vorigen Durchlaufs
     Reset-PlanBSubmitUi
+    Reset-PlanBRdpUi
     $script:PlanB_RenewMode = $true
     $script:PlanEntryFrom = 'Scenario'
     $pnlScenario.Visible = $false
     $pnlModeSelect.Visible = $false
     $script:ActivePlan = 'B'
     $tabPlanB.Visible = $true
-    Show-PlanBStep -Index 2
+    # Fremdes Konto: Direktweg (RDP) zuerst, sonst wie bisher die CSR.
+    Show-PlanBStep -Index $(if (Test-PlanBDirect) { 6 } else { 2 })
 }
 
 function Show-VscChoiceDialog {
@@ -2101,7 +2111,7 @@ function Start-ForeignOnPremScenario {
     $script:PlanA_OfflineDirect = $false
     $plan = Get-ScenarioPlanForSeparateAccount   # 'A' (EOBO) / 'B'
     if ($plan -eq 'B') {
-        [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Plan B ausgestellt:`r`n`r`nKein EA-Zertifikat vorhanden - die Einreichung erfolgt ALS das Zielkonto (RDP). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.") -f $acct), (T 'Fremdes Konto - Plan B'), 'OK', 'Information') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Plan B ausgestellt:`r`n`r`nKein EA-Zertifikat vorhanden - beantragt wird ALS das Zielkonto in einer RDP-Sitzung, in die diese Smartcard durchgereicht wird (Ausweichweg: Antrag + Einreicher). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.") -f $acct), (T 'Fremdes Konto - Plan B'), 'OK', 'Information') | Out-Null
     } else {
         [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Enroll on Behalf Of (Plan A) ausgestellt:`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt, ohne RDP und ohne temporäres Passwort.") -f $acct), (T 'Fremdes Konto - EOBO'), 'OK', 'Information') | Out-Null
     }
@@ -3244,6 +3254,7 @@ $btnResetB.Add_Click({
     $txtCerTextB.Text = ''
     $lblCompleteResultB.Text = ''
     Reset-PlanBSubmitUi
+    Reset-PlanBRdpUi
     $script:PlanB_RenewMode = $false
     # Aus einem Szenario gekommen -> zurück zur Startseite; sonst neuer Plan-B-Durchlauf.
     if ($script:PlanEntryFrom -eq 'Scenario') {
@@ -3262,15 +3273,145 @@ $btnStartB.Add_Click({
     Show-ScenarioStep
 })
 
+# --- Schritt B7 (Index 6): direkt in der RDP-Sitzung beantragen (fremdes Konto) ---
+# Empfohlener Weg für Szenario 01 ohne EA-Zertifikat: die hier erstellte Karte per RDP
+# zum Server durchreichen, dort ALS Zielkonto mit certmgr.msc beantragen - Schlüssel und
+# Zertifikat landen direkt auf DIESER Karte. CSR + Einreicher (Schritte 2-5) bleiben der
+# Ausweichweg, wenn die Karte nicht durchgereicht werden kann.
+$pnlB7 = New-Object System.Windows.Forms.Panel
+$pnlB7.Dock = 'Fill'
+$pnlStepsB.Controls.Add($pnlB7)
+
+$picCardRdpB = New-CardPicture -X 20 -Y 16
+$lblRdpHintB = New-WizardLabel -Text '' -X 136 -Y 40 -Width 664 -Height 48
+$lblRdpStepsB = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 190
+
+$btnRdpConnectB = New-Object System.Windows.Forms.Button
+$btnRdpConnectB.Text = (T 'RDP-Verbindung starten')
+$btnRdpConnectB.Location = New-Object System.Drawing.Point(20, 220)
+$btnRdpConnectB.Size = New-Object System.Drawing.Size(240, 32)
+
+$btnRdpCheckB = New-Object System.Windows.Forms.Button
+$btnRdpCheckB.Text = (T 'Karte prüfen')
+$btnRdpCheckB.Location = New-Object System.Drawing.Point(280, 220)
+$btnRdpCheckB.Size = New-Object System.Drawing.Size(200, 32)
+
+$lblRdpResultB = New-WizardLabel -Text '' -X 20 -Y 266 -Width 780 -Height 44
+$lblRdpSummaryB = New-WizardLabel -Text '' -X 20 -Y 318 -Width 780 -Height 60
+
+$lnkRdpFallbackB = New-Object System.Windows.Forms.LinkLabel
+$lnkRdpFallbackB.Text = (T 'Karte lässt sich nicht durchreichen? Stattdessen Antrag (CSR) hier erstellen und auf dem Server mit dem Einreicher einreichen')
+$lnkRdpFallbackB.Location = New-Object System.Drawing.Point(20, 390)
+$lnkRdpFallbackB.Size = New-Object System.Drawing.Size(780, 22)
+
+$btnRdpStartB = New-Object System.Windows.Forms.Button
+$btnRdpStartB.Text = (T 'Zum Startbildschirm')
+$btnRdpStartB.Location = New-Object System.Drawing.Point(20, 424)
+$btnRdpStartB.Size = New-Object System.Drawing.Size(200, 32)
+$btnRdpStartB.Visible = $false
+
+$pnlB7.Controls.AddRange(@($picCardRdpB, $lblRdpHintB, $lblRdpStepsB, $btnRdpConnectB, $btnRdpCheckB, $lblRdpResultB, $lblRdpSummaryB, $lnkRdpFallbackB, $btnRdpStartB))
+
+function Update-PlanBRdpPage {
+    $identity = Get-EnrollmentIdentity
+    $server = if ($config.RdpJumpServer) { $config.RdpJumpServer } else { T '(Server mit Sicht auf die CA)' }
+    $template = if ($config.Template) { $config.Template } else { T '(Smartcard-Template)' }
+    $cardLabel = if ($script:PlanB_PcscName) { $script:PlanB_PcscName } else { $script:PlanB_CardName }
+    if ($script:PlanB_PcscName -and (Get-VscCardCount) -gt 1) {
+        Set-CardHintLook -Label $lblRdpHintB -Active $true
+        $lblRdpHintB.Text = ((T "➜ Im Windows-Kartenauswahl-Dialog auf dem Server die Karte `"{0}`" wählen  (= '{1}').") -f $script:PlanB_PcscName, $script:PlanB_CardName)
+    } else {
+        Set-CardHintLook -Label $lblRdpHintB -Active $false
+        $lblRdpHintB.Text = (T 'Empfohlener Weg: Die Karte wird per RDP zum Server durchgereicht und dort direkt als Zielkonto beschriftet - ohne Antragsdatei und ohne Einreicher.')
+    }
+    $lblRdpStepsB.Text = ((T "1. `"RDP-Verbindung starten`" - verbindet mit {0} und reicht diese Smartcard durch. Dort anmelden als {1}.`r`n2. Auf dem Server certmgr.msc öffnen: Eigene Zertifikate > Rechtsklick > Alle Aufgaben > Neues Zertifikat anfordern.`r`n3. Active Directory-Registrierungsrichtlinie, Template `"{2}`" ankreuzen, `"Registrieren`".`r`n4. Bei der Kartenauswahl `"{3}`" wählen und die PIN DIESER Karte eingeben.`r`n5. RDP-Sitzung abmelden, dann hier `"Karte prüfen`".") -f $server, $identity.DisplayName, $template, $cardLabel)
+    $done = [bool]$script:PlanB_CertIssued
+    $btnRdpStartB.Visible = $done
+    $btnRdpConnectB.Enabled = -not $done; $btnRdpCheckB.Enabled = -not $done; $lnkRdpFallbackB.Visible = -not $done
+}
+
+function Start-PlanBRdpSession {
+    # .rdp-Datei mit Smartcard-Umleitung erzeugen und mstsc damit starten. Ohne
+    # konfigurierten Server öffnet mstsc den Bearbeiten-Dialog zum Eintragen.
+    $identity = Get-EnrollmentIdentity
+    $rdpPath = Join-Path (Get-WizardWorkingDir) 'VSC-Wizard-Antrag.rdp'
+    $lines = @("full address:s:$($config.RdpJumpServer)", 'redirectsmartcards:i:1', 'prompt for credentials:i:1', 'authentication level:i:2', 'screen mode id:i:1')
+    if ($identity.Upn) { $lines += "username:s:$($identity.Upn)" } elseif ($script:TargetAccount) { $lines += "username:s:$($script:TargetAccount)" }
+    Set-Content -Path $rdpPath -Value $lines -Encoding Unicode
+    $mstscArgs = if ($config.RdpJumpServer) { @("`"$rdpPath`"") } else { @('/edit', "`"$rdpPath`"") }
+    Write-WizardLog -Message "RDP mit Smartcard-Umleitung: mstsc.exe $($mstscArgs -join ' ')" -Level Command
+    $script:PlanB_RdpStarted = Get-Date
+    try { Start-Process -FilePath 'mstsc.exe' -ArgumentList $mstscArgs } catch { Write-WizardLog -Message "mstsc konnte nicht gestartet werden: $($_.Exception.Message)" -Level Error }
+}
+
+function Find-PlanBRdpCertificate {
+    # Neu ausgestelltes Zertifikat des Zielkontos auf DIESER Karte: passendes Konto (UPN
+    # bzw. Name im Subject) und ausgestellt seit Betreten des Schritts (15 min Spielraum:
+    # die CA datiert NotBefore um ihre Uhrzeittoleranz zurück).
+    $identity = Get-EnrollmentIdentity
+    $since = $script:PlanB_RdpEntered.AddMinutes(-15)
+    return @(Invoke-Busy -Text (T 'Prüfe Zertifikate auf der Smartcard...') -Action { Get-SmartCardCertificates } | Where-Object {
+        $_.Reader -and $_.Reader -eq $script:PlanB_PcscName -and $_.NotBefore -ge $since -and
+        (($identity.Upn -and $_.Upn -and $_.Upn -eq $identity.Upn) -or ($_.Subject -match ('CN=' + [regex]::Escape($identity.SearchTerm) + '(,|$)')))
+    } | Sort-Object NotBefore -Descending)
+}
+
+$btnRdpConnectB.Add_Click({ Start-PlanBRdpSession })
+
+$btnRdpCheckB.Add_Click({
+    $btnRdpCheckB.Enabled = $false
+    $found = @(Find-PlanBRdpCertificate)
+    if ($found.Count -gt 0) {
+        $script:PlanB_CertIssued = $true
+        Clear-WizardResumeState
+        Write-WizardLog -Message "Direktantrag per RDP: Zertifikat auf Karte '$($script:PlanB_PcscName)' gefunden ($($found[0].Subject), gültig bis $($found[0].NotAfter.ToString('yyyy-MM-dd')))." -Level Success
+        $lblRdpResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblRdpResultB.Text = ((T 'Zertifikat für {0} liegt auf der Karte (gültig bis {1}). Fertig.') -f (Get-EnrollmentIdentity).DisplayName, $found[0].NotAfter.ToString('yyyy-MM-dd'))
+        if ($script:PlanB_RenewMode) {
+            $idB = Get-EnrollmentIdentity
+            Invoke-RenewalCleanup -PcscName $script:PlanB_PcscName -UpnOrTerm $(if ($idB.Upn) { $idB.Upn } else { $idB.SearchTerm })
+        }
+        $idS = Get-EnrollmentIdentity
+        $lblRdpSummaryB.Text = Get-CardValiditySummaryText -CardName $script:PlanB_CardName -PcscName $script:PlanB_PcscName -MatchTerm $(if ($idS.Upn) { $idS.Upn } else { $idS.SearchTerm })
+        Update-PlanBRdpPage
+    } else {
+        Write-WizardLog -Message "Direktantrag per RDP: noch kein neues Zertifikat für '$((Get-EnrollmentIdentity).DisplayName)' auf Karte '$($script:PlanB_PcscName)'." -Level Warn
+        $lblRdpResultB.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lblRdpResultB.Text = (T 'Noch kein neues Zertifikat für dieses Konto auf der Karte gefunden. Windows übernimmt Kartenzertifikate erst kurz nach dem Ende der RDP-Sitzung in den Zertifikatsspeicher - einige Sekunden warten und erneut prüfen.')
+        $btnRdpCheckB.Enabled = $true
+    }
+})
+
+$lnkRdpFallbackB.Add_LinkClicked({
+    Write-WizardLog -Message 'Direktantrag per RDP: Ausweichweg Antrag (CSR) + Einreicher gewählt.' -Level Info
+    $script:PlanB_Fallback = $true
+    Show-PlanBStep -Index 2
+})
+
+$btnRdpStartB.Add_Click({
+    $script:PlanB_RenewMode = $false
+    $tabPlanB.Visible = $false
+    Show-ScenarioStep
+})
+
 # --- Navigation Plan B ---
 # Schritt-Panels scrollbar machen, damit bei kleinerem Fenster keine Buttons
 # (z.B. unten im Uebernehmen-Schritt) abgeschnitten werden - die Controls sind
 # absolut positioniert, AutoScroll blendet dann bei Bedarf einen Scrollbalken ein.
-@($pnlModeSelect, $pnlA1, $pnlA2, $pnlA3, $pnlA4, $pnlB1, $pnlB2, $pnlB3, $pnlB4, $pnlB5, $pnlB6) |
+@($pnlModeSelect, $pnlA1, $pnlA2, $pnlA3, $pnlA4, $pnlB1, $pnlB2, $pnlB3, $pnlB4, $pnlB5, $pnlB6, $pnlB7) |
     ForEach-Object { $_.AutoScroll = $true }
 
 $planBStepTitles = @((T 'Status'), (T 'Virtuelle Smartcard erstellen'), (T 'CSR erstellen'), (T 'Übergabe per RDP'), (T 'Antrag einreichen (auf dem Server)'), (T 'Zertifikat abschließen (lokal)'))
 $planBStepperLabels = @((T 'Status'), (T 'Smartcard'), (T 'Antrag (CSR)'), (T 'Übergabe RDP'), (T 'Einreichen'), (T 'Abschluss'))
+$planBStepTitles += (T 'In der RDP-Sitzung beantragen')
+# Fremdes Konto, Direktweg: Status -> Smartcard -> Beantragen per RDP (Index 0, 1, 6).
+$planBDirectStepperLabels = @((T 'Status'), (T 'Smartcard'), (T 'Beantragen per RDP'))
+
+function Test-PlanBDirect {
+    # Direktweg (Antrag in der RDP-Sitzung) für fremde Konten - außer der Ausweichweg
+    # CSR + Einreicher wurde gewählt.
+    return [bool]($script:TargetAccount -and -not $script:PlanB_Fallback)
+}
 
 function Update-PlanBStatus {
     $joinState = Get-DomainJoinState
@@ -3288,7 +3429,7 @@ function Update-PlanBStatus {
 
 function Show-PlanBStep {
     param([int]$Index)
-    $panels = @($pnlB1, $pnlB2, $pnlB3, $pnlB4, $pnlB5, $pnlB6)
+    $panels = @($pnlB1, $pnlB2, $pnlB3, $pnlB4, $pnlB5, $pnlB6, $pnlB7)
     for ($i = 0; $i -lt $panels.Count; $i++) {
         $panels[$i].Visible = ($i -eq $Index)
     }
@@ -3296,9 +3437,15 @@ function Show-PlanBStep {
     Update-IssueButtons
     # Globale Schrittnummer: +1, da Schritt 1 (Moduswahl) davor liegt.
     $lblGlobalStep.Text = $planBStepTitles[$Index]
-    Update-Stepper -Labels (@((T 'Szenario')) + $planBStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 2 = "$($script:PlanB_CardName)" }
+    if ((Test-PlanBDirect) -and $Index -in 0, 1, 6) {
+        $pos = if ($Index -eq 6) { 2 } else { $Index }
+        Update-Stepper -Labels (@((T 'Szenario')) + $planBDirectStepperLabels) -Current ($pos + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 2 = "$($script:PlanB_CardName)" }
+    } else {
+        Update-Stepper -Labels (@((T 'Szenario')) + $planBStepperLabels) -Current ($Index + 1) -Subs @{ 0 = (Get-EnrollmentIdentity).DisplayName; 2 = "$($script:PlanB_CardName)" }
+    }
     $btnBackShared.Enabled = $true
-    $btnNextShared.Enabled = ($Index -lt $panels.Count - 1)
+    # Letzte Schritte: Abschluss (5) bzw. Direktantrag per RDP (6).
+    $btnNextShared.Enabled = ($Index -lt 5)
 
     switch ($Index) {
         0 { Update-PlanBStatus }
@@ -3315,6 +3462,10 @@ function Show-PlanBStep {
             }
         }
         3 { Update-PlanBHandoff }
+        6 {
+            if (-not $script:PlanB_RdpEntered -or -not $script:PlanB_CertIssued) { $script:PlanB_RdpEntered = Get-Date }
+            Update-PlanBRdpPage
+        }
     }
 }
 
@@ -3326,7 +3477,8 @@ function Invoke-PlanBNextClick {
                 [System.Windows.Forms.MessageBox]::Show((T 'Bitte zuerst die virtuelle Smartcard erstellen.'), (T 'Hinweis'), 'OK', 'Warning') | Out-Null
                 return
             }
-            Show-PlanBStep -Index 2
+            # Fremdes Konto: zuerst der Direktweg (Antrag in der RDP-Sitzung).
+            if (Test-PlanBDirect) { Show-PlanBStep -Index 6 } else { Show-PlanBStep -Index 2 }
         }
         2 {
             if (-not $script:PlanB_CsrPath) {
@@ -3359,6 +3511,17 @@ function Invoke-PlanBNextClick {
 }
 
 function Invoke-PlanBBackClick {
+    # Ausweichweg (CSR) für ein fremdes Konto: "Zurück" aus der CSR führt zum Direktweg.
+    if ($script:TargetAccount -and $script:PlanB_Fallback -and $script:PlanBCurrentStep -eq 2) {
+        $script:PlanB_Fallback = $false
+        Show-PlanBStep -Index 6
+        return
+    }
+    # Direktweg: zurück zur Karte bzw. (Verlängerung, Karte übersprungen) zur Szenario-Auswahl.
+    if ($script:PlanBCurrentStep -eq 6) {
+        if ($script:PlanB_RenewMode) { $tabPlanB.Visible = $false; Show-ScenarioStep } else { Show-PlanBStep -Index 1 }
+        return
+    }
     # Verlängern-Modus (Einstieg direkt bei "CSR", Index 2): "Zurück" fuehrt zur
     # Szenario-Auswahl, nicht zum uebersprungenen Erstellen-Schritt.
     if ($script:PlanB_RenewMode -and $script:PlanBCurrentStep -eq 2) {
@@ -4295,7 +4458,7 @@ function Register-StatusLabel {
     $Label.Add_ForeColorChanged({ Update-StatusLook $this })
     Update-StatusLook $Label
 }
-foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB)) { Register-StatusLabel $l }
+foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB, $lblRdpResultB)) { Register-StatusLabel $l }
 
 # Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" (Plan A und Plan B, EIN Stil):
 # Die falsche Karte zu wählen landet das Zertifikat auf der falschen VSC - deshalb
@@ -4318,7 +4481,7 @@ function Set-CardHintLook {
     }
     $Label.Invalidate()
 }
-foreach ($l in @($lblCardHintA, $lblCsrInfoB)) {
+foreach ($l in @($lblCardHintA, $lblCsrInfoB, $lblRdpHintB)) {
     $l.Add_Paint({
         param($s, $e)
         if (-not $script:CardHintActive.Contains($s)) { return }
@@ -4403,9 +4566,10 @@ function Invoke-PageReflow {
 }
 $script:ReflowVCenter[$lblCardHintA] = $picCardA
 $script:ReflowVCenter[$lblCsrInfoB] = $picCardB
+$script:ReflowVCenter[$lblRdpHintB] = $picCardRdpB
 # Kartensymbol-Zeile (96 px) oben: alle übrigen Elemente dieser Seiten darunter einreihen,
 # sonst zöge die Zeilenbildung (nach ursprünglicher Höhe) sie in dieselbe Zeile.
-foreach ($pg in @(@($pnlA3, $picCardA, $lblCardHintA), @($pnlB3, $picCardB, $lblCsrInfoB))) {
+foreach ($pg in @(@($pnlA3, $picCardA, $lblCardHintA), @($pnlB3, $picCardB, $lblCsrInfoB), @($pnlB7, $picCardRdpB, $lblRdpHintB))) {
     $minTop = @($pg[0].Controls | Where-Object { $_ -ne $pg[1] -and $_ -ne $pg[2] } | ForEach-Object { $_.Top } | Measure-Object -Minimum).Minimum
     $shift = ($pg[1].Bottom + 16) - $minTop
     if ($shift -gt 0) { foreach ($c in @($pg[0].Controls | Where-Object { $_ -ne $pg[1] -and $_ -ne $pg[2] })) { $c.Top += $shift } }
@@ -4423,7 +4587,7 @@ foreach ($stepHost in @($pnlStepsA, $pnlStepsB)) {
 }
 
 # Buttons: Hauptaktionen gefüllt (Primary), alle übrigen mit Rahmen (Secondary).
-$primaryButtons = @($btnCreateVscA, $btnRequestCertA, $btnRetrieveA, $btnCreateVscB, $btnCreateCsrB, $btnSubmitB, $btnRetrieveB, $btnCompleteB, $btnCompleteFromTextB)
+$primaryButtons = @($btnCreateVscA, $btnRequestCertA, $btnRetrieveA, $btnCreateVscB, $btnCreateCsrB, $btnSubmitB, $btnRetrieveB, $btnCompleteB, $btnCompleteFromTextB, $btnRdpConnectB)
 function Set-ButtonStyleTree {
     param([System.Windows.Forms.Control]$Root)
     foreach ($c in $Root.Controls) {

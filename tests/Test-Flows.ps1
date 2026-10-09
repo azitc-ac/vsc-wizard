@@ -361,6 +361,63 @@ Step 'B: nach Übernahme' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdo
 if ($btnCompleteB.Enabled -or $btnCompleteFromTextB.Enabled) { $global:Errors.Add('[Ausstellung B] "Übernehmen" nach erfolgreicher Übernahme noch aktiv') }
 Step 'B: neuer Durchlauf' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdoe@contoso.com'; Show-PlanBStep -Index 5 }
 if (-not $btnCompleteB.Enabled) { $global:Errors.Add('[Ausstellung B] neuer Durchlauf: "Übernehmen" bleibt gesperrt (Zustand des vorigen Durchlaufs)') }
+# --- Plan B fremdes Konto: zuerst Direktantrag in der RDP-Sitzung, CSR nur als Ausweichweg ---
+$global:Log.Add('=== Plan B fremdes Konto: Direktweg per RDP ===')
+$nonPublic = [Reflection.BindingFlags]'NonPublic,Instance'
+function Invoke-Ctl($Control, [string]$Method, $Arg) { [void]$Control.GetType().GetMethod($Method, $nonPublic).Invoke($Control, [object[]]@($Arg.PSObject.BaseObject)) }
+Reset-Run
+$script:SimpleMode = $false
+$script:TargetAccount = 'jdoe@contoso.com'
+Step 'B fremd: Start' { Enter-Plan -Plan 'B'; Show-PlanBStep -Index 1 }
+$script:PlanB_VscCreated = $true; $script:PlanB_PcscName = 'Microsoft Virtual Smart Card 2'; $script:PlanB_CardName = 'VSC--jdoe'
+Step 'B fremd: Weiter nach Karte' { Invoke-PlanBNextClick }
+if ($script:PlanBCurrentStep -ne 6) { $global:Errors.Add("[RDP-Direktweg] nach der Karte erwartet Schritt 6 (RDP), ist $($script:PlanBCurrentStep)") }
+if ($btnNextShared.Enabled) { $global:Errors.Add('[RDP-Direktweg] "Weiter" im letzten Schritt aktiv') }
+if ($lblRdpStepsB.Text -notmatch 'certmgr\.msc' -or $lblRdpStepsB.Text -notmatch 'jdoe@contoso\.com') { $global:Errors.Add("[RDP-Direktweg] Anleitung ohne certmgr/Zielkonto: $($lblRdpStepsB.Text)") }
+Step 'B fremd: Ausweichweg' { Invoke-Ctl $lnkRdpFallbackB 'OnLinkClicked' (New-Object System.Windows.Forms.LinkLabelLinkClickedEventArgs($lnkRdpFallbackB.Links[0])) }
+if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[RDP-Direktweg] Ausweichweg führt nicht zur CSR (Schritt $($script:PlanBCurrentStep))") }
+Step 'B fremd: Zurück aus CSR' { Invoke-PlanBBackClick }
+if ($script:PlanBCurrentStep -ne 6 -or $script:PlanB_Fallback) { $global:Errors.Add("[RDP-Direktweg] Zurück aus der CSR führt nicht zum Direktweg (Schritt $($script:PlanBCurrentStep))") }
+Step 'B fremd: Zurück aus RDP' { Invoke-PlanBBackClick }
+if ($script:PlanBCurrentStep -ne 1) { $global:Errors.Add("[RDP-Direktweg] Zurück aus dem Direktweg führt nicht zur Karte (Schritt $($script:PlanBCurrentStep))") }
+# .rdp-Datei: Smartcard-Umleitung + Zielkonto (mstsc selbst nicht starten)
+function Start-Process { param($FilePath, $ArgumentList) $global:StartedProc = "$FilePath $($ArgumentList -join ' ')" }
+$origJump = $config['RdpJumpServer']; $config['RdpJumpServer'] = 'pki-jump.contoso.local'
+$global:StartedProc = $null
+Step 'B fremd: RDP starten' { Invoke-Ctl $btnRdpConnectB 'OnClick' ([EventArgs]::Empty) }
+$rdp = Get-Content (Join-Path (Get-WizardWorkingDir) 'VSC-Wizard-Antrag.rdp') -Raw -ErrorAction SilentlyContinue
+if ($rdp -notmatch 'redirectsmartcards:i:1' -or $rdp -notmatch 'username:s:jdoe@contoso\.com' -or $rdp -notmatch 'full address:s:pki-jump\.contoso\.local') { $global:Errors.Add("[RDP-Direktweg] .rdp-Datei unvollständig: $rdp") }
+if ($global:StartedProc -notmatch '^mstsc\.exe') { $global:Errors.Add("[RDP-Direktweg] mstsc nicht gestartet ($($global:StartedProc))") }
+Remove-Item function:Start-Process
+# "Karte prüfen": Gegenprobe zuerst (fremdes Konto bzw. altes Zertifikat -> nicht fertig)
+Step 'B fremd: Weiter zu RDP' { Invoke-PlanBNextClick }
+$global:FakeCerts = @(
+    [pscustomobject]@{ Reader = 'Microsoft Virtual Smart Card 2'; Subject = 'CN=jdoe'; Upn = 'jdoe@contoso.com'; NotBefore = (Get-Date).AddDays(-200); NotAfter = (Get-Date).AddDays(165); Thumbprint = 'OLD' }
+    [pscustomobject]@{ Reader = 'Microsoft Virtual Smart Card 2'; Subject = 'CN=other'; Upn = 'other@contoso.com'; NotBefore = (Get-Date); NotAfter = (Get-Date).AddDays(365); Thumbprint = 'OTHER' })
+function Get-SmartCardCertificates { $global:FakeCerts }
+Step 'B fremd: Karte prüfen (nichts Neues)' { Invoke-Ctl $btnRdpCheckB 'OnClick' ([EventArgs]::Empty) }
+if ($script:PlanB_CertIssued) { $global:Errors.Add('[RDP-Direktweg] altes/fremdes Zertifikat als neu erkannt') }
+if (-not $btnRdpCheckB.Enabled) { $global:Errors.Add('[RDP-Direktweg] "Karte prüfen" nach Fehlschlag gesperrt') }
+$global:FakeCerts += [pscustomobject]@{ Reader = 'Microsoft Virtual Smart Card 2'; Subject = 'CN=jdoe, OU=Admins'; Upn = 'jdoe@contoso.com'; NotBefore = (Get-Date).AddMinutes(-10); NotAfter = (Get-Date).AddDays(365); Thumbprint = 'NEW' }
+Step 'B fremd: Karte prüfen (neu)' { Invoke-Ctl $btnRdpCheckB 'OnClick' ([EventArgs]::Empty) }
+if (-not $script:PlanB_CertIssued) { $global:Errors.Add('[RDP-Direktweg] neues Zertifikat auf der Karte nicht erkannt') }
+if ($btnRdpCheckB.Enabled -or -not (Test-OwnVisible $btnRdpStartB)) { $global:Errors.Add('[RDP-Direktweg] nach Erfolg: "Karte prüfen" noch aktiv bzw. "Zum Startbildschirm" fehlt') }
+Remove-Item function:Get-SmartCardCertificates
+# Verlängerung eines fremden Kontos: direkt in den Direktweg, Zurück -> Startseite
+$card = [pscustomobject]@{ FriendlyName = 'VSC-T'; PcscName = 'Microsoft Virtual Smart Card 2'; InstanceId = 'ROOT\SMARTCARDREADER\0002' }
+Step 'B fremd: Verlängerung' { Enter-PlanBRenewal -Reader $card -TargetAccount 'jdoe@contoso.com' }
+if ($script:PlanBCurrentStep -ne 6 -or $script:PlanB_CertIssued) { $global:Errors.Add("[RDP-Direktweg] Verlängerung: erwartet frischer Schritt 6, ist $($script:PlanBCurrentStep) (CertIssued=$($script:PlanB_CertIssued))") }
+Step 'B fremd: Verlängerung Zurück' { Invoke-PlanBBackClick }
+if ((OwnVisible $tabPlanB)) { $global:Errors.Add('[RDP-Direktweg] Verlängerung: Zurück führt nicht zur Startseite') }
+# Gegenprobe: eigenes Konto (kein Zielkonto) -> wie bisher CSR
+Reset-Run
+$script:TargetAccount = $null
+Step 'B eigen: Start' { Enter-Plan -Plan 'B'; Show-PlanBStep -Index 1 }
+$script:PlanB_VscCreated = $true
+Step 'B eigen: Weiter nach Karte' { Invoke-PlanBNextClick }
+if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[RDP-Direktweg] eigenes Konto: erwartet CSR (Schritt 2), ist $($script:PlanBCurrentStep)") }
+$config['RdpJumpServer'] = $origJump
+
 # --- Andere Smartcards (Einstellung AllowPhysicalCards) ---
 $global:Log.Add('=== Andere Smartcards ===')
 foreach ($case in @(@(@{ AllowPhysicalCards = 'True' }, $true), @(@{ AllowPhysicalCards = 'False' }, $false), @(@{}, $false))) {

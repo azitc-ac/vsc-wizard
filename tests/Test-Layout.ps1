@@ -177,6 +177,11 @@ for ($i = 0; $i -le 6; $i++) {
     try { Show-PlanBStep -Index $i } catch { break }
     Test-Layout $form "Plan B Schritt-Index $i"
 }
+# Direktweg per RDP für ein fremdes Konto (mit Karten-Hinweis bei mehreren Karten)
+$script:TargetAccount = 'adm-very-long-account-name@contoso-enterprise.onmicrosoft.com'
+Show-PlanBStep -Index 6
+Test-Layout $form 'Plan B Direktweg RDP'
+$script:TargetAccount = $null
 Show-PlanBStep -Index 4
 $lblSubmitResultB.Text = (T 'Antrag wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f 123456, (Get-PendingApprovalHint -RequestId 123456)
 $btnRetrieveB.Visible = $true
