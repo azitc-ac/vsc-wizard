@@ -2525,6 +2525,8 @@ function Get-VscServicePaths {
         CreateTask = 'VSC-Wizard CreateCard'
         LogonTask  = 'VSC-Wizard Setup'
         Shortcut   = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Smartcard einrichten.lnk'
+        # Eintrag in "Apps & Features" (Intune-Erkennung/-Deinstallation per ArpName "VSC-Wizard").
+        ArpKey     = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VSC-Wizard'
     }
 }
 
@@ -2794,6 +2796,18 @@ function Install-VscCardService {
         $ver = try { (Get-Content (Join-Path $Paths.ProgramDir 'version.txt') -ErrorAction Stop | Select-Object -First 1) } catch { 'unbekannt' }
         New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion' -Value "$ver" -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceInstalledAt' -Value (Get-Date -Format 'o') -PropertyType String -Force | Out-Null
+
+        # "Apps & Features": sichtbar für Admins, Intune-Erkennung/-Deinstallation per ArpName.
+        $uninst = if (Test-Path $exe) { "`"$exe`" -Uninstall" } else { "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Paths.ProgramDir 'VscWizard.ps1')`" -Uninstall" }
+        if (-not (Test-Path $Paths.ArpKey)) { New-Item -Path $Paths.ArpKey -Force | Out-Null }
+        $sizeKb = [int]((Get-ChildItem -Path $Paths.ProgramDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1KB)
+        foreach ($kv in @(
+                @('DisplayName', 'VSC-Wizard', 'String'), @('DisplayVersion', "$(($ver -split ' ')[0])", 'String'), @('Publisher', 'AZITC', 'String'),
+                @('InstallLocation', $Paths.ProgramDir, 'String'), @('DisplayIcon', $(if (Test-Path $exe) { $exe } else { '' }), 'String'),
+                @('UninstallString', $uninst, 'String'), @('QuietUninstallString', $uninst, 'String'),
+                @('NoModify', 1, 'DWord'), @('NoRepair', 1, 'DWord'), @('EstimatedSize', $sizeKb, 'DWord'))) {
+            New-ItemProperty -Path $Paths.ArpKey -Name $kv[0] -Value $kv[1] -PropertyType $kv[2] -Force | Out-Null
+        }
         & $log "Install: fertig (Version $ver)."
         return 0
     } catch {
@@ -2811,7 +2825,19 @@ function Uninstall-VscCardService {
     foreach ($t in $Paths.CreateTask, $Paths.LogonTask) { try { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction Stop } catch { } }
     try { if (Test-Path $Paths.Shortcut) { [IO.File]::Delete($Paths.Shortcut) } } catch { }
     try { Remove-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion', 'ServiceInstalledAt' -ErrorAction SilentlyContinue } catch { }
-    try { if (Test-Path $Paths.ProgramDir) { [IO.Directory]::Delete($Paths.ProgramDir, $true) } } catch { & $log "Uninstall: Programmordner nicht vollständig entfernt: $($_.Exception.Message)" }
+    try { [Microsoft.Win32.Registry]::LocalMachine.DeleteSubKeyTree('SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VSC-Wizard', $false) } catch { & $log "Uninstall: Eintrag in Apps & Features nicht entfernt: $($_.Exception.Message)" }
+    if (Test-Path $Paths.ProgramDir) {
+        # Läuft die Deinstallation AUS dem Programmordner (UninstallString aus "Apps &
+        # Features"), ist die eigene EXE gesperrt -> Ordner kurz nach Programmende löschen.
+        $self = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        if ($self -like "$($Paths.ProgramDir.TrimEnd('\'))\*") {
+            $later = "Start-Sleep -Seconds 6; [IO.Directory]::Delete('$($Paths.ProgramDir)', `$true)"
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-Command', $later) -WindowStyle Hidden
+            & $log 'Uninstall: Programmordner wird nach Programmende entfernt.'
+        } else {
+            try { [IO.Directory]::Delete($Paths.ProgramDir, $true) } catch { & $log "Uninstall: Programmordner nicht vollständig entfernt: $($_.Exception.Message)" }
+        }
+    }
     & $log 'Uninstall: fertig (Karten und Zuordnungen bleiben erhalten).'
     return 0
 }

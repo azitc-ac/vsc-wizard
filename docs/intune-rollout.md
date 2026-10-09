@@ -140,7 +140,15 @@ angelegten Karten, keine Start-PIN aus der Seriennummer.
 
 **Intune: nur EINE Win32-App (Gerät, SYSTEM)**
 - Install: `VscWizard.exe -Install` · Uninstall: `"%ProgramFiles%\VSC-Wizard\VscWizard.exe" -Uninstall`
-- Erkennung: Registry `HKLM\SOFTWARE\VSC-Wizard`, Wert `ServiceVersion` vorhanden.
+- Erkennung: `intune\Detect-VscWizard.ps1` (ServiceVersion in HKLM + EXE + Aufgabe; liest
+  64-Bit-Registry auch als 32-Bit-Skript) **oder** ArpName `VSC-Wizard` (Eintrag in
+  „Apps & Features“, den `-Install` anlegt).
+- Paketinhalt (PSADT 4, Ordner `Files\`): `VscWizard.exe`, `modules\`, `config.psd1`
+  (mit CAConfig/Template der Organisation!), `version.txt`; `helper-arm64\` nur für
+  ARM64-Geräte (62 MB); `VscWizard.Submit.exe` wird auf Clients nicht gebraucht.
+- PSADT: Install `Start-ADTProcess -FilePath "$($adtSession.DirFiles)\VscWizard.exe" -ArgumentList '-Install'`,
+  Uninstall dito mit `-Uninstall` (aus dem Paket, nicht aus %ProgramFiles%). Exit-Codes:
+  0 ok, 1 Fehler, 3 nicht eleviert. Install-Verhalten **System**, nicht interaktiv.
 - `-Install` (`Install-VscCardService`):
   1. Kopiert den Wizard nach `%ProgramFiles%\VSC-Wizard` (nur Admins schreibbar — wichtig,
      weil SYSTEM ihn ausführt).
