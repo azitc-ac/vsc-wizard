@@ -423,4 +423,6 @@
     'Später erinnern' = 'Remind me later'
     'Smartcard verwalten' = 'Manage smart card'
     'Meine Smartcard' = 'My smart card'
+    'Active Directory über {0} nicht erreichbar.' = 'Active Directory not reachable via {0}.'
+    'Active Directory nicht erreichbar - in den Einstellungen die Discovery-Domäne setzen.' = 'Active Directory not reachable - set the discovery domain in the settings.'
 }

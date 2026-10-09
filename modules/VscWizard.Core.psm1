@@ -540,7 +540,7 @@ function Find-EnterpriseCAs {
         [int]$TimeoutSeconds = 8
     )
 
-    $out = [pscustomobject]@{ Cas = @(); Error = $null }
+    $out = [pscustomobject]@{ Cas = @(); Error = $null; RawError = $null }
     try {
         $rootPath = if ($Server) { "LDAP://$Server/RootDSE" } else { 'LDAP://RootDSE' }
         $rootDse = New-Object System.DirectoryServices.DirectoryEntry($rootPath)
@@ -580,7 +580,10 @@ function Find-EnterpriseCAs {
             $out.Error = T 'LDAP-Verbindung erfolgreich, aber keine registrierten CAs (pKIEnrollmentService) gefunden.'
         }
     } catch {
-        $out.Error = $_.Exception.Message
+        # Rohe Ausnahmen (Systemsprache, z.B. "Index auf ein NULL-Array" ohne erreichbares
+        # AD) nicht in die Oberfläche - verständlicher Hinweis, Rohtext in RawError.
+        $out.RawError = $_.Exception.Message
+        $out.Error = if ($Server) { (T 'Active Directory über {0} nicht erreichbar.') -f $Server } else { T 'Active Directory nicht erreichbar - in den Einstellungen die Discovery-Domäne setzen.' }
     }
     return $out
 }

@@ -2,3 +2,6 @@
 dist/
 helper/bin/
 helper/obj/
+
+# Organisationswerte (CA, Template, Domäne) - nur lokal, nie committen; build.ps1 nimmt sie bevorzugt
+config.local.psd1

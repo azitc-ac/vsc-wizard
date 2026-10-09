@@ -55,6 +55,9 @@ function OwnVisible($c) { return [bool]$stateMethod.Invoke($c, @(2)) }
 $onClick = [System.Windows.Forms.Control].GetMethod('OnClick', [Reflection.BindingFlags]'NonPublic,Instance')
 function Click($b) { $onClick.Invoke($b, @([EventArgs]::Empty)) }
 . ([scriptblock]::Create($src))
+# Tests unabhängig von der (im Repo bewusst leeren) config.psd1: feste Test-Konfiguration.
+foreach ($kv in @(@('CAConfig', 'CA01.contoso.local\Contoso Issuing CA'), @('Template', 'ContosoSmartcardLogon'))) { if ($config -is [hashtable]) { $config[$kv[0]] = $kv[1] } else { $config | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force } }
+
 Close-Splash
 
 # Resume-Datei des Benutzers sichern (Tests dürfen sie nicht verändern)

@@ -76,8 +76,15 @@ Build-Exe -InputFile 'VscWizard.ps1' -OutputFile $mainExe -Title 'VSC-Wizard'
 $modulesTarget = Join-Path $OutputDir 'modules'
 if (-not (Test-Path $modulesTarget)) { New-Item -ItemType Directory -Path $modulesTarget -Force | Out-Null }
 Copy-Item -Path (Join-Path $PSScriptRoot 'modules\*') -Destination $modulesTarget -Recurse -Force
-$configSrc = Join-Path $PSScriptRoot 'config.psd1'
-if (Test-Path $configSrc) { Copy-Item -Path $configSrc -Destination (Join-Path $OutputDir 'config.psd1') -Force }
+# config.psd1 liegt im Repo bewusst LEER (keine Organisationswerte im Git). Die echten
+# Werte (CA, Template, Domäne) stehen in config.local.psd1 (per .gitignore ausgeschlossen)
+# und kommen - falls vorhanden - als config.psd1 in die Ausgabe (z.B. für das Intune-Paket).
+$configLocal = Join-Path $PSScriptRoot 'config.local.psd1'
+$configSrc = if (Test-Path $configLocal) { $configLocal } else { Join-Path $PSScriptRoot 'config.psd1' }
+if (Test-Path $configSrc) {
+    Copy-Item -Path $configSrc -Destination (Join-Path $OutputDir 'config.psd1') -Force
+    Write-Host "Konfiguration: $(Split-Path -Leaf $configSrc) -> config.psd1$(if ($configSrc -ne $configLocal) { ' (LEER - für eine Verteilung config.local.psd1 anlegen)' })"
+}
 
 # --- 2b) Nativer ARM64-COM-Helfer (optional, benoetigt das .NET SDK nur zur BUILD-Zeit) ---
 # Derselbe Quelltext wie modules\VscWizard.CreateHelper.cs, als self-contained
