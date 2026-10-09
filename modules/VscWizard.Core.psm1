@@ -2755,6 +2755,17 @@ function Set-VscDirAcl {
     Set-Acl -Path $Path -AclObject $acl
 }
 
+function Get-VscVersionFromFile {
+    # version.txt (build.ps1): Zeilen "Version=1.0.103", "Date=...", "Commit=..." -> nur die
+    # reine Versionsnummer (Intune-Erkennung vergleicht sie als [version]). $null, wenn fehlt.
+    param([string]$Path)
+    try {
+        $line = Get-Content -Path $Path -ErrorAction Stop | Where-Object { $_ -match '^\s*Version\s*=\s*(\S+)' } | Select-Object -First 1
+        if ($line -match '^\s*Version\s*=\s*(\S+)') { return $Matches[1] }
+    } catch { }
+    return $null
+}
+
 function Install-VscCardService {
     # App 1 (Intune, SYSTEM): Wizard nach %ProgramFiles% kopieren, Auftragsordner mit
     # Rechten, SYSTEM-Aufgabe "CreateCard" (nur startbar für Benutzer), Anmelde-Aufgabe
@@ -2777,6 +2788,13 @@ function Install-VscCardService {
             }
             if (-not (Test-Path $Paths.ProgramDir)) { New-Item -ItemType Directory -Path $Paths.ProgramDir -Force | Out-Null }
             Copy-Item -Path (Join-Path $SourceDir '*') -Destination $Paths.ProgramDir -Recurse -Force -ErrorAction Stop
+            # Prüfen, dass wirklich die Paketversion im Programmordner liegt - sonst laut
+            # fehlschlagen statt still "installiert" zu melden.
+            $srcVer = Get-VscVersionFromFile -Path (Join-Path $SourceDir 'version.txt')
+            $dstVer = Get-VscVersionFromFile -Path (Join-Path $Paths.ProgramDir 'version.txt')
+            $dstExe = Get-Item (Join-Path $Paths.ProgramDir 'VscWizard.exe') -ErrorAction SilentlyContinue
+            & $log "Install: Paket $srcVer -> Programmordner $dstVer (VscWizard.exe $(if ($dstExe) { "$($dstExe.VersionInfo.FileVersion), $($dstExe.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))" } else { 'fehlt' }))."
+            if ($srcVer -and $dstVer -ne $srcVer) { & $log "Install: FEHLER - nach dem Kopieren liegt $dstVer statt $srcVer im Programmordner."; return 1 }
         }
         Set-VscDirAcl -Path $Paths.RequestDir -Kind Requests
         Set-VscDirAcl -Path $Paths.StateDir -Kind Private
@@ -2808,13 +2826,8 @@ function Install-VscCardService {
         } catch { & $log "Install: Startmenü-Eintrag nicht angelegt: $($_.Exception.Message)" }
 
         if (-not (Test-Path $Paths.RegRoot)) { New-Item -Path $Paths.RegRoot -Force | Out-Null }
-        # version.txt (build.ps1): Zeilen "Version=1.0.103", "Date=...", "Commit=..." - nur die
-        # reine Versionsnummer übernehmen (Intune-Erkennung vergleicht sie als [version]).
-        $ver = 'unbekannt'
-        try {
-            $vline = Get-Content (Join-Path $Paths.ProgramDir 'version.txt') -ErrorAction Stop | Where-Object { $_ -match '^\s*Version\s*=\s*(\S+)' } | Select-Object -First 1
-            if ($vline -match '^\s*Version\s*=\s*(\S+)') { $ver = $Matches[1] }
-        } catch { }
+        $ver = Get-VscVersionFromFile -Path (Join-Path $Paths.ProgramDir 'version.txt')
+        if (-not $ver) { $ver = 'unbekannt' }
         New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion' -Value "$ver" -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceInstalledAt' -Value (Get-Date -Format 'o') -PropertyType String -Force | Out-Null
 

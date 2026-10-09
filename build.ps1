@@ -44,6 +44,14 @@ Import-Module ps2exe -Force
 
 if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
+# Build-Version VOR dem Bauen bestimmen (Anzahl Commits): als Dateiversion in die EXEs
+# (Explorer > Eigenschaften > Details), in version.txt und ins Intune-Erkennungsskript.
+$script:BuildVersion = $null
+try {
+    $c = (& git -C $PSScriptRoot rev-list --count HEAD 2>$null | Select-Object -First 1)
+    if ($c) { $script:BuildVersion = "1.0.$($c.ToString().Trim())" }
+} catch { }
+
 function Build-Exe {
     param(
         [Parameter(Mandatory)][string]$InputFile,
@@ -65,6 +73,11 @@ function Build-Exe {
     # erscheint in Explorer, Taskleiste, Startmenü und "Apps & Features".
     $iconFile = Join-Path $PSScriptRoot 'assets\VscWizard.ico'
     if (Test-Path $iconFile) { $p2Args['IconFile'] = $iconFile }
+    # Dateiversion + Herausgeber (sichtbar in Eigenschaften > Details und für Intune-Diagnose).
+    if ($script:BuildVersion) { $p2Args['Version'] = "$($script:BuildVersion).0" }
+    $p2Args['Company'] = 'AZITC'
+    $p2Args['Description'] = $Title
+    $p2Args['Copyright'] = 'MIT License'
     Invoke-PS2EXE @p2Args
     if (-not (Test-Path $OutputFile)) { throw "Build fehlgeschlagen: $OutputFile wurde nicht erzeugt." }
 }
