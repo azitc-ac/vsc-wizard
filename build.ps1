@@ -114,6 +114,16 @@ try {
         $verText = "Version=1.0.$($verCount.ToString().Trim())`r`nDate=$verDate`r`nCommit=$verCommit`r`n"
         Set-Content -Path (Join-Path $OutputDir 'version.txt') -Value $verText -Encoding UTF8
         Write-Host "version.txt: 1.0.$($verCount.ToString().Trim()) ($verCommit, $verDate)"
+        # Intune-Erkennungsskript mit DIESER Version (zum Paket hochladen): erkannt wird nur
+        # "installierte Version >= gebaute Version" -> neue Pakete installieren über ältere.
+        $detSrc = Join-Path $PSScriptRoot 'intune\Detect-VscWizard.ps1'
+        if (Test-Path $detSrc) {
+            $detDir = Join-Path $OutputDir 'intune'
+            if (-not (Test-Path $detDir)) { New-Item -ItemType Directory -Path $detDir -Force | Out-Null }
+            $detText = [IO.File]::ReadAllText($detSrc, [Text.Encoding]::UTF8).Replace('__VSCWIZARD_VERSION__', "1.0.$($verCount.ToString().Trim())")
+            [IO.File]::WriteAllText((Join-Path $detDir 'Detect-VscWizard.ps1'), $detText, (New-Object System.Text.UTF8Encoding($true)))
+            Write-Host "Intune-Erkennung: intune\Detect-VscWizard.ps1 (erkennt ab Version 1.0.$($verCount.ToString().Trim()))"
+        }
     } else {
         Write-Host 'WARN: git nicht verfuegbar - version.txt nicht erzeugt (Wizard zeigt Fallback-Version).'
     }

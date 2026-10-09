@@ -140,10 +140,16 @@ angelegten Karten, keine Start-PIN aus der Seriennummer.
 
 **Intune: nur EINE Win32-App (Gerät, SYSTEM)**
 - Install: `VscWizard.exe -Install` · Uninstall: `"%ProgramFiles%\VSC-Wizard\VscWizard.exe" -Uninstall`
-- Erkennung: `intune\Detect-VscWizard.ps1` (ServiceVersion in HKLM + EXE + Aufgabe; liest
-  64-Bit-Registry auch als 32-Bit-Skript) **oder** ArpName `VSC-Wizard` (Eintrag in
-  „Apps & Features“, den `-Install` anlegt).
-- Paketinhalt (PSADT 4, Ordner `Files\`): `VscWizard.exe`, `modules\`, `config.psd1`
+- Erkennung: **`dist\intune\Detect-VscWizard.ps1`** (von `build.ps1` mit der gebauten
+  Version erzeugt — mit **jedem** Paket neu hochladen). Erkannt nur, wenn installierte
+  Version **>=** Paketversion (+ EXE + SYSTEM-Aufgabe vorhanden); liest die 64-Bit-
+  Registry auch als 32-Bit-Skript. Alternativ ArpName `VSC-Wizard` (ohne Versionsprüfung).
+- **Updates:** neues Paket + neue Erkennung hochladen -> ältere Installationen gelten als
+  fehlend, Intune installiert drüber (keine Deinstallation, keine Ersatzkette nötig).
+  `-Install` aktualisiert Programmdateien, Aufgaben, Rechte, ARP-Eintrag; **Karten,
+  Benutzer-Zuordnungen, Start-PINs und Aufträge bleiben**. Ist der Assistent gerade offen
+  (EXE gesperrt), bricht `-Install` sauber mit **1618** ab (keine halbe Kopie); Intune
+  wiederholt später.- Paketinhalt (PSADT 4, Ordner `Files\`): `VscWizard.exe`, `modules\`, `config.psd1`
   (mit CAConfig/Template der Organisation!), `version.txt`; `helper-arm64\` nur für
   ARM64-Geräte (62 MB); `VscWizard.Submit.exe` wird auf Clients nicht gebraucht.
 - PSADT: Install `Start-ADTProcess -FilePath "$($adtSession.DirFiles)\VscWizard.exe" -ArgumentList '-Install'`,

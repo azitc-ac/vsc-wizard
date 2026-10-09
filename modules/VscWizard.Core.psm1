@@ -2759,7 +2759,7 @@ function Install-VscCardService {
     # App 1 (Intune, SYSTEM): Wizard nach %ProgramFiles% kopieren, Auftragsordner mit
     # Rechten, SYSTEM-Aufgabe "CreateCard" (nur startbar für Benutzer), Anmelde-Aufgabe
     # "Setup" (startet -Simple -AutoStart), Startmenü-Eintrag, HKLM-Marker.
-    # Rückgabe: 0 ok, 3 nicht eleviert, 1 Fehler.
+    # Rückgabe: 0 ok, 3 nicht eleviert, 1618 Assistent gerade offen (später erneut), 1 Fehler.
     param([Parameter(Mandatory)][string]$SourceDir, $Paths = (Get-VscServicePaths), [int]$LogonDelaySeconds = 30)
     $log = { param($m) Write-VscServiceLog -Message $m -LogFile $Paths.LogFile }
     if (-not (Test-Path $Paths.DataDir)) { New-Item -ItemType Directory -Path $Paths.DataDir -Force | Out-Null }
@@ -2767,6 +2767,14 @@ function Install-VscCardService {
     try {
         & $log "Install: kopiere '$SourceDir' nach '$($Paths.ProgramDir)'."
         if ((Resolve-Path $SourceDir).Path.TrimEnd('\') -ne $Paths.ProgramDir.TrimEnd('\')) {
+            # Update über eine laufende Installation: hat ein Benutzer den Assistenten gerade
+            # offen, ist die EXE gesperrt - NICHT halb kopieren, sondern sauber mit 1618
+            # ("andere Installation läuft") abbrechen; Intune versucht es später erneut.
+            $installedExe = Join-Path $Paths.ProgramDir 'VscWizard.exe'
+            if (Test-Path $installedExe) {
+                try { $fs = [IO.File]::Open($installedExe, 'Open', 'ReadWrite', 'None'); $fs.Close() }
+                catch { & $log 'Install: VscWizard.exe ist gerade in Benutzung (Assistent offen) - Abbruch mit 1618, Intune wiederholt später.'; return 1618 }
+            }
             if (-not (Test-Path $Paths.ProgramDir)) { New-Item -ItemType Directory -Path $Paths.ProgramDir -Force | Out-Null }
             Copy-Item -Path (Join-Path $SourceDir '*') -Destination $Paths.ProgramDir -Recurse -Force -ErrorAction Stop
         }
@@ -2800,7 +2808,13 @@ function Install-VscCardService {
         } catch { & $log "Install: Startmenü-Eintrag nicht angelegt: $($_.Exception.Message)" }
 
         if (-not (Test-Path $Paths.RegRoot)) { New-Item -Path $Paths.RegRoot -Force | Out-Null }
-        $ver = try { (Get-Content (Join-Path $Paths.ProgramDir 'version.txt') -ErrorAction Stop | Select-Object -First 1) } catch { 'unbekannt' }
+        # version.txt (build.ps1): Zeilen "Version=1.0.103", "Date=...", "Commit=..." - nur die
+        # reine Versionsnummer übernehmen (Intune-Erkennung vergleicht sie als [version]).
+        $ver = 'unbekannt'
+        try {
+            $vline = Get-Content (Join-Path $Paths.ProgramDir 'version.txt') -ErrorAction Stop | Where-Object { $_ -match '^\s*Version\s*=\s*(\S+)' } | Select-Object -First 1
+            if ($vline -match '^\s*Version\s*=\s*(\S+)') { $ver = $Matches[1] }
+        } catch { }
         New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceVersion' -Value "$ver" -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $Paths.RegRoot -Name 'ServiceInstalledAt' -Value (Get-Date -Format 'o') -PropertyType String -Force | Out-Null
 
@@ -2809,7 +2823,7 @@ function Install-VscCardService {
         if (-not (Test-Path $Paths.ArpKey)) { New-Item -Path $Paths.ArpKey -Force | Out-Null }
         $sizeKb = [int]((Get-ChildItem -Path $Paths.ProgramDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1KB)
         foreach ($kv in @(
-                @('DisplayName', 'VSC-Wizard', 'String'), @('DisplayVersion', "$(($ver -split ' ')[0])", 'String'), @('Publisher', 'AZITC', 'String'),
+                @('DisplayName', 'VSC-Wizard', 'String'), @('DisplayVersion', $ver, 'String'), @('Publisher', 'AZITC', 'String'),
                 @('InstallLocation', $Paths.ProgramDir, 'String'), @('DisplayIcon', $(if (Test-Path $exe) { $exe } else { '' }), 'String'),
                 @('UninstallString', $uninst, 'String'), @('QuietUninstallString', $uninst, 'String'),
                 @('NoModify', 1, 'DWord'), @('NoRepair', 1, 'DWord'), @('EstimatedSize', $sizeKb, 'DWord'))) {
