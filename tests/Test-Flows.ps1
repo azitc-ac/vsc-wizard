@@ -74,6 +74,8 @@ $global:NextChoice = 'new'
 function Show-AccountInputDialog { param([string]$Prefill, [string]$Prompt) $global:Log.Add("    (Konto-Dialog -> jdoe@contoso.com)"); return 'jdoe@contoso.com' }
 function Show-VscChoiceDialog { $global:Log.Add("    (VSC-Wahl -> $($global:NextChoice))"); return $global:NextChoice }
 function Show-VscPickerDialog { param($Readers, $Certs) $r = @($Readers)[0]; $global:Log.Add("    (VSC-Picker -> $($r.FriendlyName))"); return $r }
+# Unabhängig davon, ob der Dienst (-Install) auf DIESEM Rechner installiert ist.
+function Test-VscCardServiceInstalled { [bool]$global:FakeServiceInstalled }
 # Hybrid-Prüfung (Szenario 03) unabhängig vom erreichbaren AD: Standard "AD nicht erreichbar".
 $global:OnPremAnswer = $null
 function Find-OnPremAccountByUpn { param([string]$Upn, [string]$Domain) $global:Log.Add("    (AD-Suche $Upn -> $(if ($global:OnPremAnswer) { 'gefunden' } else { 'nicht erreichbar' }))"); return $global:OnPremAnswer }
@@ -433,6 +435,34 @@ $script:PlanB_VscCreated = $true
 Step 'B eigen: Weiter nach Karte' { Invoke-PlanBNextClick }
 if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[RDP-Direktweg] eigenes Konto: erwartet CSR (Schritt 2), ist $($script:PlanBCurrentStep)") }
 $config['RdpJumpServer'] = $origJump
+
+# --- PKI-Erkennung: nur Smartcard-taugliche Templates, bestes vorgewählt ---
+$global:Log.Add('=== PKI-Erkennung: Template-Auswahl ===')
+$scl = '1.3.6.1.4.1.311.20.2.2'; $ca = '1.3.6.1.5.5.7.3.2'
+function New-Tpl($Name, $Eku, $Flag = 0x82000000, $Ra = 0, $Csp = @(), $Users = $true) { [pscustomobject]@{ Name = $Name; DisplayName = $Name; NameFlag = [int64]$Flag; Eku = $Eku; RaSignatures = $Ra; Csps = $Csp; UsersCanEnroll = $Users } }
+$tplDetails = @(
+    New-Tpl 'User' @($ca, '1.3.6.1.5.5.7.3.4')
+    New-Tpl 'DomainControllerAuthentication' @($ca, '1.3.6.1.5.5.7.3.1', $scl) 0x08000000 0 @('1,Microsoft RSA SChannel Cryptographic Provider') $false
+    New-Tpl 'KerberosAuthentication' @($ca, '1.3.6.1.5.5.7.3.1', $scl, '1.3.6.1.5.2.3.5') 0x08000000
+    New-Tpl 'ScLogon-offline' @($ca, $scl) 1 0 @('1,Microsoft Smart Card Key Storage Provider')
+    New-Tpl 'ScLogon-EOBO' @($ca, $scl) 0x82000000 1 @('1,Microsoft Smart Card Key Storage Provider')
+    New-Tpl 'ScLogonCapi' @($ca, $scl) 0x82000000 0 @('1,Microsoft Base Smart Card Crypto Provider')
+    New-Tpl 'ScLogonKsp' @($ca, $scl) 0x82000000 0 @('1,Microsoft Smart Card Key Storage Provider')
+    New-Tpl 'ScLogonAdminsOnly' @($ca, $scl) 0x82000000 0 @('1,Microsoft Smart Card Key Storage Provider') $false)
+$pub = @($tplDetails | ForEach-Object Name)
+$sel = @(Select-SmartCardTemplates -Published $pub -Details $tplDetails -PreferredProvider 'Microsoft Smart Card Key Storage Provider')
+if (($sel.Name -join ',') -ne 'ScLogonKsp,ScLogonCapi,ScLogonAdminsOnly') { $global:Errors.Add("[Template-Auswahl] erwartet ScLogonKsp,ScLogonCapi,ScLogonAdminsOnly, erhalten: $($sel.Name -join ',')") }
+# Gegenprobe: bevorzugter Provider CAPI -> CAPI-Template vorn
+$sel2 = @(Select-SmartCardTemplates -Published $pub -Details $tplDetails -PreferredProvider 'Microsoft Base Smart Card Crypto Provider')
+if ($sel2[0].Name -ne 'ScLogonCapi') { $global:Errors.Add("[Template-Auswahl Gegenprobe] bevorzugter CAPI-Provider: erwartet ScLogonCapi vorn, erhalten $($sel2[0].Name)") }
+# Dialog-Übernahme: Dropdown nur mit geeigneten, bestes gewählt, Provider passend gesetzt
+$cboT = New-Object System.Windows.Forms.ComboBox; $cboP = New-Object System.Windows.Forms.ComboBox; $cboP.Text = 'Microsoft Smart Card Key Storage Provider'
+$txt = Set-DiscoveredTemplates -Template $cboT -Provider $cboP -Published $pub -Details $tplDetails
+if ($cboT.Text -ne 'ScLogonKsp' -or $cboT.Items.Count -ne 3 -or $cboP.Text -ne 'Microsoft Smart Card Key Storage Provider' -or $txt -notmatch 'ScLogonKsp') { $global:Errors.Add("[Template-Übernahme] Auswahl '$($cboT.Text)', $($cboT.Items.Count) Einträge, Provider '$($cboP.Text)', Text '$txt'") }
+# Gegenprobe: kein geeignetes Template -> alle Templates, keine Vorauswahl
+$cboT2 = New-Object System.Windows.Forms.ComboBox; $cboP2 = New-Object System.Windows.Forms.ComboBox
+$txt2 = Set-DiscoveredTemplates -Template $cboT2 -Provider $cboP2 -Published @('User', 'DomainControllerAuthentication') -Details $tplDetails
+if ($cboT2.Text -or $cboT2.Items.Count -ne 2 -or $txt2 -notmatch 'Kein') { $global:Errors.Add("[Template-Übernahme Gegenprobe] ohne geeignetes Template: Auswahl '$($cboT2.Text)', $($cboT2.Items.Count) Einträge") }
 
 # --- Andere Smartcards (Einstellung AllowPhysicalCards) ---
 $global:Log.Add('=== Andere Smartcards ===')

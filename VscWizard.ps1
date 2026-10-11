@@ -4114,6 +4114,38 @@ function Show-VscInventoryDialog {
     }
 }
 
+function Set-DiscoveredTemplates {
+    # PKI-Erkennung -> Template-Auswahl: nur für die Smartcard-Anmeldung GEEIGNETE
+    # Templates ins Dropdown (Select-SmartCardTemplates), das beste vorgewählt und dessen
+    # Smartcard-Provider übernommen (Template und Provider müssen zusammenpassen). Ohne
+    # geeignetes Template bzw. ohne lesbare Details: alle Templates, keine Vorauswahl.
+    # Gibt den Erklärungstext für das Ergebnisfeld zurück.
+    param([System.Windows.Forms.ComboBox]$Template, [System.Windows.Forms.ComboBox]$Provider, [string[]]$Published, $Details, [string]$DetailError)
+    $Template.Items.Clear()
+    $best = @()
+    if ($Details) { $best = @(Select-SmartCardTemplates -Published $Published -Details $Details -PreferredProvider $Provider.Text) }
+    if ($best.Count -gt 0) {
+        [void]$Template.Items.AddRange([object[]]@($best | ForEach-Object { $_.Name }))
+        Set-TextBoxRealValue -TextBox $Template -Value $best[0].Name
+        if ($best[0].SmartCardProvider) { $Provider.Text = $best[0].SmartCardProvider }
+        $why = if ($best[0].UsersCanEnroll) { T 'Smartcard-Anmeldung, Benutzer dürfen registrieren' } else { T 'Smartcard-Anmeldung - Registrieren-Recht der Benutzer bitte prüfen' }
+        Write-WizardLog -Message "PKI-Erkennung: Template '$($best[0].Name)' gewählt ($($best.Count) geeignet von $($Published.Count))." -Level Success
+        $text = (T "Template automatisch gewählt: {0} ({1}).") -f $best[0].Name, $why
+        if ($best.Count -gt 1) { $text += "`r`n" + ((T 'Weitere geeignete im Dropdown: {0}') -f (($best | Select-Object -Skip 1 | ForEach-Object { $_.Name }) -join ', ')) }
+        $hidden = $Published.Count - $best.Count
+        if ($hidden -gt 0) { $text += "`r`n" + ((T '{0} nicht für Smartcards geeignete Templates ausgeblendet.') -f $hidden) }
+        return $text
+    }
+    [void]$Template.Items.AddRange([object[]]$Published)
+    $Template.Text = ''
+    if (-not $Details) {
+        Write-WizardLog -Message "PKI-Erkennung: Template-Details nicht lesbar - keine automatische Auswahl. $DetailError" -Level Warn
+        return (T 'Template-Eigenschaften nicht lesbar - bitte das Smartcard-Template im Dropdown selbst wählen.')
+    }
+    Write-WizardLog -Message 'PKI-Erkennung: kein für die Smartcard-Anmeldung geeignetes Template veröffentlicht.' -Level Warn
+    return (T 'Kein für die Smartcard-Anmeldung geeignetes Template gefunden (EKU Smartcard-Anmeldung, Benutzer-Template ohne Agent-Signatur) - bitte im Dropdown selbst wählen oder ein passendes Template auf der CA veröffentlichen.')
+}
+
 function Show-SettingsDialog {
     param([System.Windows.Forms.Form]$Owner)
 
@@ -4461,13 +4493,20 @@ function Show-SettingsDialog {
         $job = Start-Job -ScriptBlock {
             param($ModulePath, $DomainHint, $Timeout)
             Import-Module $ModulePath -Force
-            Get-PkiReachability -Server $DomainHint -TimeoutSeconds $Timeout
+            $reach = Get-PkiReachability -Server $DomainHint -TimeoutSeconds $Timeout
+            # Template-Eigenschaften (EKU, Rechte, Provider) für die automatische Auswahl.
+            $details = $null; $detailError = $null
+            if (@($reach.ReachableCas).Count -gt 0) {
+                try { $details = @(Get-CertificateTemplateDetails -Server $DomainHint -TimeoutSeconds $Timeout) } catch { $detailError = $_.Exception.Message }
+            }
+            [pscustomobject]@{ Reach = $reach; Details = $details; DetailError = $detailError }
         } -ArgumentList $modulePath, $domainHint, 8
 
         $completed = Wait-Job -Job $job -Timeout 40
-        $reachData = $null
+        $reachData = $null; $tplDetails = $null; $tplDetailError = $null
         if ($completed) {
-            $reachData = Receive-Job -Job $job
+            $jobOut = Receive-Job -Job $job
+            $reachData = $jobOut.Reach; $tplDetails = $jobOut.Details; $tplDetailError = $jobOut.DetailError
         } else {
             Stop-Job -Job $job
         }
@@ -4485,17 +4524,16 @@ function Show-SettingsDialog {
             Set-TextBoxRealValue -TextBox $txtCfgCA -Value $primary.ConfigString
 
             $allTemplates = @($reachData.ReachableCas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+            $tplText = ''
             if ($allTemplates.Count -gt 0) {
-                $cboCfgTemplate.Items.Clear()
-                [void]$cboCfgTemplate.Items.AddRange($allTemplates)
-                Set-TextBoxRealValue -TextBox $cboCfgTemplate -Value $allTemplates[0]
+                $tplText = Set-DiscoveredTemplates -Template $cboCfgTemplate -Provider $txtCfgCsp -Published $allTemplates -Details $tplDetails -DetailError $tplDetailError
                 # Offline-Template: nur Auswahlliste füllen, Wert NICHT überschreiben
                 # (leer ist ein gültiger, bewusster Zustand).
                 $cboCfgOfflineTemplate.Items.Clear()
                 [void]$cboCfgOfflineTemplate.Items.AddRange($allTemplates)
             }
 
-            $txtDiscoverResultCfg.Text = ((T "{0} erreichbare CA(s) gefunden und übernommen - bitte Template prüfen (Dropdown-Pfeil zeigt alle {1} auf der CA verfügbaren Templates) und Speichern:`r`n") -f $reachData.ReachableCas.Count, $allTemplates.Count) +(($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n")
+            $txtDiscoverResultCfg.Text = ((T "{0} erreichbare CA(s) gefunden und übernommen:`r`n") -f $reachData.ReachableCas.Count) + (($reachData.ReachableCas | ForEach-Object { "- $($_.Name) ($($_.ConfigString))" }) -join "`r`n") + $(if ($tplText) { "`r`n`r`n$tplText" } else { '' }) + "`r`n`r`n" + (T 'Bitte prüfen und Speichern.')
             Write-WizardLog -Message "Automatische Erkennung: $($reachData.ReachableCas.Count) erreichbare CA(s) gefunden." -Level Success
         } elseif ($reachData.AllCas.Count -gt 0) {
             $txtDiscoverResultCfg.Text = ((T "{0} CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n") -f $reachData.AllCas.Count) +($reachData.UnreachableCas -join "`r`n")

@@ -656,6 +656,83 @@ function Get-OfflineTemplateCandidates {
     return $out
 }
 
+function Get-CertificateTemplateDetails {
+    # Eigenschaften der Zertifikatvorlagen aus dem AD (Configuration-NC) für die
+    # Template-Auswahl der PKI-Erkennung: EKUs, Subject-Herkunft, nötige Agent-
+    # Signaturen, vorgegebene Provider und ob normale Benutzer registrieren dürfen.
+    # Absichtlich ohne Write-WizardLog (läuft im Start-Job der Erkennung).
+    param([string]$Server, [int]$TimeoutSeconds = 8)
+    $rootPath = if ($Server) { "LDAP://$Server/RootDSE" } else { 'LDAP://RootDSE' }
+    $configNC = (New-Object System.DirectoryServices.DirectoryEntry($rootPath)).Properties['configurationNamingContext'].Value
+    $tplDn = "CN=Certificate Templates,CN=Public Key Services,CN=Services,$configNC"
+    $tplPath = if ($Server) { "LDAP://$Server/$tplDn" } else { "LDAP://$tplDn" }
+    $searcher = New-Object System.DirectoryServices.DirectorySearcher((New-Object System.DirectoryServices.DirectoryEntry($tplPath)))
+    $searcher.Filter = '(objectClass=pKICertificateTemplate)'
+    $searcher.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $searcher.ServerTimeLimit = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $searcher.SecurityMasks = [System.DirectoryServices.SecurityMasks]::Dacl
+    [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'displayName', 'msPKI-Certificate-Name-Flag', 'pKIExtendedKeyUsage', 'msPKI-RA-Signature', 'pKIDefaultCSPs', 'nTSecurityDescriptor'))
+    $enrollRights = @('0e10c968-78fb-11d2-90d4-00c04f79dc55', 'a05b8cc2-17bc-4802-a710-e7c15ab866a2')   # Enroll, AutoEnroll
+    foreach ($r in $searcher.FindAll()) {
+        if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
+        $p = $r.Properties
+        # Registrieren für "alle Benutzer": Authentifizierte Benutzer, Jeder oder Domänen-Benutzer (RID 513).
+        $usersEnroll = $false
+        try {
+            if ($p['ntsecuritydescriptor'].Count -gt 0) {
+                $sd = New-Object System.DirectoryServices.ActiveDirectorySecurity
+                $sd.SetSecurityDescriptorBinaryForm([byte[]]$p['ntsecuritydescriptor'][0])
+                foreach ($ace in $sd.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+                    if ($ace.AccessControlType -ne 'Allow') { continue }
+                    $sid = $ace.IdentityReference.Value
+                    if ($sid -notin 'S-1-5-11', 'S-1-1-0' -and $sid -notmatch '-513$') { continue }
+                    $rights = "$($ace.ActiveDirectoryRights)"
+                    if ($rights -match 'GenericAll' -or ($rights -match 'ExtendedRight' -and ($ace.ObjectType -eq [guid]::Empty -or $enrollRights -contains "$($ace.ObjectType)"))) { $usersEnroll = $true }
+                }
+            }
+        } catch { }
+        [pscustomobject]@{
+            Name            = [string]$p['cn'][0]
+            DisplayName     = if ($p['displayname'].Count -gt 0) { [string]$p['displayname'][0] } else { $null }
+            NameFlag        = if ($p['mspki-certificate-name-flag'].Count -gt 0) { [int64]$p['mspki-certificate-name-flag'][0] } else { 0 }
+            Eku             = @($p['pkiextendedkeyusage'] | ForEach-Object { [string]$_ })
+            RaSignatures    = if ($p['mspki-ra-signature'].Count -gt 0) { [int]$p['mspki-ra-signature'][0] } else { 0 }
+            Csps            = @($p['pkidefaultcsps'] | ForEach-Object { [string]$_ })
+            UsersCanEnroll  = $usersEnroll
+        }
+    }
+}
+
+function Select-SmartCardTemplates {
+    # Aus den auf der CA veröffentlichten Templates die für die Smartcard-Anmeldung
+    # GEEIGNETEN, bestes zuerst. Geeignet: EKU Smartcard-Anmeldung, Subject aus dem AD
+    # (nicht "im Antrag angeben" - das ist das Offline-Template), keine Agent-Signatur
+    # nötig (sonst nur per EOBO), UPN des Benutzers im SAN (schließt Computer-/DC-Templates
+    # wie "Domain Controller Authentication" aus), kein KDC-Template. Rangfolge: normale
+    # Benutzer dürfen registrieren > Smartcard-Provider vorgegeben > es ist der eingestellte
+    # Provider (-PreferredProvider) > Name nennt "Smartcard".
+    # Reine Funktion (ohne AD) - getestet in tests\Test-Flows.ps1.
+    param([string[]]$Published, $Details, [string]$PreferredProvider)
+    $byName = @{}; foreach ($d in @($Details)) { if ($d) { $byName[$d.Name] = $d } }
+    $list = foreach ($name in @($Published | Where-Object { $_ } | Select-Object -Unique)) {
+        $d = $byName[$name]
+        if (-not $d) { continue }
+        $eku = @($d.Eku)
+        if ($eku -notcontains '1.3.6.1.4.1.311.20.2.2') { continue }      # Smartcard-Anmeldung
+        if ($eku -contains '1.3.6.1.5.2.3.5') { continue }                 # KDC-Authentifizierung (DC)
+        if ($d.NameFlag -band 1) { continue }                              # Subject im Antrag (Offline-Template)
+        if ($d.RaSignatures -gt 0) { continue }                            # nur mit Enrollment Agent
+        if (-not ($d.NameFlag -band 0x02000000)) { continue }              # UPN im SAN (Benutzer-Template)
+        # pKIDefaultCSPs: "1,Microsoft Smart Card Key Storage Provider" (Priorität,Name)
+        $cspNames = @(@($d.Csps) | ForEach-Object { ($_ -split ',', 2)[-1].Trim() })
+        $scCsp = @($cspNames | Where-Object { $_ -match 'Smart Card' }) | Select-Object -First 1
+        $preferred = [bool]($PreferredProvider -and $cspNames -contains $PreferredProvider)
+        $score = 8 * [int][bool]$d.UsersCanEnroll + 4 * [int][bool]$scCsp + 2 * [int]$preferred + [int]($name -match 'smart\s*card' -or "$($d.DisplayName)" -match 'smart\s*card')
+        [pscustomobject]@{ Name = $name; DisplayName = $d.DisplayName; UsersCanEnroll = [bool]$d.UsersCanEnroll; SmartCardProvider = $scCsp; Score = $score }
+    }
+    return @($list | Sort-Object @{ Expression = 'Score'; Descending = $true }, Name)
+}
+
 function Test-CAConnectivity {
     param(
         [Parameter(Mandatory)][string]$ConfigString,

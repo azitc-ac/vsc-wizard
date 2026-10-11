@@ -280,7 +280,6 @@
     'Speichern' = 'Save'
     'Prüfe PKI-Erreichbarkeit (bis zu ca. 40 Sekunden)...' = 'Checking PKI reachability (up to about 40 seconds)...'
     'Zeitüberschreitung (>40s). Domäne/DC-Feld prüfen oder Netzwerkverbindung (VPN/Private Access) sicherstellen.' = 'Timeout (>40s). Check the domain/DC field or make sure the network connection (VPN/Private Access) works.'
-    "{0} erreichbare CA(s) gefunden und übernommen - bitte Template prüfen (Dropdown-Pfeil zeigt alle {1} auf der CA verfügbaren Templates) und Speichern:`r`n" = "{0} reachable CA(s) found and applied - please check the template (the drop-down arrow shows all {1} templates available on the CA) and save:`r`n"
     "{0} CA(s) in AD gefunden, aber per RPC nicht erreichbar (Firewall/Netzwerksegmentierung?):`r`n" = "{0} CA(s) found in AD, but not reachable via RPC (firewall/network segmentation?):`r`n"
     "LDAP-Erkennung fehlgeschlagen: {0}`r`n`r`nTipp: Domäne/DC-Feld oben prüfen (z.B. expliziten DC-Namen statt DNS-Domäne versuchen) und Netzwerkverbindung (VPN/Private Access) sicherstellen." = "LDAP detection failed: {0}`r`n`r`nTip: check the domain/DC field above (e.g. try an explicit DC name instead of the DNS domain) and make sure the network connection (VPN/Private Access) works."
     'Keine erreichbare CA gefunden.' = 'No reachable CA found.'
@@ -462,4 +461,13 @@
     '({0} nur auf der Karte)' = '({0} only on the card)'
     "Hinweis: `"{0}`" ist keine virtuelle Smartcard. Der Server beschreibt sie mit seinem eigenen Kartentreiber - der Treiber der Karte (z.B. Yubico-Minidriver) muss daher auch auf dem Server installiert sein. Erscheint die Karte dort schreibgeschützt, den Ausweichweg unten verwenden." = "Note: `"{0}`" is not a virtual smart card. The server writes to it with its own card driver - so the card's driver (e.g. Yubico minidriver) must also be installed on the server. If the card appears read-only there, use the fallback below."
     'Stattdessen direkt in der RDP-Sitzung beantragen (der Kartentreiber muss dafür auch auf dem Server installiert sein)' = 'Request directly in the RDP session instead (the card driver must then also be installed on the server)'
+    "{0} erreichbare CA(s) gefunden und übernommen:`r`n" = "{0} reachable CA(s) found and applied:`r`n"
+    'Bitte prüfen und Speichern.' = 'Please check and save.'
+    'Smartcard-Anmeldung, Benutzer dürfen registrieren' = 'smart card logon, users may enroll'
+    'Smartcard-Anmeldung - Registrieren-Recht der Benutzer bitte prüfen' = 'smart card logon - please check the users'' enroll permission'
+    'Template automatisch gewählt: {0} ({1}).' = 'Template selected automatically: {0} ({1}).'
+    'Weitere geeignete im Dropdown: {0}' = 'Other suitable ones in the drop-down: {0}'
+    '{0} nicht für Smartcards geeignete Templates ausgeblendet.' = '{0} templates not suitable for smart cards hidden.'
+    'Template-Eigenschaften nicht lesbar - bitte das Smartcard-Template im Dropdown selbst wählen.' = 'Template properties not readable - please choose the smart card template in the drop-down yourself.'
+    'Kein für die Smartcard-Anmeldung geeignetes Template gefunden (EKU Smartcard-Anmeldung, Benutzer-Template ohne Agent-Signatur) - bitte im Dropdown selbst wählen oder ein passendes Template auf der CA veröffentlichen.' = 'No template suitable for smart card logon found (EKU smart card logon, user template without agent signature) - please choose one in the drop-down or publish a suitable template on the CA.'
 }
