@@ -65,6 +65,46 @@ bestaetigt, jederzeit frei aenderbar):
   Fuer mehrere Admin-Konten wird der Ablauf entsprechend mehrfach durchlaufen
   (je eine eigene virtuelle Smartcard pro Konto).
 
+## Schnellstart für Admins
+
+So bringst du den Wizard in Betrieb und verteilst ihn per Intune
+(Details: [docs/intune-rollout.md](docs/intune-rollout.md)).
+
+1. **Herunterladen:** `VSC-Wizard-<Version>.zip` aus den
+   [Releases](https://github.com/azitc-ac/vsc-wizard/releases) laden.
+2. **Entsperren (wichtig):** Windows markiert Downloads aus dem Internet; die EXE
+   und das Kernmodul werden sonst blockiert. Am einfachsten **vor** dem Entpacken:
+   Rechtsklick auf die ZIP > *Eigenschaften* > **Zulassen** > OK. Oder danach im
+   entpackten Ordner:
+   ```powershell
+   Get-ChildItem -Path C:\Temp\VSC-Wizard -Recurse | Unblock-File
+   ```
+3. **Entpacken**, z.B. nach `C:\Temp\VSC-Wizard`. EXE, `modules\`,
+   `config.psd1` und `version.txt` müssen zusammenbleiben.
+4. **Konfigurieren:** `VscWizard.exe` **ohne Parameter** starten. Bei leerer
+   Konfiguration öffnen sich die Einstellungen automatisch (sonst über den Knopf
+   in der Kopfleiste).
+   - **„PKI automatisch erkennen“** klicken: sucht CA und passende Templates im AD.
+   - Unter **Zertifikatstemplate** das richtige Template im Dropdown wählen
+     (**sehr wichtig** – das Template für die Smartcard-Anmeldung, auf dem die
+     Benutzer *Registrieren* dürfen; die Erkennung schlägt nur vor).
+   - **Speichern** – schreibt `config.psd1` in diesen Ordner.
+
+   ![Einstellungen: PKI erkennen, Template wählen, Speichern](docs/images/einstellungen-pki-erkennung.png)
+5. **Installieren:** `VscWizard.exe -Install` (fragt per UAC nach Adminrechten
+   und meldet am Ende das Ergebnis). Kopiert den Ordner **samt `config.psd1`**
+   nach `%ProgramFiles%\VSC-Wizard` und richtet Aufgaben und Startmenü ein. Bei der
+   nächsten Anmeldung erscheint der Assistent „Smartcard einrichten“.
+
+   Reihenfolge beachten: erst konfigurieren (Schritt 4), dann installieren – die
+   installierte Kopie übernimmt die `config.psd1` aus dem Ordner. In
+   `%ProgramFiles%` kann der Wizard ohne Adminrechte nicht speichern.
+6. **Verteilen per Intune:** genau diesen Ordner (mit der gespeicherten
+   `config.psd1`!) als Win32-App paketieren, Installationsbefehl
+   `VscWizard.exe -Install`, Kontext **System**. Ohne `config.psd1` mit CA und
+   Template startet der Assistent auf den Ziel-PCs nicht. Erkennung,
+   Rückgabecodes und Updates: [docs/intune-rollout.md](docs/intune-rollout.md).
+
 ## Voraussetzungen
 
 - Windows 10/11 mit PowerShell 5.1

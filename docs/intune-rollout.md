@@ -28,6 +28,13 @@ Benutzers. Die App verbindet beides über eine SYSTEM-Aufgabe, die der Benutzer 
 
 ## Paket bauen
 
+**Ohne eigenen Build:** das Release-ZIP verwenden und wie im
+[Schnellstart der README](../README.md#schnellstart-für-admins) entsperren, entpacken
+und über „PKI automatisch erkennen“ + Template-Auswahl die `config.psd1` speichern –
+dieser Ordner ist dann das Paket.
+
+**Selbst bauen:**
+
 1. Org-Werte in **`config.local.psd1`** pflegen (liegt nur lokal, ist in `.gitignore`).
 2. `.\build.ps1` ausführen. Ergebnis in `dist\`:
    - `VscWizard.exe`, `modules\`, `version.txt`
