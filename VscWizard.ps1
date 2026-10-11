@@ -262,8 +262,43 @@ if ($Provision) {
     exit (Invoke-VscProvision)
 }
 # Per-Benutzer-Karten (Variante 2): fensterlose Modi für Intune und die SYSTEM-Aufgabe.
-if ($Install) { exit (Install-VscCardService -SourceDir $script:BaseDir -ShortcutName (L 'Smartcard einrichten' 'Set up smart card')) }   # Startmenü in Konfigurations-/Gerätesprache
-if ($Uninstall) { exit (Uninstall-VscCardService) }
+# Von Hand gestartet (Admin, nicht SYSTEM/Intune, ohne -Silent): sichtbare Rückmeldung -
+# ohne Rechte per UAC neu starten, am Ende eine Meldung mit Ergebnis. Unter Intune
+# (SYSTEM) bleibt es still wie bisher.
+function Invoke-VscServiceSetup {
+    $mode = if ($Install) { '-Install' } else { '-Uninstall' }
+    $interactive = -not $Silent -and -not ([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem)
+    $title = (L 'VSC-Wizard - Installation' 'VSC Wizard - setup')
+    if ($interactive -and -not (Test-IsElevated)) {
+        # Selbst eleviert neu starten (als EXE dieselbe EXE, sonst das Skript); das
+        # elevierte Gegenstück zeigt dann die Ergebnis-Meldung.
+        $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $argList = if ($exe -notmatch '\\(powershell|pwsh)\.exe$') { @($mode) } else { @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $script:BaseDir 'VscWizard.ps1')`"", $mode) }
+        try {
+            $p = Start-Process -FilePath $exe -ArgumentList $argList -Verb RunAs -PassThru -Wait -ErrorAction Stop
+            return $p.ExitCode
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show((L 'Abgebrochen - dafür sind Administratorrechte nötig (Bestätigung in der Benutzerkontensteuerung).' 'Cancelled - this requires administrator rights (confirm the User Account Control prompt).'), $title, 'OK', 'Warning') | Out-Null
+            return 3
+        }
+    }
+    $rc = if ($Install) { Install-VscCardService -SourceDir $script:BaseDir -ShortcutName (L 'Smartcard einrichten' 'Set up smart card') } else { Uninstall-VscCardService }   # Startmenü in Konfigurations-/Gerätesprache
+    if ($interactive) {
+        $logFile = (Get-VscServicePaths).LogFile
+        $ver = Get-VscVersionFromFile -Path (Join-Path $script:BaseDir 'version.txt')
+        if ($rc -eq 0 -and $Install) {
+            [System.Windows.Forms.MessageBox]::Show(((L "VSC-Wizard {0} wurde installiert.`r`n`r`nBenutzer ohne Smartcard-Anmeldezertifikat sehen bei der nächsten Anmeldung den Assistenten `"Smartcard einrichten`". Er ist außerdem im Startmenü zu finden." "VSC Wizard {0} has been installed.`r`n`r`nUsers without a smart card sign-in certificate will see the `"Set up smart card`" assistant at their next sign-in. It is also available in the Start menu.") -f $ver), $title, 'OK', 'Information') | Out-Null
+        } elseif ($rc -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show((L 'VSC-Wizard wurde entfernt. Vorhandene Smartcards und ihre Zertifikate bleiben erhalten.' 'VSC Wizard has been removed. Existing smart cards and their certificates are kept.'), $title, 'OK', 'Information') | Out-Null
+        } elseif ($rc -eq 1618) {
+            [System.Windows.Forms.MessageBox]::Show((L 'Der Assistent ist gerade geöffnet. Bitte schließen und die Installation erneut starten.' 'The assistant is currently open. Please close it and start the setup again.'), $title, 'OK', 'Warning') | Out-Null
+        } else {
+            [System.Windows.Forms.MessageBox]::Show(((L "Fehlgeschlagen (Code {0}).`r`n`r`nDetails im Protokoll:`r`n{1}" "Failed (code {0}).`r`n`r`nDetails in the log:`r`n{1}") -f $rc, $logFile), $title, 'OK', 'Error') | Out-Null
+        }
+    }
+    return $rc
+}
+if ($Install -or $Uninstall) { exit (Invoke-VscServiceSetup) }
 if ($ProcessRequests) {
     try { Initialize-WizardLog -LogBox $null } catch { }
     $maxCards = if ($config.MaxVscPerDevice) { [int]$config.MaxVscPerDevice } else { 10 }
