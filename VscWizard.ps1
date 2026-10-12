@@ -4127,7 +4127,7 @@ function Save-WizardConfigChecked {
     if ($writable) { Save-VscWizardConfig -Config $Config -Path $dest; return $true }
     Write-WizardLog -Message "Einstellungen: kein Schreibrecht auf '$dest' - Speichern mit Adminrechten wird angeboten." -Level Info
     $ask = [System.Windows.Forms.MessageBox]::Show(
-        ((T "Die Einstellungen gehören zur installierten Version in`r`n{0}`r`n`r`nDort darf nur ein Administrator speichern. Jetzt mit Administratorrechten speichern (Benutzerkontensteuerung)?`r`n`r`nSie gelten dann für alle Benutzer dieses PCs.") -f (Split-Path -Parent $dest)),
+        ((T "Die Einstellungen gelten für alle Benutzer dieses PCs und gehören zur installierten Version in`r`n{0}`r`n`r`nDort darf nur ein Administrator speichern. Jetzt mit Administratorrechten speichern (Benutzerkontensteuerung)?") -f (Split-Path -Parent $dest)),
         (T 'Einstellungen'), 'YesNo', 'Question')
     if ($ask -ne [System.Windows.Forms.DialogResult]::Yes) { return $false }
     $tmp = Join-Path $env:TEMP ("VscWizard-config-{0}.psd1" -f [guid]::NewGuid().ToString('N'))
