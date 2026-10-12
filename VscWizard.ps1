@@ -2925,7 +2925,12 @@ $lnkTryRdpB.Location = New-Object System.Drawing.Point(20, 420)
 $lnkTryRdpB.Size = New-Object System.Drawing.Size(780, 22)
 $lnkTryRdpB.Visible = $false
 
-$pnlB3.Controls.AddRange(@($picCardB, $lblCsrInfoB, $btnCreateCsrB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB, $lnkTryRdpB))
+# Ergebnis: das Weitergeben (RDP, Helfer, CSR kopieren) passiert gesammelt im nächsten
+# Schritt "Übergabe per RDP". Pfad/Text bleiben als (ausgeblendeter) Zustand erhalten.
+$lblCsrDoneB = New-WizardLabel -Text '' -X 20 -Y 110 -Width 780 -Height 40
+foreach ($c in @($lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB)) { $c.Visible = $false }
+
+$pnlB3.Controls.AddRange(@($picCardB, $lblCsrInfoB, $btnCreateCsrB, $lblCsrDoneB, $lblCsrPathLabelB, $txtCsrPathB, $btnCopyCsrPathB, $btnOpenCsrFolderB, $lblCsrTextLabelB, $txtCsrTextB, $btnCopyCsrTextB, $lnkTryRdpB))
 
 $lnkTryRdpB.Add_LinkClicked({
     Write-WizardLog -Message 'Physische Karte: Direktantrag per RDP auf Wunsch gewählt.' -Level Info
@@ -2952,6 +2957,8 @@ $btnCreateCsrB.Add_Click({
         } catch {
             $txtCsrTextB.Text = ''
         }
+        $lblCsrDoneB.ForeColor = [System.Drawing.Color]::ForestGreen
+        $lblCsrDoneB.Text = (T 'CSR erstellt. Zum Einreichen auf "Weiter" klicken.')
         # Zustand persistieren: CSR existiert, Einreichung steht noch aus - kann
         # nach einem Wizard-Neustart fortgesetzt werden.
         Save-WizardResumeState -State @{
@@ -2983,7 +2990,65 @@ $pnlB4.Dock = 'Fill'
 $pnlStepsB.Controls.Add($pnlB4)
 
 $lblHandoffB = New-WizardLabel -Text '' -X 20 -Y 20 -Width 780 -Height 220
-$pnlB4.Controls.Add($lblHandoffB)
+
+# Je Knopf eine Zeile mit Erklärung daneben (Reflow hält Knopf + Text in einer Zeile).
+function New-HandoffRow([string]$ButtonText, [int]$Y) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = $ButtonText
+    $b.Location = New-Object System.Drawing.Point(20, $Y); $b.Size = New-Object System.Drawing.Size(240, 32)
+    $l = New-WizardLabel -Text '' -X 276 -Y ($Y + 2) -Width 524 -Height 40
+    return @($b, $l)
+}
+$btnHandoffRdpB, $lblHandoffRdpB = New-HandoffRow (T 'RDP-Verbindung starten') 250
+$btnCopySubmitB, $lblCopySubmitB = New-HandoffRow (T 'Einreichungshelfer kopieren') 300
+$btnCopyCsrB, $lblCopyCsrB = New-HandoffRow (T 'CSR-Text kopieren') 350
+$btnCopyCsrFileB, $lblCopyCsrFileB = New-HandoffRow (T 'CSR-Datei kopieren') 400
+$lblCopySubmitB.Text = (T 'Kopiert den Einreichungshelfer in die Zwischenablage. Ist die Zwischenablage in RDP aktiviert, in der Sitzung einfach mit Strg+V einfügen, z.B. auf dem Desktop.')
+$lblCopyCsrB.Text = (T 'Kopiert den Antrag als Text - im Einreichungshelfer in das Antragsfeld einfügen.')
+$lblCopyCsrFileB.Text = (T 'Alternative: kopiert die Antragsdatei - in der Sitzung einfügen und im Helfer über "CSR laden..." öffnen.')
+$lblHandoffCopiedB = New-WizardLabel -Text '' -X 20 -Y 450 -Width 780 -Height 24
+$pnlB4.Controls.AddRange(@($lblHandoffB, $btnHandoffRdpB, $lblHandoffRdpB, $btnCopySubmitB, $lblCopySubmitB, $btnCopyCsrB, $lblCopyCsrB, $btnCopyCsrFileB, $lblCopyCsrFileB, $lblHandoffCopiedB))
+
+function Get-SubmitHelperPath {
+    # Einreichungshelfer neben dem Wizard: bevorzugt die EXE, sonst das Skript (Repo).
+    foreach ($n in 'VscWizard.Submit.exe', 'VscWizard.Submit.ps1') { $f = Join-Path $script:BaseDir $n; if (Test-Path -LiteralPath $f) { return $f } }
+    return $null
+}
+
+function Copy-FileToClipboard([string]$Path) {
+    # Datei (nicht nur ihr Pfad) in die Zwischenablage - per RDP-Zwischenablage in der
+    # Sitzung mit Strg+V einfügbar.
+    $list = New-Object System.Collections.Specialized.StringCollection
+    [void]$list.Add($Path)
+    [System.Windows.Forms.Clipboard]::SetFileDropList($list)
+    Write-WizardLog -Message "Datei in die Zwischenablage kopiert: $Path" -Level Info
+}
+
+function Set-HandoffCopied([string]$Text) {
+    $lblHandoffCopiedB.ForeColor = [System.Drawing.Color]::ForestGreen
+    $lblHandoffCopiedB.Text = $Text
+}
+
+$btnHandoffRdpB.Add_Click({ Start-PlanBRdpSession })
+$btnCopySubmitB.Add_Click({
+    $helper = Get-SubmitHelperPath
+    if (-not $helper) {
+        [System.Windows.Forms.MessageBox]::Show(((T "Der Einreichungshelfer (VscWizard.Submit.exe) liegt nicht im Programmordner:`r`n{0}") -f $script:BaseDir), (T 'Hinweis'), 'OK', 'Warning') | Out-Null
+        return
+    }
+    Copy-FileToClipboard $helper
+    Set-HandoffCopied ((T '{0} ist in der Zwischenablage - in der RDP-Sitzung mit Strg+V einfügen.') -f (Split-Path -Leaf $helper))
+})
+$btnCopyCsrB.Add_Click({
+    if (-not $txtCsrTextB.Text) { return }
+    Set-WizardClipboard -Text $txtCsrTextB.Text
+    Set-HandoffCopied (T 'Der Antrag (CSR-Text) ist in der Zwischenablage - im Einreichungshelfer einfügen.')
+})
+$btnCopyCsrFileB.Add_Click({
+    if (-not $script:PlanB_CsrPath -or -not (Test-Path -LiteralPath $script:PlanB_CsrPath)) { return }
+    Copy-FileToClipboard $script:PlanB_CsrPath
+    Set-HandoffCopied ((T '{0} ist in der Zwischenablage - in der RDP-Sitzung mit Strg+V einfügen.') -f (Split-Path -Leaf $script:PlanB_CsrPath))
+})
 
 function Update-PlanBHandoff {
     $identity = Get-EnrollmentIdentity
@@ -2993,8 +3058,14 @@ function Update-PlanBHandoff {
         (T 'Dieser Rechner hat vermutlich keine direkte Sicht auf die Zertifizierungsstelle.')
     }
 
-    # Mehrzeiliger Übergabetext als eine übersetzbare Vorlage ({0}..{3} = Werte).
-    $lblHandoffB.Text = (T "Nächste Schritte:`r`n`r`n{0}`r`n`r`n1. Die CSR ist bereits in der Zwischenablage (auch als Datei: {1}).`r`n2. Per RDP verbinden mit: {2} - dort anmelden als: {3}`r`n3. Auf dem Server den Einreichungshelfer 'VscWizard.Submit.ps1' (bzw. VscWizard.Submit.exe) starten, die CSR einfügen, CA/Template wählen und `"Antrag einreichen`".`r`n4. Das ausgestellte Zertifikat dort mit `"Kopieren`" in die Zwischenablage holen.`r`n`r`nDann hier auf `"Weiter`" klicken: du gelangst direkt zum Schritt `"Zertifikat abschließen`", wo du das kopierte Zertifikat einfügst und übernimmst. Die Übernahme erfolgt auf DIESEM Rechner in DEINEM Konto - die Karte (und der offene Antrag) liegen hier, nicht beim Zielkonto.") -f $reason, $script:PlanB_CsrPath, $config.RdpJumpServer, $identity.DisplayName
+    # Mehrzeiliger Übergabetext als eine übersetzbare Vorlage ({0}/{1} = Werte); die
+    # Knöpfe darunter erledigen das Kopieren und Verbinden.
+    $server = if ($config.RdpJumpServer) { $config.RdpJumpServer } else { T '(Server mit Sicht auf die CA)' }
+    $lblHandoffB.Text = (T "{0}`r`n`r`nSo geht's - die Knöpfe unten helfen bei jedem Schritt:`r`n1. RDP-Verbindung starten und als {1} anmelden.`r`n2. Den Einreichungshelfer VscWizard.Submit.exe in die Sitzung kopieren (falls er dort noch nicht liegt) und starten.`r`n3. Den CSR-Text kopieren, im Helfer einfügen, CA/Template wählen und `"Antrag einreichen`".`r`n4. Das ausgestellte Zertifikat im Helfer mit `"Kopieren`" in die Zwischenablage holen.`r`n`r`nDann hier auf `"Weiter`": im Schritt `"Zertifikat abschließen`" das Zertifikat einfügen und übernehmen. Die Übernahme erfolgt auf DIESEM Rechner in DEINEM Konto - Karte und offener Antrag liegen hier, nicht beim Zielkonto.") -f $reason, $identity.DisplayName
+    $lblHandoffRdpB.Text = ((T 'Verbindet mit {0} (Zwischenablage wird durchgereicht) - dort als {1} anmelden.') -f $server, $identity.DisplayName)
+    $lblHandoffCopiedB.Text = ''
+    $btnCopyCsrB.Enabled = [bool]$txtCsrTextB.Text
+    $btnCopyCsrFileB.Enabled = [bool]($script:PlanB_CsrPath)
 }
 
 # --- Schritt B5: Antrag einreichen (auf dem Server) ---
@@ -3307,6 +3378,7 @@ $btnResetB.Add_Click({
     $lblVscResultB.Text = ''
     $txtCsrPathB.Text = ''
     $txtCsrTextB.Text = ''
+    $lblCsrDoneB.Text = ''
     $txtCsrPasteB.Text = ''
     $txtSelectedCsrB.Text = ''
     $txtCerPathB.Text = ''
@@ -3405,7 +3477,7 @@ function Start-PlanBRdpSession {
     # konfigurierten Server öffnet mstsc den Bearbeiten-Dialog zum Eintragen.
     $identity = Get-EnrollmentIdentity
     $rdpPath = Join-Path (Get-WizardWorkingDir) 'VSC-Wizard-Antrag.rdp'
-    $lines = @("full address:s:$($config.RdpJumpServer)", 'redirectsmartcards:i:1', 'prompt for credentials:i:1', 'authentication level:i:2', 'screen mode id:i:1')
+    $lines = @("full address:s:$($config.RdpJumpServer)", 'redirectsmartcards:i:1', 'redirectclipboard:i:1', 'prompt for credentials:i:1', 'authentication level:i:2', 'screen mode id:i:1')
     if ($identity.Upn) { $lines += "username:s:$($identity.Upn)" } elseif ($script:TargetAccount) { $lines += "username:s:$($script:TargetAccount)" }
     Set-Content -Path $rdpPath -Value $lines -Encoding Unicode
     $mstscArgs = if ($config.RdpJumpServer) { @("`"$rdpPath`"") } else { @('/edit', "`"$rdpPath`"") }
@@ -4656,7 +4728,7 @@ function Register-StatusLabel {
     $Label.Add_ForeColorChanged({ Update-StatusLook $this })
     Update-StatusLook $Label
 }
-foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB, $lblRdpResultB, $lblRdpDriverHintB)) { Register-StatusLabel $l }
+foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB, $lblRdpResultB, $lblRdpDriverHintB, $lblCsrDoneB, $lblHandoffCopiedB)) { Register-StatusLabel $l }
 
 # Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" (Plan A und Plan B, EIN Stil):
 # Die falsche Karte zu wählen landet das Zertifikat auf der falschen VSC - deshalb
@@ -4785,7 +4857,7 @@ foreach ($stepHost in @($pnlStepsA, $pnlStepsB)) {
 }
 
 # Buttons: Hauptaktionen gefüllt (Primary), alle übrigen mit Rahmen (Secondary).
-$primaryButtons = @($btnCreateVscA, $btnRequestCertA, $btnRetrieveA, $btnCreateVscB, $btnCreateCsrB, $btnSubmitB, $btnRetrieveB, $btnCompleteB, $btnCompleteFromTextB, $btnRdpConnectB)
+$primaryButtons = @($btnCreateVscA, $btnRequestCertA, $btnRetrieveA, $btnCreateVscB, $btnCreateCsrB, $btnSubmitB, $btnRetrieveB, $btnCompleteB, $btnCompleteFromTextB, $btnRdpConnectB, $btnHandoffRdpB)
 function Set-ButtonStyleTree {
     param([System.Windows.Forms.Control]$Root)
     foreach ($c in $Root.Controls) {

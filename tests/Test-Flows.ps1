@@ -436,6 +436,36 @@ Step 'B eigen: Weiter nach Karte' { Invoke-PlanBNextClick }
 if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[RDP-Direktweg] eigenes Konto: erwartet CSR (Schritt 2), ist $($script:PlanBCurrentStep)") }
 $config['RdpJumpServer'] = $origJump
 
+# --- Übergabe per RDP (CSR-Weg): Knöpfe kopieren Helfer, CSR-Text und CSR-Datei ---
+$global:Log.Add('=== Übergabe per RDP: Kopier-Knöpfe ===')
+function Copy-FileToClipboard([string]$Path) { $global:ClipFile = $Path }
+function Set-WizardClipboard([string]$Text) { $global:ClipText = $Text }
+Reset-Run
+$script:TargetAccount = 'jdoe@contoso.com'
+$csrFile = Join-Path $env:TEMP "VscWizardTest-$([guid]::NewGuid().ToString('N')).csr"; Set-Content -Path $csrFile -Value '-----BEGIN NEW CERTIFICATE REQUEST-----' -Encoding ASCII
+try {
+    $script:PlanB_CsrPath = $csrFile; $txtCsrTextB.Text = '-----BEGIN NEW CERTIFICATE REQUEST-----'
+    Step 'Übergabe anzeigen' { Update-PlanBHandoff }
+    if (-not $btnCopyCsrB.Enabled -or -not $btnCopyCsrFileB.Enabled) { $global:Errors.Add('[Übergabe] CSR-Knöpfe trotz vorhandener CSR gesperrt') }
+    if ($lblHandoffB.Text -notmatch 'VscWizard\.Submit\.exe' -or $lblHandoffRdpB.Text -notmatch 'jdoe@contoso\.com') { $global:Errors.Add("[Übergabe] Erklärtext ohne EXE-Hinweis/Zielkonto") }
+    $global:ClipFile = $null; $global:ClipText = $null
+    Step 'Helfer kopieren' { Invoke-Ctl $btnCopySubmitB 'OnClick' ([EventArgs]::Empty) }
+    if ($global:ClipFile -notmatch 'VscWizard\.Submit\.(exe|ps1)$') { $global:Errors.Add("[Übergabe] Einreichungshelfer nicht kopiert ($($global:ClipFile))") }
+    Step 'CSR-Text kopieren' { Invoke-Ctl $btnCopyCsrB 'OnClick' ([EventArgs]::Empty) }
+    if ($global:ClipText -notmatch 'BEGIN NEW CERTIFICATE REQUEST') { $global:Errors.Add('[Übergabe] CSR-Text nicht kopiert') }
+    Step 'CSR-Datei kopieren' { Invoke-Ctl $btnCopyCsrFileB 'OnClick' ([EventArgs]::Empty) }
+    if ($global:ClipFile -ne $csrFile) { $global:Errors.Add("[Übergabe] CSR-Datei nicht kopiert ($($global:ClipFile))") }
+    if ($lblHandoffCopiedB.Text -notmatch '\.csr') { $global:Errors.Add("[Übergabe] keine Bestätigung nach dem Kopieren ($($lblHandoffCopiedB.Text))") }
+    # Gegenprobe: ohne CSR sind die CSR-Knöpfe gesperrt
+    $script:PlanB_CsrPath = $null; $txtCsrTextB.Text = ''
+    Step 'Übergabe ohne CSR' { Update-PlanBHandoff }
+    if ($btnCopyCsrB.Enabled -or $btnCopyCsrFileB.Enabled) { $global:Errors.Add('[Übergabe Gegenprobe] CSR-Knöpfe ohne CSR aktiv') }
+} finally {
+    Remove-Item -LiteralPath $csrFile -ErrorAction SilentlyContinue
+    Remove-Item function:Copy-FileToClipboard, function:Set-WizardClipboard -ErrorAction SilentlyContinue
+    $script:TargetAccount = $null
+}
+
 # --- Einstellungen speichern: beschreibbar direkt, sonst Rückfrage (Admin/UAC) ---
 $global:Log.Add('=== Einstellungen speichern ===')
 $origCfgPath = $script:ConfigPath
