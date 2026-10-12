@@ -12,6 +12,11 @@ foreach ($k in 'Template', 'OfflineTemplate', 'CAConfig', 'DiscoveryDomain', 'Rd
     if (-not $cfg.ContainsKey($k)) { $errors += "FEHLT: Schluessel '$k' nicht in config.psd1"; continue }
     if ("$($cfg[$k])" -ne '') { $errors += "BEFUELLT: $k = '$($cfg[$k])' (vor dem Commit leeren)" }
 }
+# Batch-Dateien (install.bat, VscWizard.bat): nur ASCII. Umlaute (zusammen mit chcp 65001)
+# verschieben cmds Leseposition - Befehle werden dann zerstueckelt ("REM" -> "M").
+foreach ($bat in Get-ChildItem -Path $Repo -Filter *.bat) {
+    if (@([IO.File]::ReadAllBytes($bat.FullName) | Where-Object { $_ -gt 127 }).Count) { $errors += "NICHT-ASCII: $($bat.Name) (cmd zerlegt die Zeilen)" }
+}
 if ($errors.Count) { $errors | ForEach-Object { Write-Host $_ -ForegroundColor Red }; exit 1 }
 Write-Host 'config.psd1: keine org-spezifischen Werte - OK' -ForegroundColor Green
 exit 0
