@@ -166,6 +166,91 @@ $layout.Padding = New-Object System.Windows.Forms.Padding(14)
 [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 25))) # 9: Log-Box
 $form.Controls.Add($layout)
 
+# Template-Auswahl wie im Hauptwizard - 1:1-Kopie aus VscWizard.Core.psm1 (dieses Tool bleibt
+# eigenständig). tests\Test-Config.ps1 prüft, dass beide Fassungen identisch sind.
+function Get-CertificateTemplateDetails {
+    # Eigenschaften der Zertifikatvorlagen aus dem AD (Configuration-NC) für die
+    # Template-Auswahl der PKI-Erkennung: EKUs, Subject-Herkunft, nötige Agent-
+    # Signaturen, vorgegebene Provider und ob normale Benutzer registrieren dürfen.
+    # Absichtlich ohne Write-WizardLog (läuft im Start-Job der Erkennung).
+    param([string]$Server, [int]$TimeoutSeconds = 8)
+    $rootPath = if ($Server) { "LDAP://$Server/RootDSE" } else { 'LDAP://RootDSE' }
+    $configNC = (New-Object System.DirectoryServices.DirectoryEntry($rootPath)).Properties['configurationNamingContext'].Value
+    $tplDn = "CN=Certificate Templates,CN=Public Key Services,CN=Services,$configNC"
+    $tplPath = if ($Server) { "LDAP://$Server/$tplDn" } else { "LDAP://$tplDn" }
+    $searcher = New-Object System.DirectoryServices.DirectorySearcher((New-Object System.DirectoryServices.DirectoryEntry($tplPath)))
+    $searcher.Filter = '(objectClass=pKICertificateTemplate)'
+    $searcher.ClientTimeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $searcher.ServerTimeLimit = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $searcher.SecurityMasks = [System.DirectoryServices.SecurityMasks]::Dacl
+    [void]$searcher.PropertiesToLoad.AddRange(@('cn', 'displayName', 'msPKI-Certificate-Name-Flag', 'pKIExtendedKeyUsage', 'msPKI-RA-Signature', 'pKIDefaultCSPs', 'nTSecurityDescriptor'))
+    $enrollRights = @('0e10c968-78fb-11d2-90d4-00c04f79dc55', 'a05b8cc2-17bc-4802-a710-e7c15ab866a2')   # Enroll, AutoEnroll
+    foreach ($r in $searcher.FindAll()) {
+        if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
+        $p = $r.Properties
+        # Wer registrieren darf (SIDs mit Enroll/AutoEnroll bzw. Vollzugriff, getrennt nach
+        # Zulassen/Verweigern) - für die EA-Template-Wahl (Rechte des angemeldeten Benutzers).
+        # "Alle Benutzer": Authentifizierte Benutzer, Jeder oder Domänen-Benutzer (RID 513).
+        $usersEnroll = $false
+        $enrollSids = @(); $denySids = @()
+        try {
+            if ($p['ntsecuritydescriptor'].Count -gt 0) {
+                $sd = New-Object System.DirectoryServices.ActiveDirectorySecurity
+                $sd.SetSecurityDescriptorBinaryForm([byte[]]$p['ntsecuritydescriptor'][0])
+                foreach ($ace in $sd.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+                    $rights = "$($ace.ActiveDirectoryRights)"
+                    if (-not ($rights -match 'GenericAll' -or ($rights -match 'ExtendedRight' -and ($ace.ObjectType -eq [guid]::Empty -or $enrollRights -contains "$($ace.ObjectType)")))) { continue }
+                    $sid = $ace.IdentityReference.Value
+                    if ($ace.AccessControlType -ne 'Allow') { $denySids += $sid; continue }
+                    $enrollSids += $sid
+                    if ($sid -in 'S-1-5-11', 'S-1-1-0' -or $sid -match '-513$') { $usersEnroll = $true }
+                }
+            }
+        } catch { }
+        [pscustomobject]@{
+            Name            = [string]$p['cn'][0]
+            DisplayName     = if ($p['displayname'].Count -gt 0) { [string]$p['displayname'][0] } else { $null }
+            NameFlag        = if ($p['mspki-certificate-name-flag'].Count -gt 0) { [int64]$p['mspki-certificate-name-flag'][0] } else { 0 }
+            Eku             = @($p['pkiextendedkeyusage'] | ForEach-Object { [string]$_ })
+            RaSignatures    = if ($p['mspki-ra-signature'].Count -gt 0) { [int]$p['mspki-ra-signature'][0] } else { 0 }
+            Csps            = @($p['pkidefaultcsps'] | ForEach-Object { [string]$_ })
+            UsersCanEnroll  = $usersEnroll
+            EnrollSids      = @($enrollSids | Select-Object -Unique)
+            DenyEnrollSids  = @($denySids | Select-Object -Unique)
+        }
+    }
+}
+
+function Select-SmartCardTemplates {
+    # Aus den auf der CA veröffentlichten Templates die für die Smartcard-Anmeldung
+    # GEEIGNETEN, bestes zuerst. Geeignet: EKU Smartcard-Anmeldung, Subject aus dem AD
+    # (nicht "im Antrag angeben" - das ist das Offline-Template), keine Agent-Signatur
+    # nötig (sonst nur per EOBO), UPN des Benutzers im SAN (schließt Computer-/DC-Templates
+    # wie "Domain Controller Authentication" aus), kein KDC-Template. Rangfolge: normale
+    # Benutzer dürfen registrieren > Smartcard-Provider vorgegeben > es ist der eingestellte
+    # Provider (-PreferredProvider) > Name nennt "Smartcard".
+    # Reine Funktion (ohne AD) - getestet in tests\Test-Flows.ps1.
+    param([string[]]$Published, $Details, [string]$PreferredProvider)
+    $byName = @{}; foreach ($d in @($Details)) { if ($d) { $byName[$d.Name] = $d } }
+    $list = foreach ($name in @($Published | Where-Object { $_ } | Select-Object -Unique)) {
+        $d = $byName[$name]
+        if (-not $d) { continue }
+        $eku = @($d.Eku)
+        if ($eku -notcontains '1.3.6.1.4.1.311.20.2.2') { continue }      # Smartcard-Anmeldung
+        if ($eku -contains '1.3.6.1.5.2.3.5') { continue }                 # KDC-Authentifizierung (DC)
+        if ($d.NameFlag -band 1) { continue }                              # Subject im Antrag (Offline-Template)
+        if ($d.RaSignatures -gt 0) { continue }                            # nur mit Enrollment Agent
+        if (-not ($d.NameFlag -band 0x02000000)) { continue }              # UPN im SAN (Benutzer-Template)
+        # pKIDefaultCSPs: "1,Microsoft Smart Card Key Storage Provider" (Priorität,Name)
+        $cspNames = @(@($d.Csps) | ForEach-Object { ($_ -split ',', 2)[-1].Trim() })
+        $scCsp = @($cspNames | Where-Object { $_ -match 'Smart Card' }) | Select-Object -First 1
+        $preferred = [bool]($PreferredProvider -and $cspNames -contains $PreferredProvider)
+        $score = 8 * [int][bool]$d.UsersCanEnroll + 4 * [int][bool]$scCsp + 2 * [int]$preferred + [int]($name -match 'smart\s*card' -or "$($d.DisplayName)" -match 'smart\s*card')
+        [pscustomobject]@{ Name = $name; DisplayName = $d.DisplayName; UsersCanEnroll = [bool]$d.UsersCanEnroll; SmartCardProvider = $scCsp; Score = $score }
+    }
+    return @($list | Sort-Object @{ Expression = 'Score'; Descending = $true }, Name)
+}
+
 function New-FormLabel {
     param([string]$Text, [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular)
     $lbl = New-Object System.Windows.Forms.Label
@@ -346,12 +431,27 @@ $btnDiscover.Add_Click({
     if ($cas.Count -gt 0) {
         $txtCA.Text = $cas[0].ConfigString
         $allTemplates = @($cas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+        $tplNote = ''
         if ($allTemplates.Count -gt 0) {
+            # Nur für die Smartcard-Anmeldung geeignete Templates, das beste vorgewählt
+            # (Antrag kommt aus dem VSC-Wizard, dort standardmäßig mit dem Smartcard-KSP).
+            $details = $null
+            try { $details = @(Get-CertificateTemplateDetails) } catch { }
+            $best = if ($details) { @(Select-SmartCardTemplates -Published $allTemplates -Details $details -PreferredProvider 'Microsoft Smart Card Key Storage Provider') } else { @() }
             $cboTemplate.Items.Clear()
-            [void]$cboTemplate.Items.AddRange($allTemplates)
-            $cboTemplate.Text = $allTemplates[0]
+            if ($best.Count -gt 0) {
+                [void]$cboTemplate.Items.AddRange([object[]]@($best | ForEach-Object { $_.Name }))
+                $cboTemplate.Text = $best[0].Name
+                $tplNote = " Template '$($best[0].Name)' automatisch gewählt (Smartcard-Anmeldung)."
+                if ($best.Count -gt 1) { $tplNote += " Weitere geeignete im Dropdown: $(($best | Select-Object -Skip 1 | ForEach-Object { $_.Name }) -join ', ')." }
+                if ($allTemplates.Count -gt $best.Count) { $tplNote += " $($allTemplates.Count - $best.Count) nicht geeignete ausgeblendet." }
+            } else {
+                [void]$cboTemplate.Items.AddRange([object[]]$allTemplates)
+                $cboTemplate.Text = ''
+                $tplNote = if ($details) { ' Kein für die Smartcard-Anmeldung geeignetes Template gefunden - bitte im Dropdown wählen.' } else { ' Template-Eigenschaften nicht lesbar - bitte das Smartcard-Template im Dropdown wählen.' }
+            }
         }
-        Write-Status "$($cas.Count) erreichbare CA(s) gefunden, erste übernommen."
+        Write-Status "$($cas.Count) erreichbare CA(s) gefunden, erste übernommen.$tplNote"
     } else {
         Write-Status 'Keine erreichbare CA gefunden - bitte CA-Konfigurationsstring manuell eintragen.'
     }

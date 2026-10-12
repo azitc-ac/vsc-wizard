@@ -4408,7 +4408,7 @@ function Save-WizardConfigChecked {
     $tmp = Join-Path $env:TEMP ("VscWizard-config-{0}.psd1" -f [guid]::NewGuid().ToString('N'))
     try {
         Save-VscWizardConfig -Config $Config -Path $tmp
-        if (-not (Test-Path -LiteralPath $tmp)) { throw 'Temp-Datei nicht geschrieben' }
+        if (-not (Test-Path -LiteralPath $tmp)) { throw "temp file not written: $tmp" }
         # Kopierbefehl als -EncodedCommand: Pfade mit Leerzeichen/Apostrophen ohne Quoting-Fallen.
         $cmd = "Copy-Item -LiteralPath '{0}' -Destination '{1}' -Force -ErrorAction Stop" -f $tmp.Replace("'", "''"), $dest.Replace("'", "''")
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
