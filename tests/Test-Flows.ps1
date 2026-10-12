@@ -436,6 +436,26 @@ Step 'B eigen: Weiter nach Karte' { Invoke-PlanBNextClick }
 if ($script:PlanBCurrentStep -ne 2) { $global:Errors.Add("[RDP-Direktweg] eigenes Konto: erwartet CSR (Schritt 2), ist $($script:PlanBCurrentStep)") }
 $config['RdpJumpServer'] = $origJump
 
+# --- Einstellungen speichern: beschreibbar direkt, sonst Rückfrage (Admin/UAC) ---
+$global:Log.Add('=== Einstellungen speichern ===')
+$origCfgPath = $script:ConfigPath
+$cfgDir = Join-Path $env:TEMP "VscWizardTest-$([guid]::NewGuid().ToString('N'))"; New-Item -ItemType Directory -Path $cfgDir | Out-Null
+try {
+    $script:ConfigPath = Join-Path $cfgDir 'config.psd1'
+    if (-not (Save-WizardConfigChecked -Config @{ Template = 'T1' }) -or -not (Select-String -Path $script:ConfigPath -SimpleMatch "'T1'" -Quiet)) { $global:Errors.Add('[Einstellungen speichern] beschreibbare Datei nicht gespeichert') }
+    # Gegenprobe: schreibgeschützt (wie %ProgramFiles% ohne Admin) -> Rückfrage, "Nein" -> nichts geändert
+    Set-ItemProperty -Path $script:ConfigPath -Name IsReadOnly -Value $true
+    $before = $global:Msgs.Count; $global:MsgAnswer = [System.Windows.Forms.DialogResult]::No
+    $saved = Save-WizardConfigChecked -Config @{ Template = 'T2' }
+    if ($saved) { $global:Errors.Add('[Einstellungen speichern] schreibgeschützt: als gespeichert gemeldet') }
+    if (-not (Select-String -Path $script:ConfigPath -SimpleMatch "'T1'" -Quiet)) { $global:Errors.Add('[Einstellungen speichern] schreibgeschützt: Datei trotzdem geändert') }
+    if (-not @($global:Msgs | Select-Object -Skip $before | Where-Object { $_ -like '*Administratorrechten speichern*' })) { $global:Errors.Add('[Einstellungen speichern] schreibgeschützt: keine Rückfrage zum Speichern mit Adminrechten') }
+} finally {
+    Set-ItemProperty -Path (Join-Path $cfgDir 'config.psd1') -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $cfgDir -Recurse -Force -ErrorAction SilentlyContinue
+    $script:ConfigPath = $origCfgPath
+}
+
 # --- PKI-Erkennung: nur Smartcard-taugliche Templates, bestes vorgewählt ---
 $global:Log.Add('=== PKI-Erkennung: Template-Auswahl ===')
 $scl = '1.3.6.1.4.1.311.20.2.2'; $ca = '1.3.6.1.5.5.7.3.2'

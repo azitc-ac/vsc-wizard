@@ -81,7 +81,10 @@ So bringst du den Wizard in Betrieb und verteilst ihn per Intune
    ```
 3. **Entpacken**, z.B. nach `C:\Temp\VSC-Wizard`. EXE, `modules\`,
    `config.psd1` und `version.txt` müssen zusammenbleiben.
-4. **Konfigurieren:** `VscWizard.exe` **ohne Parameter** starten. Bei leerer
+4. **Konfigurieren:** `VscWizard.exe` **aus dem entpackten Download-Ordner** und
+   **ohne Parameter** starten – nicht die installierte Version aus dem Startmenü bzw.
+   `%ProgramFiles%\VSC-Wizard` (dort darf nur ein Administrator speichern; der Wizard
+   bietet dann das Speichern per UAC an). Bei leerer
    Konfiguration öffnen sich die Einstellungen automatisch (sonst über den Knopf
    in der Kopfleiste).
    - **„PKI automatisch erkennen“** klicken: übernimmt die CA und wählt das

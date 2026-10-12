@@ -470,4 +470,7 @@
     '{0} nicht für Smartcards geeignete Templates ausgeblendet.' = '{0} templates not suitable for smart cards hidden.'
     'Template-Eigenschaften nicht lesbar - bitte das Smartcard-Template im Dropdown selbst wählen.' = 'Template properties not readable - please choose the smart card template in the drop-down yourself.'
     'Kein für die Smartcard-Anmeldung geeignetes Template gefunden (EKU Smartcard-Anmeldung, Benutzer-Template ohne Agent-Signatur) - bitte im Dropdown selbst wählen oder ein passendes Template auf der CA veröffentlichen.' = 'No template suitable for smart card logon found (EKU smart card logon, user template without agent signature) - please choose one in the drop-down or publish a suitable template on the CA.'
+    'Nicht gespeichert.' = 'Not saved.'
+    "Die Einstellungen gehören zur installierten Version in`r`n{0}`r`n`r`nDort darf nur ein Administrator speichern. Jetzt mit Administratorrechten speichern (Benutzerkontensteuerung)?`r`n`r`nSie gelten dann für alle Benutzer dieses PCs." = "These settings belong to the installed version in`r`n{0}`r`n`r`nOnly an administrator may save there. Save now with administrator rights (User Account Control)?`r`n`r`nThey will then apply to all users of this PC."
+    'Speichern mit Administratorrechten ist fehlgeschlagen.' = 'Saving with administrator rights failed.'
 }

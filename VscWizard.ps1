@@ -4114,6 +4114,44 @@ function Show-VscInventoryDialog {
     }
 }
 
+function Save-WizardConfigChecked {
+    # Einstellungen speichern - auch für die INSTALLIERTE Kopie (%ProgramFiles%\VSC-Wizard),
+    # in die nur Administratoren schreiben dürfen: dann erst in eine Temp-Datei, und nach
+    # Rückfrage per UAC an ihren Platz kopieren. Gibt $true zurück, wenn gespeichert.
+    param([Parameter(Mandatory)][hashtable]$Config, [System.Windows.Forms.Form]$Owner)
+    $dest = $script:ConfigPath
+    # Schreibrecht VORHER prüfen (Öffnen ohne Kürzen ändert nichts): ein Schreibfehler im
+    # Kernmodul wäre nur ein nicht-abbrechender Fehler und hier nicht abfangbar.
+    $writable = $true
+    try { $fs = [System.IO.File]::Open($dest, 'OpenOrCreate', 'Write', 'ReadWrite'); $fs.Close() } catch { $writable = $false }
+    if ($writable) { Save-VscWizardConfig -Config $Config -Path $dest; return $true }
+    Write-WizardLog -Message "Einstellungen: kein Schreibrecht auf '$dest' - Speichern mit Adminrechten wird angeboten." -Level Info
+    $ask = [System.Windows.Forms.MessageBox]::Show(
+        ((T "Die Einstellungen gehören zur installierten Version in`r`n{0}`r`n`r`nDort darf nur ein Administrator speichern. Jetzt mit Administratorrechten speichern (Benutzerkontensteuerung)?`r`n`r`nSie gelten dann für alle Benutzer dieses PCs.") -f (Split-Path -Parent $dest)),
+        (T 'Einstellungen'), 'YesNo', 'Question')
+    if ($ask -ne [System.Windows.Forms.DialogResult]::Yes) { return $false }
+    $tmp = Join-Path $env:TEMP ("VscWizard-config-{0}.psd1" -f [guid]::NewGuid().ToString('N'))
+    try {
+        Save-VscWizardConfig -Config $Config -Path $tmp
+        if (-not (Test-Path -LiteralPath $tmp)) { throw 'Temp-Datei nicht geschrieben' }
+        # Kopierbefehl als -EncodedCommand: Pfade mit Leerzeichen/Apostrophen ohne Quoting-Fallen.
+        $cmd = "Copy-Item -LiteralPath '{0}' -Destination '{1}' -Force -ErrorAction Stop" -f $tmp.Replace("'", "''"), $dest.Replace("'", "''")
+        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+        $p = Start-Process -FilePath 'powershell.exe' -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc" -Verb RunAs -WindowStyle Hidden -PassThru -Wait
+        $ok = ($p.ExitCode -eq 0) -and ((Get-Content -LiteralPath $dest -Raw) -eq (Get-Content -LiteralPath $tmp -Raw))
+        if ($ok) { Write-WizardLog -Message "Einstellungen mit Adminrechten in '$dest' gespeichert." -Level Success; return $true }
+        Write-WizardLog -Message "Einstellungen: Speichern mit Adminrechten fehlgeschlagen (Exit $($p.ExitCode))." -Level Error
+        [System.Windows.Forms.MessageBox]::Show((T 'Speichern mit Administratorrechten ist fehlgeschlagen.'), (T 'Einstellungen'), 'OK', 'Error') | Out-Null
+        return $false
+    } catch {
+        # UAC abgelehnt (Win32Exception 1223) oder Temp-Datei nicht schreibbar.
+        Write-WizardLog -Message "Einstellungen: Speichern mit Adminrechten abgebrochen ($($_.Exception.Message))." -Level Warn
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
+}
+
 function Set-DiscoveredTemplates {
     # PKI-Erkennung -> Template-Auswahl: nur für die Smartcard-Anmeldung GEEIGNETE
     # Templates ins Dropdown (Select-SmartCardTemplates), das beste vorgewählt und dessen
@@ -4564,7 +4602,11 @@ function Show-SettingsDialog {
         $newConfig['PinMinLength']    = [int]$numCfgPinMin.Value
         $newConfig['AllowPhysicalCards'] = "$($chkCfgPhysical.Checked)"
         $newConfig['WorkingDir']      = $config.WorkingDir
-        Save-VscWizardConfig -Config $newConfig -Path $script:ConfigPath
+        if (-not (Save-WizardConfigChecked -Config $newConfig -Owner $dlg)) {
+            $lblCfgSaved.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblCfgSaved.Text = (T 'Nicht gespeichert.')
+            return
+        }
         $script:config = $newConfig
         Set-VscPhysicalCardsAllowed -Allowed $chkCfgPhysical.Checked
 
