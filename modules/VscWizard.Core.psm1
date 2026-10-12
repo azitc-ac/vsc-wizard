@@ -676,18 +676,22 @@ function Get-CertificateTemplateDetails {
     foreach ($r in $searcher.FindAll()) {
         if (-not $r.Properties['cn'] -or $r.Properties['cn'].Count -eq 0) { continue }
         $p = $r.Properties
-        # Registrieren für "alle Benutzer": Authentifizierte Benutzer, Jeder oder Domänen-Benutzer (RID 513).
+        # Wer registrieren darf (SIDs mit Enroll/AutoEnroll bzw. Vollzugriff, getrennt nach
+        # Zulassen/Verweigern) - für die EA-Template-Wahl (Rechte des angemeldeten Benutzers).
+        # "Alle Benutzer": Authentifizierte Benutzer, Jeder oder Domänen-Benutzer (RID 513).
         $usersEnroll = $false
+        $enrollSids = @(); $denySids = @()
         try {
             if ($p['ntsecuritydescriptor'].Count -gt 0) {
                 $sd = New-Object System.DirectoryServices.ActiveDirectorySecurity
                 $sd.SetSecurityDescriptorBinaryForm([byte[]]$p['ntsecuritydescriptor'][0])
                 foreach ($ace in $sd.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
-                    if ($ace.AccessControlType -ne 'Allow') { continue }
-                    $sid = $ace.IdentityReference.Value
-                    if ($sid -notin 'S-1-5-11', 'S-1-1-0' -and $sid -notmatch '-513$') { continue }
                     $rights = "$($ace.ActiveDirectoryRights)"
-                    if ($rights -match 'GenericAll' -or ($rights -match 'ExtendedRight' -and ($ace.ObjectType -eq [guid]::Empty -or $enrollRights -contains "$($ace.ObjectType)"))) { $usersEnroll = $true }
+                    if (-not ($rights -match 'GenericAll' -or ($rights -match 'ExtendedRight' -and ($ace.ObjectType -eq [guid]::Empty -or $enrollRights -contains "$($ace.ObjectType)")))) { continue }
+                    $sid = $ace.IdentityReference.Value
+                    if ($ace.AccessControlType -ne 'Allow') { $denySids += $sid; continue }
+                    $enrollSids += $sid
+                    if ($sid -in 'S-1-5-11', 'S-1-1-0' -or $sid -match '-513$') { $usersEnroll = $true }
                 }
             }
         } catch { }
@@ -699,8 +703,68 @@ function Get-CertificateTemplateDetails {
             RaSignatures    = if ($p['mspki-ra-signature'].Count -gt 0) { [int]$p['mspki-ra-signature'][0] } else { 0 }
             Csps            = @($p['pkidefaultcsps'] | ForEach-Object { [string]$_ })
             UsersCanEnroll  = $usersEnroll
+            EnrollSids      = @($enrollSids | Select-Object -Unique)
+            DenyEnrollSids  = @($denySids | Select-Object -Unique)
         }
     }
+}
+
+function Get-CurrentUserSids {
+    # SID des angemeldeten Benutzers plus seiner Gruppen (aus dem Token, also inkl.
+    # verschachtelter Gruppen) - für die Prüfung "darf ich auf diesem Template registrieren".
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    return @(@($id.User.Value) + @($id.Groups | ForEach-Object { $_.Value }) | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Select-EnrollmentAgentTemplates {
+    # Aus den auf der CA veröffentlichten Templates die Enrollment-Agent-Templates
+    # (EKU Zertifikatanforderungs-Agent 1.3.6.1.4.1.311.20.2.1), bestes zuerst. Ein Template,
+    # das selbst eine Agent-Signatur verlangt, fällt raus (ohne EA nicht zu bekommen).
+    # CanEnroll: der angemeldete Benutzer (-UserSids = eigene SID + Gruppen) darf registrieren
+    # und wird nicht per "Verweigern" ausgeschlossen. Rangfolge: darf registrieren > reines
+    # EA-Template (keine weiteren EKUs) > Smartcard-Provider vorgegeben > Name nennt "Agent".
+    # Reine Funktion (ohne AD) - getestet in tests\Test-Flows.ps1.
+    param([string[]]$Published, $Details, [string[]]$UserSids)
+    $eaOid = '1.3.6.1.4.1.311.20.2.1'
+    $byName = @{}; foreach ($d in @($Details)) { if ($d) { $byName[$d.Name] = $d } }
+    $list = foreach ($name in @($Published | Where-Object { $_ } | Select-Object -Unique)) {
+        $d = $byName[$name]
+        if (-not $d) { continue }
+        $eku = @($d.Eku)
+        if ($eku -notcontains $eaOid) { continue }
+        if ($d.RaSignatures -gt 0) { continue }
+        $allowed = [bool]$d.UsersCanEnroll -or [bool](@($d.EnrollSids) | Where-Object { $UserSids -contains $_ })
+        $denied = [bool](@($d.DenyEnrollSids) | Where-Object { $UserSids -contains $_ })
+        $canEnroll = $allowed -and -not $denied
+        $cspNames = @(@($d.Csps) | ForEach-Object { ($_ -split ',', 2)[-1].Trim() })
+        $scCsp = @($cspNames | Where-Object { $_ -match 'Smart Card' }) | Select-Object -First 1
+        $pure = (@($eku | Where-Object { $_ -ne $eaOid }).Count -eq 0)
+        $score = 8 * [int]$canEnroll + 4 * [int]$pure + 2 * [int][bool]$scCsp + [int]($name -match 'agent' -or "$($d.DisplayName)" -match 'agent')
+        [pscustomobject]@{ Name = $name; DisplayName = $d.DisplayName; CanEnroll = $canEnroll; SmartCardProvider = $scCsp; Score = $score }
+    }
+    return @($list | Sort-Object @{ Expression = 'Score'; Descending = $true }, Name)
+}
+
+function Get-EnrollmentAgentTemplateCandidates {
+    # EA-Templates der (konfigurierten) CA mit Registrieren-Recht des Benutzers ermitteln:
+    # veröffentlichte Templates (Find-EnterpriseCAs) + Eigenschaften/Rechte aus dem AD
+    # (Get-CertificateTemplateDetails) -> Select-EnrollmentAgentTemplates.
+    # Absichtlich ohne Write-WizardLog (läuft in einem Start-Job mit Timeout).
+    param([string]$Server, [string]$CAConfig, [string[]]$UserSids, [int]$TimeoutSeconds = 8)
+    $out = [pscustomobject]@{ Templates = @(); CaName = $null; Error = $null }
+    $found = Find-EnterpriseCAs -Server $Server -TimeoutSeconds $TimeoutSeconds
+    if ($found.Error -and $found.Cas.Count -eq 0) { $out.Error = $found.Error; return $out }
+    $cas = @($found.Cas | Where-Object { $CAConfig -and ($_.ConfigString -eq $CAConfig) })
+    if ($cas.Count -eq 0) { $cas = @($found.Cas) }
+    $out.CaName = ($cas | ForEach-Object { $_.Name }) -join ', '
+    $published = @($cas | ForEach-Object { $_.Templates } | Where-Object { $_ } | Select-Object -Unique)
+    try {
+        $details = @(Get-CertificateTemplateDetails -Server $Server -TimeoutSeconds $TimeoutSeconds)
+        $out.Templates = @(Select-EnrollmentAgentTemplates -Published $published -Details $details -UserSids $UserSids)
+    } catch {
+        $out.Error = (T 'Template-Details nicht lesbar: {0}') -f $_.Exception.Message
+    }
+    return $out
 }
 
 function Select-SmartCardTemplates {

@@ -79,6 +79,19 @@ function Test-VscCardServiceInstalled { [bool]$global:FakeServiceInstalled }
 # Hybrid-Prüfung (Szenario 03) unabhängig vom erreichbaren AD: Standard "AD nicht erreichbar".
 $global:OnPremAnswer = $null
 function Find-OnPremAccountByUpn { param([string]$Upn, [string]$Domain) $global:Log.Add("    (AD-Suche $Upn -> $(if ($global:OnPremAnswer) { 'gefunden' } else { 'nicht erreichbar' }))"); return $global:OnPremAnswer }
+# EA-Zertifikat/-Templates gestellt (unabhängig vom Zertifikatsspeicher/AD dieses Rechners).
+$global:FakeEa = @()
+function Get-EnrollmentAgentCertificates { @($global:FakeEa) }
+$global:FakeEaCandidates = [pscustomobject]@{ Templates = @(); CaName = $null; Error = $null }
+function Find-EnrollmentAgentTemplates { $global:FakeEaCandidates }
+$global:EaReq = $null; $global:EaReqResult = $null
+function Invoke-EnrollmentAgentRequest {
+    param([string]$Template, [switch]$OnVsc)
+    $global:EaReq = "$Template|$([bool]$OnVsc)"; $global:Log.Add("    (EA-Antrag $($global:EaReq) -> $(if ($global:EaReqResult.Success) { 'ausgestellt' } elseif ($global:EaReqResult.Pending) { 'wartet' } else { 'Fehler' }))")
+    if ($global:EaReqResult.Success) { $global:FakeEa = @([pscustomobject]@{ Subject = 'CN=admin'; Thumbprint = 'EEEE'; NotAfter = (Get-Date).AddYears(1) }) }
+    return $global:EaReqResult
+}
+
 
 function Step([string]$Name, [scriptblock]$Action) {
     $before = $Error.Count
@@ -132,6 +145,8 @@ foreach ($scn in 1, 2, 3, 5) {
         Reset-Run
         Step "$label wählen" { Select-ScenarioById -Id $scn }
         $script:ScnAvailable[$scn] = $true
+        # Fremdes Konto ohne EA-Zertifikat: im EA-Angebot den gleichwertigen Plan B wählen.
+        if ($scn -in 1, 5) { $global:ClickInDialog = (T 'Weiter mit Plan B') }
         Step "$label Weiter" { Invoke-ScenarioNextClick }
         if ((OwnVisible $tabPlanA)) { Walk-PlanA $label }
         elseif ((OwnVisible $tabPlanB)) { Walk-PlanB $label }
@@ -151,6 +166,7 @@ foreach ($ans in 'Yes', 'No') {
     Reset-Run
     Select-ScenarioById -Id 3; $script:ScnAvailable[1] = $true; $script:ScnAvailable[3] = $true
     $global:MsgAnswer = [System.Windows.Forms.DialogResult]::$ans
+    if ($ans -eq 'Yes') { $global:ClickInDialog = (T 'Weiter mit Plan B') }
     Step "Szenario 3 Hybrid ($ans)" { Invoke-ScenarioNextClick }
     $global:MsgAnswer = [System.Windows.Forms.DialogResult]::No
     $planOpen = (OwnVisible $tabPlanA) -or (OwnVisible $tabPlanB)
@@ -637,6 +653,75 @@ function Get-SmartCardCertificates { param([string]$StoreLocation) @($stA) }
 $global:Msgs.Clear()
 Step 'Aufräumen Gegenprobe (nur Speicher, ein Zertifikat)' { Invoke-RenewalCleanup -PcscName $rd7 -UpnOrTerm 'x' }
 if ($global:Msgs.Count) { $global:Errors.Add('[Kartenzertifikate Aufräumen Gegenprobe] Abfrage trotz nur einem Zertifikat') }
+# --- Szenario 01 ohne EA-Zertifikat: EA-Template-Wahl und geführte EA-Beantragung ---
+$global:Log.Add('=== EA-Template-Auswahl ===')
+$eaOid = '1.3.6.1.4.1.311.20.2.1'
+$sidUser = 'S-1-5-21-1-1-1-1105'; $sidIssuers = 'S-1-5-21-1-1-1-1200'; $sidDA = 'S-1-5-21-1-1-1-512'
+function New-EaTpl($Name, $Eku, $Allow = @(), $Deny = @(), $Ra = 0, $Csp = @()) {
+    [pscustomobject]@{ Name = $Name; DisplayName = $Name; NameFlag = [int64]0; Eku = $Eku; RaSignatures = $Ra; Csps = $Csp
+        UsersCanEnroll = [bool](@($Allow) | Where-Object { $_ -in 'S-1-5-11', 'S-1-1-0' -or $_ -match '-513$' }); EnrollSids = $Allow; DenyEnrollSids = $Deny }
+}
+$eaDetails = @(
+    New-EaTpl 'EnrollmentAgent' @($eaOid) @($sidDA)                                                   # nur Domänen-Admins
+    New-EaTpl 'KartenausgeberEA' @($eaOid) @($sidIssuers) @() 0 @('1,Microsoft Smart Card Key Storage Provider')
+    New-EaTpl 'EA-Mixed' @($eaOid, '1.3.6.1.5.5.7.3.2') @($sidUser)
+    New-EaTpl 'EA-Gesperrt' @($eaOid) @('S-1-5-11') @($sidIssuers)                                   # Verweigern für die Gruppe
+    New-EaTpl 'EA-RA' @($eaOid) @($sidUser) @() 1                                                     # braucht selbst Agent-Signatur
+    New-EaTpl 'User' @('1.3.6.1.5.5.7.3.2') @('S-1-5-11'))
+$eaPub = @($eaDetails | ForEach-Object Name)
+$eaSel = @(Select-EnrollmentAgentTemplates -Published $eaPub -Details $eaDetails -UserSids @($sidUser, $sidIssuers))
+if (($eaSel.Name -join ',') -ne 'KartenausgeberEA,EA-Mixed,EnrollmentAgent,EA-Gesperrt' -or (($eaSel | ForEach-Object { [int]$_.CanEnroll }) -join '') -ne '1100') { $global:Errors.Add("[EA-Template-Auswahl] erwartet KartenausgeberEA,EA-Mixed (Recht), EnrollmentAgent,EA-Gesperrt (ohne), erhalten: $(($eaSel | ForEach-Object { "$($_.Name)=$($_.CanEnroll)" }) -join ',')") }
+# Gegenprobe: ohne die Gruppe -> Kartenausgeber-Template ohne Recht, das Verweigern greift nicht mehr
+$eaSel2 = @(Select-EnrollmentAgentTemplates -Published $eaPub -Details $eaDetails -UserSids @($sidUser))
+if ($eaSel2[0].Name -ne 'EA-Gesperrt' -or @($eaSel2 | Where-Object { $_.Name -eq 'KartenausgeberEA' -and $_.CanEnroll }).Count) { $global:Errors.Add("[EA-Template-Auswahl Gegenprobe] ohne Gruppe: $(($eaSel2 | ForEach-Object { "$($_.Name)=$($_.CanEnroll)" }) -join ',')") }
+# Dropdown + Hinweis: bestes vorgewählt / nur ohne Recht / keins / eingestellt
+$cboEa = New-Object System.Windows.Forms.ComboBox
+$r = Set-EnrollmentAgentTemplateChoices -ComboBox $cboEa -Candidates ([pscustomobject]@{ Templates = $eaSel; Error = $null })
+if (-not $r.Ok -or $cboEa.Text -ne 'KartenausgeberEA' -or $cboEa.Items.Count -ne 4 -or $r.Text -notmatch 'EA-Mixed') { $global:Errors.Add("[EA-Template-Dropdown] Auswahl '$($cboEa.Text)', $($cboEa.Items.Count) Einträge, Text '$($r.Text)'") }
+$r = Set-EnrollmentAgentTemplateChoices -ComboBox $cboEa -Candidates ([pscustomobject]@{ Templates = @($eaSel | Where-Object { -not $_.CanEnroll }); Error = $null })
+if ($r.Ok -or $cboEa.Text -or $r.Text -notmatch 'PKI-Admins' -or $r.Text -notmatch 'EnrollmentAgent') { $global:Errors.Add("[EA-Template-Dropdown Gegenprobe] ohne Recht: Auswahl '$($cboEa.Text)', Text '$($r.Text)'") }
+$r = Set-EnrollmentAgentTemplateChoices -ComboBox $cboEa -Candidates ([pscustomobject]@{ Templates = @(); Error = $null })
+if ($r.Ok -or $cboEa.Text -or $r.Text -notmatch 'kein Enrollment-Agent-Template' -or $r.Text -notmatch 'PKI-Admins') { $global:Errors.Add("[EA-Template-Dropdown Gegenprobe] keins: Text '$($r.Text)'") }
+$r = Set-EnrollmentAgentTemplateChoices -ComboBox $cboEa -Candidates ([pscustomobject]@{ Templates = $eaSel; Error = $null }) -Configured 'MeinEA'
+if (-not $r.Ok -or $cboEa.Text -ne 'MeinEA') { $global:Errors.Add("[EA-Template-Dropdown] eingestelltes Template nicht vorgewählt: '$($cboEa.Text)'") }
+
+$origEaTemplate = $config['EATemplate']
+$eaBtn = T 'EA-Zertifikat beantragen und weiter'
+$eaDlgTitle = T 'Fremdes Konto - kein EA-Zertifikat'
+foreach ($case in @(
+        @{ Name = 'ausgestellt -> EOBO'; Click = $eaBtn; Result = @{ Success = $true; Pending = $false; RequestId = '7'; Message = '' }; Tpls = $eaSel; Plan = 'A'; Req = 'KartenausgeberEA|True' }
+        @{ Name = 'fehlgeschlagen (Gegenprobe)'; Click = $eaBtn; Result = @{ Success = $false; Pending = $false; RequestId = $null; Message = 'Antrag bei der CA fehlgeschlagen.' }; Tpls = $eaSel; Plan = $null; Req = 'KartenausgeberEA|True' }
+        @{ Name = 'wartet (Gegenprobe)'; Click = $eaBtn; Result = @{ Success = $false; Pending = $true; RequestId = '8'; Message = '' }; Tpls = $eaSel; Plan = $null; Req = 'KartenausgeberEA|True' }
+        @{ Name = 'Plan B gewählt (Gegenprobe)'; Click = (T 'Weiter mit Plan B'); Result = $null; Tpls = $eaSel; Plan = 'B'; Req = $null }
+        @{ Name = 'kein Template (Gegenprobe)'; Click = $eaBtn; Result = $null; Tpls = @(); Plan = $null; Req = $null; Msg = 'EA-Zertifikatstemplate eintragen' })) {
+    $label = "EA geführt: $($case.Name)"
+    $global:Log.Add("=== $label ===")
+    $global:FakeEa = @(); $global:EaReq = $null; $config['EATemplate'] = $null
+    $global:EaReqResult = if ($case.Result) { [pscustomobject]$case.Result } else { $null }
+    $global:FakeEaCandidates = [pscustomobject]@{ Templates = $case.Tpls; CaName = 'Contoso Issuing CA'; Error = $null }
+    $global:NextChoice = 'new'; $global:Msgs.Clear()
+    Reset-Run
+    Select-ScenarioById -Id 1; $script:ScnAvailable[1] = $true
+    $global:ClickInDialog = $case.Click
+    Step "$label Weiter" { Invoke-ScenarioNextClick }
+    $plan = if (OwnVisible $tabPlanA) { 'A' } elseif (OwnVisible $tabPlanB) { 'B' } else { $null }
+    if ($plan -ne $case.Plan) { $global:Errors.Add("[$label] erwartet Plan '$($case.Plan)', geöffnet: '$plan'") }
+    if ($global:EaReq -ne $case.Req) { $global:Errors.Add("[$label] EA-Antrag erwartet '$($case.Req)', erhalten '$($global:EaReq)'") }
+    if ($case.Plan -eq 'A' -and ($script:TargetAccount -ne 'jdoe@contoso.com' -or $config['EATemplate'] -ne 'KartenausgeberEA')) { $global:Errors.Add("[$label] Zielkonto '$($script:TargetAccount)' / EATemplate '$($config['EATemplate'])'") }
+    if ($case.Msg -and -not @($global:Msgs | Where-Object { $_ -like "*$($case.Msg)*" })) { $global:Errors.Add("[$label] kein Hinweis '$($case.Msg)'") }
+    if (-not @($global:Log | Where-Object { $_ -like "*Dialog '$eaDlgTitle'*" })) { $global:Errors.Add("[$label] EA-Angebot nicht gezeigt") }
+}
+# Gegenprobe: EA-Zertifikat vorhanden -> direkt EOBO, KEIN Angebot, kein Antrag
+$global:Log.Add('=== EA vorhanden (Gegenprobe) ===')
+$global:FakeEa = @([pscustomobject]@{ Subject = 'CN=admin'; Thumbprint = 'EEEE'; NotAfter = (Get-Date).AddYears(1) }); $global:EaReq = $null
+$logBefore = $global:Log.Count
+Reset-Run
+Select-ScenarioById -Id 1; $script:ScnAvailable[1] = $true
+Step 'EA vorhanden: Weiter' { Invoke-ScenarioNextClick }
+if (-not (OwnVisible $tabPlanA) -or $global:EaReq -or @($global:Log | Select-Object -Skip $logBefore | Where-Object { $_ -like "*Dialog '$eaDlgTitle'*" })) { $global:Errors.Add('[EA vorhanden] nicht direkt per EOBO (Plan A) bzw. Angebot/Antrag trotzdem') }
+$global:FakeEa = @(); $config['EATemplate'] = $origEaTemplate
+$global:FakeEaCandidates = [pscustomobject]@{ Templates = @(); CaName = $null; Error = $null }
+
 # Resume-Datei des Benutzers wiederherstellen
 & $restoreResume
 

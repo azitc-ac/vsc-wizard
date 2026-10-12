@@ -222,6 +222,14 @@ $fakeReaders = @(1..3 | ForEach-Object { [pscustomobject]@{ FriendlyName = "$lon
 $fakeCerts = @(1..3 | ForEach-Object { [pscustomobject]@{ Subject = 'CN=administrator.langername@contoso.onmicrosoft.com'; Upn = 'administrator.langername@contoso.onmicrosoft.com'; Thumbprint = '0123456789ABCDEF0123456789ABCDEF0123456' + $_; NotBefore = (Get-Date); NotAfter = (Get-Date).AddYears(2); Provider = 'Microsoft Smart Card Key Storage Provider'; Reader = "Microsoft Virtual Smart Card $_"; KeyContainerName = 'x'; IsSmartCard = $true; DetectionError = $null } })
 try { $null = Show-VscPickerDialog -Readers $fakeReaders -Certs $fakeCerts } catch { $global:Findings.Add("Show-VscPickerDialog Fehler: $($_.Exception.Message)") }
 try { $null = Show-VscChoiceDialog } catch { $global:Findings.Add("Show-VscChoiceDialog Fehler: $($_.Exception.Message)") }
+# EA-Angebot (Szenario 01 ohne EA-Zertifikat): mit gefundenem Template und ohne (langer Hinweis an die PKI-Admins).
+$eaLong = [pscustomobject]@{ Name = 'ContosoRestrictedEnrollmentAgentKartenausgeber'; DisplayName = $null; CanEnroll = $true; SmartCardProvider = $null; Score = 8 }
+foreach ($eaCand in @([pscustomobject]@{ Templates = @($eaLong, $eaLong); Error = $null }, [pscustomobject]@{ Templates = @(); Error = $null })) {
+    function Find-EnrollmentAgentTemplates { $eaCand }
+    $savedEa = $config['EATemplate']; $config['EATemplate'] = $null
+    try { $null = Show-EnrollmentAgentOfferDialog -TargetAccount 'administrator.langername@contoso.onmicrosoft.com' } catch { $global:Findings.Add("Show-EnrollmentAgentOfferDialog Fehler: $($_.Exception.Message)") }
+    $config['EATemplate'] = $savedEa
+}
 try { Show-VscPinChangeDialog -Reader $fakeReaders[0] -Owner $form } catch { $global:Findings.Add("Show-VscPinChangeDialog Fehler: $($_.Exception.Message)") }
 try { $own = @(Get-VirtualSmartCardReaders | Where-Object PcscName) | Select-Object -First 1; if ($own) { Show-VscInventoryDialog -Owner $form -UserView -OnlyInstanceId "$($own.InstanceId)" } } catch { $global:Findings.Add("Show-VscInventoryDialog -UserView Fehler: $($_.Exception.Message)") }
 try { Show-VscInventoryDialog -Owner $form } catch { $global:Findings.Add("Show-VscInventoryDialog Fehler: $($_.Exception.Message)") }

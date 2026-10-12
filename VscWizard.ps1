@@ -1797,6 +1797,204 @@ function Enter-Plan {
     }
 }
 
+function Find-EnrollmentAgentTemplates {
+    # EA-Templates der CA mit Registrieren-Recht des angemeldeten Benutzers (für die
+    # geführte EA-Beantragung). Hintergrund-Job mit Timeout (max. 15 s mit Banner);
+    # Erfolg pro Sitzung gecacht, Fehlschlag nicht (nach VPN-Aufbau erneut versuchen).
+    if ($script:EaTemplateCandidates) { return $script:EaTemplateCandidates }
+    $modulePath = $script:ModulePath
+    $sids = @(Get-CurrentUserSids)
+    $c = Invoke-Busy -Text (T 'Suche Enrollment-Agent-Template auf der CA...') -Action {
+        $job = Start-Job -ScriptBlock {
+            param($ModulePath, $Server, $CAConfig, $Sids)
+            Import-Module $ModulePath -Force
+            Get-EnrollmentAgentTemplateCandidates -Server $Server -CAConfig $CAConfig -UserSids $Sids -TimeoutSeconds 8
+        } -ArgumentList $modulePath, $config.DiscoveryDomain, $config.CAConfig, $sids
+        $data = $null; $jobErr = $null
+        if (Wait-Job -Job $job -Timeout 15) {
+            $data = Receive-Job -Job $job -ErrorVariable jobErr -ErrorAction SilentlyContinue
+            if (-not $data) { $data = [pscustomobject]@{ Templates = @(); CaName = $null; Error = "AD-Abfrage fehlgeschlagen: $(@($jobErr)[0])" } }
+        } else {
+            Stop-Job -Job $job
+            $data = [pscustomobject]@{ Templates = @(); CaName = $null; Error = (T 'Zeitüberschreitung bei der AD-Abfrage (DC erreichbar? VPN?).') }
+        }
+        Remove-Job -Job $job -Force
+        $data
+    }
+    $names = @($c.Templates | ForEach-Object { "$($_.Name)$(if (-not $_.CanEnroll) { '*' })" })
+    Write-WizardLog -Message "EA-Templates auf der CA ($($c.CaName), * = ohne Registrieren-Recht): $(if ($names) { $names -join ', ' } else { 'keines' })$(if ($c.Error) { " - $($c.Error)" })." -Level Info
+    if (-not $c.Error) { $script:EaTemplateCandidates = $c }
+    return $c
+}
+
+function Set-EnrollmentAgentTemplateChoices {
+    # Ergebnis der EA-Template-Suche -> Dropdown + Hinweistext. Ein eingestelltes
+    # EATemplate hat Vorrang; sonst das beste Template, auf dem der Benutzer registrieren
+    # darf. Gibt @{ Text; Ok } zurück (Ok = ein Template ist vorgewählt).
+    param([System.Windows.Forms.ComboBox]$ComboBox, $Candidates, [string]$Configured)
+    $ComboBox.Items.Clear()
+    $all = @($Candidates.Templates)
+    $usable = @($all | Where-Object { $_.CanEnroll })
+    foreach ($t in $all) { [void]$ComboBox.Items.Add($t.Name) }
+    if ($Configured) {
+        if (-not $ComboBox.Items.Contains($Configured)) { [void]$ComboBox.Items.Insert(0, $Configured) }
+        $ComboBox.Text = $Configured
+        return @{ Ok = $true; Text = ((T 'Eingestelltes EA-Template: {0}') -f $Configured) }
+    }
+    if ($usable.Count -gt 0) {
+        $ComboBox.Text = $usable[0].Name
+        $text = (T 'EA-Template automatisch gewählt: {0} (EKU Zertifikatanforderungs-Agent, du darfst registrieren).') -f $usable[0].Name
+        if ($usable.Count -gt 1) { $text += ' ' + ((T 'Weitere im Dropdown: {0}') -f (($usable | Select-Object -Skip 1 | ForEach-Object { $_.Name }) -join ', ')) }
+        return @{ Ok = $true; Text = $text }
+    }
+    $ComboBox.Text = ''
+    if ($all.Count -gt 0) {
+        return @{ Ok = $false; Text = ((T 'Auf der CA ist ein EA-Template veröffentlicht ({0}), aber dein Konto darf darauf nicht registrieren. Bitte die PKI-Admins um das Registrieren-Recht bitten (möglichst als Restricted Enrollment Agent, nur für die nötigen Zielkonten) - oder Plan B nutzen.') -f (($all | ForEach-Object { $_.Name }) -join ', ')) }
+    }
+    if ($Candidates.Error) {
+        return @{ Ok = $false; Text = ((T 'EA-Templates nicht ermittelbar ({0}) - Namen bitte eintippen oder Plan B nutzen.') -f $Candidates.Error) }
+    }
+    return @{ Ok = $false; Text = (T 'Auf der CA ist kein Enrollment-Agent-Template veröffentlicht (EKU Zertifikatanforderungs-Agent 1.3.6.1.4.1.311.20.2.1). Bitte die PKI-Admins bitten, eines bereitzustellen - mit Registrieren-Recht nur für die Kartenausgeber, als Restricted Enrollment Agent und auditiert. Bis dahin: Plan B.') }
+}
+
+function Show-EnrollmentAgentOfferDialog {
+    # Szenario 01 ohne EA-Zertifikat: statt still auf Plan B zu gehen, zwei gleichwertige
+    # Wege anbieten - (1) zuerst ein EA-Zertifikat beantragen (Template automatisch
+    # ermittelt, Schlüssel standardmäßig auf eigener VSC) und dann per EOBO (Plan A),
+    # (2) Plan B (RDP-Direktweg bzw. Antrag + Einreicher). Der Sicherheitshinweis (EA ist
+    # admin-äquivalent) steht sichtbar oben. Gibt 'A', 'B' oder $null (abgebrochen) zurück.
+    param([Parameter(Mandatory)][string]$TargetAccount)
+    $candidates = if ($config.EATemplate) { [pscustomobject]@{ Templates = @(); CaName = $null; Error = $null } } else { Find-EnrollmentAgentTemplates }
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = (T 'Fremdes Konto - kein EA-Zertifikat')
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false
+    $dlg.AutoSize = $true; $dlg.AutoSizeMode = 'GrowAndShrink'
+
+    $w = 560
+    $flow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $flow.FlowDirection = 'TopDown'; $flow.WrapContents = $false
+    $flow.AutoSize = $true; $flow.AutoSizeMode = 'GrowAndShrink'
+    $flow.Padding = New-Object System.Windows.Forms.Padding(12)
+    $newLabel = {
+        param([string]$Text, $Font, $Color, [int]$Top = 0)
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $Text; $l.AutoSize = $true; $l.MaximumSize = New-Object System.Drawing.Size($w, 0)
+        if ($Font) { $l.Font = $Font }
+        if ($Color) { $l.ForeColor = $Color }
+        $l.Margin = New-Object System.Windows.Forms.Padding(0, $Top, 0, 4)
+        $l
+    }
+    $bold = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+
+    $flow.Controls.Add((& $newLabel ((T 'Für {0} ist hier kein Enrollment-Agent-Zertifikat (EA) vorhanden. Es gibt zwei gleichwertige Wege:') -f $TargetAccount)))
+
+    # Sicherheitshinweis: deutlich, hinterlegt, vor beiden Wegen.
+    $warnBox = New-Object System.Windows.Forms.Panel
+    $warnBox.AutoSize = $true; $warnBox.AutoSizeMode = 'GrowAndShrink'
+    $warnBox.BackColor = [System.Drawing.Color]::FromArgb(253, 236, 234)
+    $warnBox.Padding = New-Object System.Windows.Forms.Padding(8)
+    $warnBox.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 8)
+    $lblWarn = & $newLabel (T 'Achtung: Ein EA-Zertifikat, mit dem sich Logon-Certs für Admins ausstellen lassen, ist admin-äquivalent (Eskalationspfad ESC3) - wer es besitzt, kann sich als diese Konten anmelden. Für Admin-Zielkonten ist Self-Enrollment als das Konto selbst (Plan B) meist sicherer. EA/EOBO nur bewusst, eingeschränkt (Restricted Enrollment Agent) und auditiert einsetzen; EA-Schlüssel auf Hardware/VSC halten.') $null ([System.Drawing.Color]::Firebrick)
+    $lblWarn.MaximumSize = New-Object System.Drawing.Size(($w - 16), 0)
+    $lblWarn.Margin = New-Object System.Windows.Forms.Padding(0)
+    $warnBox.Controls.Add($lblWarn)
+    $flow.Controls.Add($warnBox)
+
+    # Weg 1: EA beantragen -> EOBO
+    $flow.Controls.Add((& $newLabel (T 'Weg 1: EA-Zertifikat beantragen, dann per EOBO (Plan A)') $bold $null 4))
+    $flow.Controls.Add((& $newLabel ((T 'Einmalig ein EA-Zertifikat für dein eigenes Konto beantragen. Danach wird die Karte im Auftrag von {0} ausgestellt - ohne RDP und ohne temporäres Passwort.') -f $TargetAccount)))
+    $tplRow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $tplRow.AutoSize = $true; $tplRow.WrapContents = $false
+    $tplRow.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+    $lblTpl = New-Object System.Windows.Forms.Label
+    $lblTpl.Text = (T 'EA-Zertifikatstemplate:'); $lblTpl.AutoSize = $true
+    $lblTpl.Margin = New-Object System.Windows.Forms.Padding(0, 6, 8, 0)
+    $cboEaTpl = New-Object System.Windows.Forms.ComboBox
+    $cboEaTpl.DropDownStyle = 'DropDown'; $cboEaTpl.Width = 300
+    $tplRow.Controls.AddRange(@($lblTpl, $cboEaTpl))
+    $flow.Controls.Add($tplRow)
+    $choices = Set-EnrollmentAgentTemplateChoices -ComboBox $cboEaTpl -Candidates $candidates -Configured $config.EATemplate
+    $flow.Controls.Add((& $newLabel $choices.Text $null $(if ($choices.Ok) { [System.Drawing.Color]::DimGray } else { [System.Drawing.Color]::DarkOrange })))
+    $chkOnVsc = New-Object System.Windows.Forms.CheckBox
+    $chkOnVsc.Text = (T 'EA-Schlüssel auf eigener VSC (TPM/PIN) statt Software-Schlüssel')
+    $chkOnVsc.Checked = $true; $chkOnVsc.AutoSize = $true
+    $flow.Controls.Add($chkOnVsc)
+    $btnEa = New-Object System.Windows.Forms.Button
+    $btnEa.Text = (T 'EA-Zertifikat beantragen und weiter')
+    $btnEa.Size = New-Object System.Drawing.Size(280, 32)
+    $btnEa.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
+    $flow.Controls.Add($btnEa)
+    $lblEaResult = & $newLabel '' $null $null
+    $lblEaResult.Visible = $false
+    $flow.Controls.Add($lblEaResult)
+
+    # Weg 2: Plan B
+    $flow.Controls.Add((& $newLabel (T 'Weg 2: Plan B (als Zielkonto per RDP)') $bold $null 8))
+    $flow.Controls.Add((& $newLabel (T "Beantragt wird ALS das Zielkonto in einer RDP-Sitzung, in die diese Smartcard durchgereicht wird (Ausweichweg: Antrag + Einreicher). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.")))
+    $btnB = New-Object System.Windows.Forms.Button
+    $btnB.Text = (T 'Weiter mit Plan B')
+    $btnB.Size = New-Object System.Drawing.Size(280, 32)
+    $btnB.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 8)
+    $flow.Controls.Add($btnB)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = (T 'Abbrechen'); $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 28)
+    $btnCancel.Margin = New-Object System.Windows.Forms.Padding(($w - 100), 4, 0, 0)
+    $flow.Controls.Add($btnCancel)
+    $dlg.Controls.Add($flow)
+    $dlg.CancelButton = $btnCancel
+
+    $script:EaOfferChoice = $null
+    $btnB.Add_Click({ $script:EaOfferChoice = 'B'; $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK })
+    $btnEa.Add_Click({
+        $tpl = "$($cboEaTpl.Text)".Trim()
+        if (-not $tpl) {
+            [System.Windows.Forms.MessageBox]::Show((T 'Bitte zuerst das EA-Zertifikatstemplate eintragen (und ggf. speichern).'), (T 'Hinweis'), 'OK', 'Warning') | Out-Null
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($config.CAConfig)) {
+            [System.Windows.Forms.MessageBox]::Show((T 'Bitte zuerst CA-Konfigurationsstring eintragen und speichern.'), (T 'Hinweis'), 'OK', 'Warning') | Out-Null
+            return
+        }
+        $btnEa.Enabled = $false; $btnB.Enabled = $false
+        $lblEaResult.ForeColor = [System.Drawing.SystemColors]::WindowText
+        $lblEaResult.Text = (T 'Beantrage EA-Zertifikat für das eigene Konto...'); $lblEaResult.Visible = $true
+        $dlg.Refresh()
+        Write-WizardLog -Message "Geführte EA-Beantragung für Szenario 01 (Template '$tpl', Schlüssel auf VSC: $($chkOnVsc.Checked))." -Level Info
+        try {
+            $result = Invoke-EnrollmentAgentRequest -Template $tpl -OnVsc:$chkOnVsc.Checked
+            if ($result.Success -and @(Get-EnrollmentAgentCertificates).Count -gt 0) {
+                # Für diese Sitzung merken (dauerhaft: Einstellungen > Enrollment Agent).
+                $config.EATemplate = $tpl
+                Write-WizardLog -Message "EA-Zertifikat ausgestellt - weiter per EOBO (Plan A) für $TargetAccount." -Level Success
+                $script:EaOfferChoice = 'A'
+                $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK
+                return
+            }
+            if ($result.Pending) {
+                $script:EaPendingRequestId = $result.RequestId
+                $lblEaResult.ForeColor = [System.Drawing.Color]::DarkOrange
+                $lblEaResult.Text = ((T 'EA-Antrag eingereicht, wartet auf Genehmigung (RequestId {0}). {1}') -f $result.RequestId, (Get-PendingApprovalHint -RequestId $result.RequestId -NextStep (T "Danach in den Einstellungen 'Wartenden EA-Antrag abrufen...' und Szenario 01 neu starten - oder jetzt Plan B.")))
+            } else {
+                $msg = if ($result.Success) { T 'EA-Zertifikat nicht im Zertifikatsspeicher gefunden.' } else { $result.Message }
+                $lblEaResult.ForeColor = [System.Drawing.Color]::Firebrick
+                $lblEaResult.Text = ((T 'EA-Beantragung fehlgeschlagen: {0} Details siehe Log.') -f $msg)
+            }
+        } finally {
+            [System.Windows.Forms.Application]::DoEvents()
+            $btnEa.Enabled = $true; $btnB.Enabled = $true
+        }
+    })
+
+    Set-DialogStyle -Dialog $dlg
+    [void]$dlg.ShowDialog($form)
+    return $script:EaOfferChoice
+}
+
 function Get-ScenarioPlanForSeparateAccount {
     # Separates Konto: mit Enrollment-Agent-Zertifikat bruchfrei per Plan A (EOBO),
     # sonst Plan B (Einreichung als Zielkonto, z.B. per RDP).
@@ -2156,7 +2354,9 @@ function Start-ForeignOnPremScenario {
     $script:PlanA_OfflineDirect = $false
     $plan = Get-ScenarioPlanForSeparateAccount   # 'A' (EOBO) / 'B'
     if ($plan -eq 'B') {
-        [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Plan B ausgestellt:`r`n`r`nKein EA-Zertifikat vorhanden - beantragt wird ALS das Zielkonto in einer RDP-Sitzung, in die diese Smartcard durchgereicht wird (Ausweichweg: Antrag + Einreicher). Für eine ERSTausstellung muss das Konto ggf. kurz Passwort-Anmeldung erlauben (Smartcard-Zwang kurz aus), danach wieder auf 'Smartcard erforderlich'.") -f $acct), (T 'Fremdes Konto - Plan B'), 'OK', 'Information') | Out-Null
+        # Kein EA-Zertifikat: anbieten, zuerst eins zu beantragen (dann EOBO) - oder Plan B.
+        $plan = Show-EnrollmentAgentOfferDialog -TargetAccount $acct
+        if (-not $plan) { return }
     } else {
         [System.Windows.Forms.MessageBox]::Show(((T "Für {0} wird per Enroll on Behalf Of (Plan A) ausgestellt:`r`n`r`nEin EA-Zertifikat wurde gefunden - die Karte wird im Auftrag des Zielkontos ausgestellt, ohne RDP und ohne temporäres Passwort.") -f $acct), (T 'Fremdes Konto - EOBO'), 'OK', 'Information') | Out-Null
     }
@@ -2251,7 +2451,10 @@ function Invoke-ScenarioNextClick {
             if (-not $acct) { return }
             $script:TargetAccount = $acct
             $script:PlanA_OfflineDirect = $false
-            Enter-Plan -Plan (Get-ScenarioPlanForSeparateAccount)
+            $plan = Get-ScenarioPlanForSeparateAccount
+            if ($plan -eq 'B') { $plan = Show-EnrollmentAgentOfferDialog -TargetAccount $acct }
+            if (-not $plan) { return }
+            Enter-Plan -Plan $plan
         }
     }
 }
