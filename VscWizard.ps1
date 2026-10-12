@@ -835,9 +835,16 @@ function Get-AppVersion {
     $ver = $null; $date = $null; $commit = $null
     try {
         if (Test-Path (Join-Path $script:BaseDir '.git')) {
-            $count = (& git -C "$script:BaseDir" rev-list --count HEAD 2>$null | Select-Object -First 1)
-            if ($count) {
-                $ver    = "1.0.$($count.ToString().Trim())"
+            # Wie build.ps1: <VERSION>.<Commits seit Änderung von VERSION>, sonst 1.0.<Commits>.
+            $count = $null
+            $vf = Join-Path $script:BaseDir 'VERSION'
+            if (Test-Path $vf) {
+                $since = (& git -C "$script:BaseDir" log -1 --format=%H -- VERSION 2>$null | Select-Object -First 1)
+                if ($since) { $count = (& git -C "$script:BaseDir" rev-list --count "$since..HEAD" 2>$null | Select-Object -First 1); $base = "$(Get-Content -Path $vf -TotalCount 1)".Trim() }
+            }
+            if ("$count" -eq '') { $count = (& git -C "$script:BaseDir" rev-list --count HEAD 2>$null | Select-Object -First 1); $base = '1.0' }
+            if ("$count" -ne '') {
+                $ver    = "$base.$("$count".Trim())"
                 $date   = (& git -C "$script:BaseDir" log -1 --format=%cd --date=short 2>$null | Select-Object -First 1)
                 $commit = (& git -C "$script:BaseDir" rev-parse --short HEAD 2>$null | Select-Object -First 1)
             }

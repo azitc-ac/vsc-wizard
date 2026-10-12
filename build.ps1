@@ -44,13 +44,27 @@ Import-Module ps2exe -Force
 
 if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
-# Build-Version VOR dem Bauen bestimmen (Anzahl Commits): als Dateiversion in die EXEs
-# (Explorer > Eigenschaften > Details), in version.txt und ins Intune-Erkennungsskript.
+# Build-Version VOR dem Bauen bestimmen: als Dateiversion in die EXEs (Explorer >
+# Eigenschaften > Details), in version.txt und ins Intune-Erkennungsskript.
+# Schema: <Basis aus Datei VERSION>.<Commits seit der letzten Änderung von VERSION>, also
+# z.B. VERSION "1.1" -> 1.1.0 genau beim Commit, der sie setzt, danach 1.1.1, 1.1.2 ...
+# Ohne VERSION: 1.0.<Anzahl Commits> (bisheriges Schema, bis 1.0.128).
+function Get-GitBuildVersion([string]$Dir) {
+    $vf = Join-Path $Dir 'VERSION'
+    if (Test-Path $vf) {
+        $base = "$(Get-Content -Path $vf -TotalCount 1)".Trim()
+        $since = (& git -C $Dir log -1 --format=%H -- VERSION 2>$null | Select-Object -First 1)
+        if ($base -and $since) {
+            $n = (& git -C $Dir rev-list --count "$since..HEAD" 2>$null | Select-Object -First 1)
+            if ("$n" -ne '') { return "$base.$("$n".Trim())" }
+        }
+    }
+    $c = (& git -C $Dir rev-list --count HEAD 2>$null | Select-Object -First 1)
+    if ($c) { return "1.0.$("$c".Trim())" }
+    return $null
+}
 $script:BuildVersion = $null
-try {
-    $c = (& git -C $PSScriptRoot rev-list --count HEAD 2>$null | Select-Object -First 1)
-    if ($c) { $script:BuildVersion = "1.0.$($c.ToString().Trim())" }
-} catch { }
+try { $script:BuildVersion = Get-GitBuildVersion $PSScriptRoot } catch { }
 
 function Build-Exe {
     param(
@@ -134,22 +148,21 @@ if (Get-Command dotnet -ErrorAction SilentlyContinue) {
 # Commit, ohne lokalen Hook). Wird neben die EXE gelegt; der Wizard liest sie, wenn
 # kein .git danebenliegt (also im ausgelieferten EXE-Fall).
 try {
-    $verCount  = (& git -C $PSScriptRoot rev-list --count HEAD 2>$null | Select-Object -First 1)
     $verDate   = (& git -C $PSScriptRoot log -1 --format=%cd --date=short 2>$null | Select-Object -First 1)
     $verCommit = (& git -C $PSScriptRoot rev-parse --short HEAD 2>$null | Select-Object -First 1)
-    if ($verCount) {
-        $verText = "Version=1.0.$($verCount.ToString().Trim())`r`nDate=$verDate`r`nCommit=$verCommit`r`n"
+    if ($script:BuildVersion) {
+        $verText = "Version=$($script:BuildVersion)`r`nDate=$verDate`r`nCommit=$verCommit`r`n"
         Set-Content -Path (Join-Path $OutputDir 'version.txt') -Value $verText -Encoding UTF8
-        Write-Host "version.txt: 1.0.$($verCount.ToString().Trim()) ($verCommit, $verDate)"
+        Write-Host "version.txt: $($script:BuildVersion) ($verCommit, $verDate)"
         # Intune-Erkennungsskript mit DIESER Version (zum Paket hochladen): erkannt wird nur
         # "installierte Version >= gebaute Version" -> neue Pakete installieren über ältere.
         $detSrc = Join-Path $PSScriptRoot 'intune\Detect-VscWizard.template.ps1'
         if (Test-Path $detSrc) {
             $detDir = Join-Path $OutputDir 'intune'
             if (-not (Test-Path $detDir)) { New-Item -ItemType Directory -Path $detDir -Force | Out-Null }
-            $detText = [IO.File]::ReadAllText($detSrc, [Text.Encoding]::UTF8).Replace('__VSCWIZARD_VERSION__', "1.0.$($verCount.ToString().Trim())")
+            $detText = [IO.File]::ReadAllText($detSrc, [Text.Encoding]::UTF8).Replace('__VSCWIZARD_VERSION__', $script:BuildVersion)
             [IO.File]::WriteAllText((Join-Path $detDir 'Detect-VscWizard.ps1'), $detText, (New-Object System.Text.UTF8Encoding($true)))
-            Write-Host "Intune-Erkennung: intune\Detect-VscWizard.ps1 (erkennt ab Version 1.0.$($verCount.ToString().Trim()))"
+            Write-Host "Intune-Erkennung: intune\Detect-VscWizard.ps1 (erkennt ab Version $($script:BuildVersion))"
         }
     } else {
         Write-Host 'WARN: git nicht verfuegbar - version.txt nicht erzeugt (Wizard zeigt Fallback-Version).'

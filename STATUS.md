@@ -1,4 +1,4 @@
-﻿# Projektstand & Backlog (VSC-Wizard)
+# Projektstand & Backlog (VSC-Wizard)
 
 > Kurzes „wo stehen wir"-Dokument, damit der Faden zwischen Testrunden nicht reißt.
 > Ergänzt das RUNBOOK.md (das die Szenarien/Abläufe beschreibt).
@@ -258,7 +258,8 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
   (letztes Commit-Datum) und Kurz-Hash. Läuft der Wizard als `.ps1` im Checkout →
   live aus git; als gebaute `.exe` → aus `version.txt`, das **build.ps1** beim Build
   aus git erzeugt und neben die EXE legt. Damit funktioniert das identisch in der
-  Windows-Claude-Session, ohne lokale Hook-Einrichtung.
+  Windows-Claude-Session, ohne lokale Hook-Einrichtung. **Ab 1.1.0:** Basis aus der Datei
+  `VERSION` (z.B. „1.1“) + Commits seit deren letzter Änderung → 1.1.0, 1.1.1 …
 - **Fix:** frischer Plan-A/B-Start setzt den Zustand zurück (der „VSC erstellen →
   Weiter"-Check war überspringbar, weil `VscCreated` vom vorherigen Durchlauf true blieb).
 

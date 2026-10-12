@@ -44,7 +44,7 @@ dieser Ordner ist dann das Paket.
    - `helper-arm64\` – nur für ARM64-Geräte nötig (groß, ca. 60 MB)
    - `VscWizard.Submit.exe` – wird auf Clients **nicht** gebraucht (Einreicher für den
      RDP-/Server-Weg der Admin-Szenarien)
-3. Das Build-Skript nennt am Ende die Version (`1.0.<Anzahl Commits>`), z.B. 1.0.114.
+3. Das Build-Skript nennt am Ende die Version: `<Basis aus Datei VERSION>.<Commits seit deren letzter Änderung>`, z.B. 1.1.0, 1.1.1 … (bis 1.0.128: `1.0.<Anzahl Commits>`). Für eine neue Haupt-/Nebenversion nur `VERSION` ändern und committen.
 
 ## Intune-App anlegen (eine Win32-App, Gerät/SYSTEM)
 
