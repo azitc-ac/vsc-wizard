@@ -84,15 +84,17 @@ So bringst du den Wizard in Betrieb und verteilst ihn per Intune
 4. **Konfigurieren:** `VscWizard.exe` **ohne Parameter** starten. Bei leerer
    Konfiguration öffnen sich die Einstellungen automatisch (sonst über den Knopf
    in der Kopfleiste).
-   - **„PKI automatisch erkennen“** klicken: sucht CA und passende Templates im AD.
-   - Unter **Zertifikatstemplate** das richtige Template im Dropdown wählen
-     (**sehr wichtig** – das Template für die Smartcard-Anmeldung, auf dem die
-     Benutzer *Registrieren* dürfen; die Erkennung schlägt nur vor).
+   - **„PKI automatisch erkennen“** klicken: übernimmt die CA und wählt das
+     Smartcard-Template automatisch (nur Templates für die Smartcard-Anmeldung,
+     bevorzugt solche, auf denen die Benutzer *Registrieren* dürfen; der Provider
+     wird passend gesetzt).
+   - **Template prüfen (wichtig):** Das Ergebnisfeld nennt die Wahl und die
+     weiteren geeigneten Templates; bei Bedarf im Dropdown ein anderes wählen.
    - **Speichern** – schreibt `config.psd1` in diesen Ordner.
 
    ![Einstellungen: PKI erkennen, Template wählen, Speichern](docs/images/einstellungen-pki-erkennung.png)
-5. **Installieren:** `VscWizard.exe -Install` (fragt per UAC nach Adminrechten
-   und meldet am Ende das Ergebnis). Kopiert den Ordner **samt `config.psd1`**
+5. **Installieren:** **`install.bat`** doppelklicken (bzw. `VscWizard.exe -Install`)
+   – fragt per UAC nach Adminrechten und meldet am Ende das Ergebnis. Kopiert den Ordner **samt `config.psd1`**
    nach `%ProgramFiles%\VSC-Wizard` und richtet Aufgaben und Startmenü ein. Bei der
    nächsten Anmeldung erscheint der Assistent „Smartcard einrichten“.
 

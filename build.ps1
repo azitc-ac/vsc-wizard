@@ -104,6 +104,8 @@ if (Test-Path $logoSrc) {
     Copy-Item -Path $logoSrc -Destination (Join-Path $logoDir 'VscWizard.png') -Force
     Copy-Item -Path $logoSrc -Destination (Join-Path $OutputDir 'VscWizard.png') -Force   # großes Kartensymbol in den Schritt-Seiten
 }
+# install.bat: Doppelklick-Installation (ruft VscWizard.exe -Install, UAC + Ergebnis-Meldung).
+Copy-Item -Path (Join-Path $PSScriptRoot 'install.bat') -Destination (Join-Path $OutputDir 'install.bat') -Force
 $configLocal = Join-Path $PSScriptRoot 'config.local.psd1'
 $configSrc = if (Test-Path $configLocal) { $configLocal } else { Join-Path $PSScriptRoot 'config.psd1' }
 if (Test-Path $configSrc) {
