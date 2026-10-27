@@ -140,6 +140,18 @@ public static class VscNativeLaunch {
 $script:LaunchParams = $PSBoundParameters
 try { $nativeRc = Invoke-VscNativeArm64Relaunch } catch { $nativeRc = $null }
 if ($null -ne $nativeRc) { exit $nativeRc }
+# Nativ neu gestartet (Prozess = powershell.exe): eigene App-Kennung für den ganzen Prozess,
+# BEVOR ein Fenster entsteht - sonst gruppiert die Taskleiste unter "Windows PowerShell"
+# (mit dessen Symbol). Fenster-Symbol/-Name setzt zusätzlich Set-VscTaskbarIdentity.
+if ($env:VSCWIZARD_ICONEXE) {
+    try {
+        Add-Type -Namespace VscShell -Name AppId -MemberDefinition @'
+[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int GetCurrentProcessExplicitAppUserModelID(out IntPtr appId);
+'@
+        [void][VscShell.AppId]::SetCurrentProcessExplicitAppUserModelID('AZITC.VSC-Wizard')
+    } catch { }
+}
 # Diagnose/Test: Prozess-Architektur festhalten (tests, Fehlersuche auf ARM64-Geräten).
 if ($env:VSCWIZARD_ARCHFILE) { try { Set-Content -Path $env:VSCWIZARD_ARCHFILE -Value "$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)" } catch { } }
 
@@ -792,8 +804,59 @@ function Add-BorderPaint {
     })
 }
 
+function Set-VscTaskbarIdentity {
+    # Taskleisten-Identität eines Fensters (Property-Store des Fensters): eigene
+    # AppUserModelID (getrennte Gruppe statt "Windows PowerShell") und Symbol/Name aus der EXE.
+    param([Parameter(Mandatory)][System.Windows.Forms.Form]$Window, [Parameter(Mandatory)][string]$IconExe)
+    if (-not ('VscTaskbarId' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class VscTaskbarId {
+    [StructLayout(LayoutKind.Sequential, Pack = 4)] public struct PROPERTYKEY { public Guid fmtid; public uint pid; }
+    [StructLayout(LayoutKind.Explicit)] public struct PROPVARIANT { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p;}
+    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore {
+        [PreserveSig] int GetCount(out uint c); [PreserveSig] int GetAt(uint i, out PROPERTYKEY k);
+        [PreserveSig] int GetValue(ref PROPERTYKEY k, out PROPVARIANT v); [PreserveSig] int SetValue(ref PROPERTYKEY k, ref PROPVARIANT v); [PreserveSig] int Commit();
+    }
+    [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore ps);
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT v);
+    static readonly Guid AppModel = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+    static void Set(IPropertyStore ps, uint pid, string value) {
+        var k = new PROPERTYKEY { fmtid = AppModel, pid = pid };
+        var v = new PROPVARIANT { vt = 31 /*VT_LPWSTR*/, p = Marshal.StringToCoTaskMemUni(value) };
+        try { ps.SetValue(ref k, ref v); } finally { PropVariantClear(ref v); }   // einzelne Fehler ignorieren
+    }
+    // pid 5 = ID, 3 = RelaunchIconResource, 4 = RelaunchDisplayNameResource, 2 = RelaunchCommand
+    public static void Apply(IntPtr hwnd, string appId, string iconExe, string name) {
+        Guid iid = typeof(IPropertyStore).GUID; IPropertyStore ps;
+        if (SHGetPropertyStoreForWindow(hwnd, ref iid, out ps) != 0 || ps == null) return;
+        try {
+            Set(ps, 5, appId); Set(ps, 3, iconExe + ",0"); Set(ps, 4, name); Set(ps, 2, "\"" + iconExe + "\"");
+            ps.Commit();
+        } finally { Marshal.ReleaseComObject(ps); }
+    }
+    public static string GetId(IntPtr hwnd) {
+        Guid iid = typeof(IPropertyStore).GUID; IPropertyStore ps;
+        if (SHGetPropertyStoreForWindow(hwnd, ref iid, out ps) != 0 || ps == null) return null;
+        try { var k = new PROPERTYKEY { fmtid = AppModel, pid = 5 }; PROPVARIANT v; if (ps.GetValue(ref k, out v) != 0) return null; string s = v.vt == 31 ? Marshal.PtrToStringUni(v.p) : null; PropVariantClear(ref v); return s; }
+        finally { Marshal.ReleaseComObject(ps); }
+    }
+}
+"@
+    }
+    [VscTaskbarId]::Apply($Window.Handle, 'AZITC.VSC-Wizard', $IconExe, 'VSC-Wizard')
+}
+
 $form = New-Object System.Windows.Forms.Form
 if ($script:AppIcon) { $form.Icon = $script:AppIcon }
+# Nativer ARM64-Neustart: das Fenster gehört dann zu powershell.exe - Windows gruppierte es in
+# der Taskleiste unter PowerShell (mit dessen Symbol). Eigene App-Kennung + Symbol der EXE fürs
+# Fenster setzen, dann zeigt die Taskleiste das VSC-Symbol.
+if ($env:VSCWIZARD_ICONEXE) {
+    $form.Add_HandleCreated({ try { Set-VscTaskbarIdentity -Window $this -IconExe $env:VSCWIZARD_ICONEXE } catch { } })
+}
 $form.Text = (T 'VSC-Wizard - Virtuelle Smartcard beantragen - https://blog.zarenko.net')
 $form.Size = New-Object System.Drawing.Size(1120, 820)
 $form.StartPosition = 'CenterScreen'
