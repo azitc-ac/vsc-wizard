@@ -118,6 +118,9 @@ if (Test-Path $logoSrc) {
     Copy-Item -Path $logoSrc -Destination (Join-Path $logoDir 'VscWizard.png') -Force
     Copy-Item -Path $logoSrc -Destination (Join-Path $OutputDir 'VscWizard.png') -Force   # großes Kartensymbol in den Schritt-Seiten
 }
+# VscWizard.ps1 neben die EXE: auf ARM64-Geräten startet die EXE das Skript in einer
+# nativen ARM64-PowerShell neu (ARM64-Kartentreiber wie YubiKey laden nicht unter Emulation).
+Copy-Item -Path (Join-Path $PSScriptRoot 'VscWizard.ps1') -Destination (Join-Path $OutputDir 'VscWizard.ps1') -Force
 # install.bat: Doppelklick-Installation (ruft VscWizard.exe -Install, UAC + Ergebnis-Meldung).
 Copy-Item -Path (Join-Path $PSScriptRoot 'install.bat') -Destination (Join-Path $OutputDir 'install.bat') -Force
 $configLocal = Join-Path $PSScriptRoot 'config.local.psd1'

@@ -57,12 +57,99 @@ if (-not $script:BaseDir) {
 }
 if (-not $script:BaseDir) { $script:BaseDir = (Get-Location).Path }
 
+# --- ARM64-Geräte: nativ statt unter x64-Emulation laufen ---------------------------------
+# Die PS2EXE-EXE ist "AnyCPU" und läuft auf ARM64 unter x64-EMULATION. Ein x64-Prozess kann
+# aber keine reinen ARM64-Kartentreiber laden (z.B. YubiKey-Minidriver ykmd.dll für ARM64):
+# Kartenprüfung, Zertifikate lesen, CSR und PIN ändern scheiterten dann still. (VSCs sind
+# nicht betroffen - deren msclmd.dll lädt auch unter Emulation.) Deshalb startet die EXE auf
+# ARM64 das daneben liegende VscWizard.ps1 in einer NATIVEN ARM64-PowerShell (ohne Konsole)
+# und reicht deren Exitcode durch. Nicht bei erzwungener Ausführungsrichtlinie (GPO), und
+# nur einmal (VSCWIZARD_NATIVE). Klappt der Start nicht, läuft es wie bisher weiter.
+function Invoke-VscNativeArm64Relaunch {
+    if ($env:VSCWIZARD_NATIVE -or $env:VSCWIZARD_NO_NATIVE) { return $null }
+    $self = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ($self -match '\\(powershell|pwsh)\.exe$') { return $null }   # läuft schon als Skript
+    $ps1 = Join-Path $script:BaseDir 'VscWizard.ps1'
+    if (-not (Test-Path -LiteralPath $ps1)) { return $null }
+    foreach ($scope in 'MachinePolicy', 'UserPolicy') { if ("$(Get-ExecutionPolicy -Scope $scope)" -in 'AllSigned', 'Restricted') { return $null } }
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class VscNativeLaunch {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct STARTUPINFO { public int cb; public string lpReserved, lpDesktop, lpTitle; public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags; public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError; }
+    [StructLayout(LayoutKind.Sequential)] struct STARTUPINFOEX { public STARTUPINFO StartupInfo; public IntPtr lpAttributeList; }
+    [StructLayout(LayoutKind.Sequential)] struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attr, IntPtr value, IntPtr size, IntPtr prev, IntPtr retSize);
+    [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool CreateProcessW(string app, System.Text.StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFOEX si, out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+    [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    // Echtes ARM64-Gerät und dieser Prozess läuft emuliert (nicht nativ)?
+    public static bool IsEmulatedOnArm64() {
+        try {
+            ushort pm, nm;
+            if (!IsWow64Process2(GetCurrentProcess(), out pm, out nm)) return false;
+            return nm == 0xAA64 && RuntimeInformation.ProcessArchitecture != Architecture.Arm64;
+        } catch { return false; }
+    }
+    // cmdLine als ARM64-Prozess starten (PROC_THREAD_ATTRIBUTE_MACHINE_TYPE = ARM64), ohne
+    // Konsolenfenster, und auf das Ende warten. Rückgabe: Exitcode bzw. null bei Startfehler.
+    public static int? Run(string app, string cmdLine, string dir) {
+        IntPtr size = IntPtr.Zero;
+        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+        IntPtr list = Marshal.AllocHGlobal(size), machine = Marshal.AllocHGlobal(2);
+        bool init = false;
+        try {
+            if (!InitializeProcThreadAttributeList(list, 1, 0, ref size)) return null;
+            init = true;
+            Marshal.WriteInt16(machine, unchecked((short)0xAA64));
+            if (!UpdateProcThreadAttribute(list, 0, (IntPtr)0x00020019, machine, (IntPtr)2, IntPtr.Zero, IntPtr.Zero)) return null;
+            var si = new STARTUPINFOEX(); si.StartupInfo.cb = Marshal.SizeOf(si); si.lpAttributeList = list;
+            PROCESS_INFORMATION pi;
+            if (!CreateProcessW(app, new System.Text.StringBuilder(cmdLine), IntPtr.Zero, IntPtr.Zero, false, 0x00080000 | 0x08000000, IntPtr.Zero, dir, ref si, out pi)) return null;
+            uint code;
+            WaitForSingleObject(pi.hProcess, 0xFFFFFFFF);
+            GetExitCodeProcess(pi.hProcess, out code);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            return (int)code;
+        } finally {
+            if (init) DeleteProcThreadAttributeList(list);
+            Marshal.FreeHGlobal(list); Marshal.FreeHGlobal(machine);
+        }
+    }
+}
+"@
+    if (-not [VscNativeLaunch]::IsEmulatedOnArm64()) { return $null }
+    # Aufrufparameter 1:1 weiterreichen.
+    $argText = foreach ($kv in $script:LaunchParams.GetEnumerator()) {
+        if ($kv.Value -is [System.Management.Automation.SwitchParameter]) { if ($kv.Value) { "-$($kv.Key)" } }
+        else { "-$($kv.Key) `"$("$($kv.Value)".Replace('"', '\"'))`"" }
+    }
+    $psExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $cmd = "`"$psExe`" -NoProfile -ExecutionPolicy Bypass -STA -File `"$ps1`" $($argText -join ' ')"
+    $env:VSCWIZARD_NATIVE = '1'
+    $env:VSCWIZARD_ICONEXE = $self        # Programm-Icon weiter aus der EXE
+    $rc = [VscNativeLaunch]::Run($psExe, $cmd, $script:BaseDir)
+    if ($null -eq $rc) { $env:VSCWIZARD_NATIVE = $null; $env:VSCWIZARD_ICONEXE = $null }
+    return $rc
+}
+$script:LaunchParams = $PSBoundParameters
+try { $nativeRc = Invoke-VscNativeArm64Relaunch } catch { $nativeRc = $null }
+if ($null -ne $nativeRc) { exit $nativeRc }
+# Diagnose/Test: Prozess-Architektur festhalten (tests, Fehlersuche auf ARM64-Geräten).
+if ($env:VSCWIZARD_ARCHFILE) { try { Set-Content -Path $env:VSCWIZARD_ARCHFILE -Value "$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)" } catch { } }
+
 # Programm-Icon für alle Fenster: als EXE das eingebettete Symbol (build.ps1), als Skript
 # assets\VscWizard.ico aus dem Repo. Fehlt beides, bleibt das Standard-Symbol.
 $script:AppIcon = $null
 try {
     $selfExe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    if ($selfExe -notmatch '\\(powershell|pwsh)\.exe$') { $script:AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($selfExe) }
+    if ($env:VSCWIZARD_ICONEXE -and (Test-Path -LiteralPath $env:VSCWIZARD_ICONEXE)) { $script:AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:VSCWIZARD_ICONEXE) }   # nativer ARM64-Neustart
+    elseif ($selfExe -notmatch '\\(powershell|pwsh)\.exe$') { $script:AppIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($selfExe) }
     elseif (Test-Path (Join-Path $script:BaseDir 'assets\VscWizard.ico')) { $script:AppIcon = New-Object System.Drawing.Icon((Join-Path $script:BaseDir 'assets\VscWizard.ico')) }
 } catch { }
 # Großes Kartenbild (256-px-PNG, build.ps1 legt es neben die EXE) für die Schritt-Seiten;
@@ -309,7 +396,7 @@ if ($AutoStart) {
     # Anmelde-Aufgabe: nur öffnen, wenn es etwas zu tun gibt (sonst still beenden).
     try { Initialize-WizardLog -LogBox $null } catch { }
     $need = Test-VscAutoStartNeeded -Config $config
-    if (-not $need.Needed) { Write-WizardLog -Message "Autostart: nichts zu tun - $($need.Reason)." -Level Info; exit 0 }
+    if (-not $need.Needed) { Write-WizardLog -Message "Autostart: nichts zu tun - $($need.Reason). (Prozess: $([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture))" -Level Info; exit 0 }
     Write-WizardLog -Message 'Autostart: Einrichtung nötig - Assistent wird geöffnet.' -Level Info
 }
 

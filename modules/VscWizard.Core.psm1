@@ -1721,7 +1721,7 @@ foreach ($l in [VscPhysProbe]::Run()) { [Console]::Out.WriteLine($l) }
         }
     }
     if ($res.StdErr -eq 'Timeout') { Write-WizardLog -Message "Andere Smartcards: Prüfung nach $TimeoutSeconds s abgebrochen (Treiber hängt?)." -Level Warn }
-    foreach ($c in @($cards)) { Write-WizardLog -Message "Andere Smartcard: '$($c.Reader)' Karte '$($c.CardName)' Treiber '$($c.Module)' -> $($c.State)$(if ($c.Error) { " ($($c.Error))" })." -Level Info }
+    foreach ($c in @($cards)) { Write-WizardLog -Message "Andere Smartcard: '$($c.Reader)' Karte '$($c.CardName)' Treiber '$($c.Module)' -> $($c.State)$(if ($c.Error) { " ($($c.Error))" }) (Prozess: $([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture))." -Level Info }
     return @($cards)
 }
 
