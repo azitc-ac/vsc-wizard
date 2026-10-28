@@ -83,6 +83,12 @@ jetzt beides über `Test-TpmReadiness` zentralisiert.
 
 ## Backlog / offene Punkte
 
+000. **IDEE (2026-10-28): Hinweis auf zusätzliche Anmeldemethoden** — am Ende einer
+    erfolgreichen Ausstellung (Fertig-Seite) empfehlen, zusätzlich **Microsoft
+    Authenticator** und/oder einen **FIDO2-Schlüssel** einzurichten (Ausweichweg, falls
+    Karte/TPM ausfällt). Optional mit Link/Knopf auf `https://aka.ms/mysecurityinfo`.
+    Zweisprachig (DE/EN), per Einstellung abschaltbar; nicht im stillen Intune-Lauf.
+
 00. **IDEE (2026-10-05): Integration Microsoft Cloud PKI** — Form noch offen. Vorab zu
     klären, bevor entschieden wird:
     - Cloud PKI stellt über **Intune-SCEP-Profile** aus; die Profile können (Stand bisher,
