@@ -2673,7 +2673,12 @@ $btnExportLog.Add_LinkClicked({
 })
 
 Initialize-WizardLog -LogBox $rtbLog
-Write-WizardLog -Message 'VSC-Wizard gestartet.' -Level Info
+$procArch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+Write-WizardLog -Message "VSC-Wizard $(Get-AppVersion) gestartet ($procArch, $([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName))." -Level Info
+# ARM64-Gerät, aber emuliert: ARM64-Kartentreiber (z.B. YubiKey) laden dann nicht.
+if ("$([Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine'))" -eq 'ARM64' -and "$procArch" -ne 'Arm64') {
+    Write-WizardLog -Message 'ARM64-Gerät, Wizard läuft aber unter x64-Emulation (kein nativer Neustart) - ARM64-Kartentreiber wie der YubiKey-Minidriver sind dann nicht nutzbar. VscWizard.ps1 neben der EXE? Version ab 1.1.1?' -Level Warn
+}
 
 #endregion
 
