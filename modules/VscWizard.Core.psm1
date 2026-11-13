@@ -183,6 +183,30 @@ function Write-WizardLog {
 $script:Lang = 'de'
 $script:EnStrings = @{}
 
+function Import-VscStringTable {
+    # Übersetzungstabelle (psd1: @{ 'Deutsch' = 'English' }) laden. NICHT per
+    # Import-PowerShellDataFile: das lehnt Hashtables mit mehr als 500 Schlüsseln als
+    # "dynamischen Ausdruck" ab - der Wizard fiel dann still auf Deutsch zurück. Hier
+    # wird die Datei nur geparst; jeder Schlüssel und Wert muss eine String-Konstante
+    # sein (kein Code wird ausgeführt), sonst Fehler.
+    param([Parameter(Mandatory)][string]$Path)
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { throw "Übersetzungsdatei fehlerhaft ($Path): $($errors[0].Message) (Zeile $($errors[0].Extent.StartLineNumber))" }
+    $hash = $ast.Find({ $args[0] -is [System.Management.Automation.Language.HashtableAst] }, $false)
+    if (-not $hash) { throw "Übersetzungsdatei ohne Tabelle: $Path" }
+    $table = @{}
+    foreach ($kv in $hash.KeyValuePairs) {
+        $value = $kv.Item2
+        if ($value -is [System.Management.Automation.Language.PipelineAst] -and $value.PipelineElements.Count -eq 1) { $value = $value.PipelineElements[0].Expression }
+        if (-not ($kv.Item1 -is [System.Management.Automation.Language.StringConstantExpressionAst]) -or -not ($value -is [System.Management.Automation.Language.StringConstantExpressionAst])) {
+            throw "Übersetzungsdatei: kein reiner Text in Zeile $($kv.Item1.Extent.StartLineNumber) ($Path)"
+        }
+        $table[$kv.Item1.Value] = $value.Value
+    }
+    return $table
+}
+
 function Set-WizardLanguage {
     param([string]$Language)
     $script:Lang = if ("$Language" -match '^en') { 'en' } else { 'de' }
@@ -193,7 +217,7 @@ function Set-WizardLanguage {
     if ($script:Lang -eq 'en') {
         $path = Join-Path $script:CoreModuleDir 'VscWizard.Strings.en.psd1'
         if (Test-Path $path) {
-            try { $script:EnStrings = Import-PowerShellDataFile -Path $path -ErrorAction Stop } catch { $script:EnStrings = @{} }
+            try { $script:EnStrings = Import-VscStringTable -Path $path } catch { $script:EnStrings = @{} }
         }
     }
 }
@@ -1736,6 +1760,14 @@ function Test-PhysicalCardsAllowed {
     param($Config)
     if ($null -eq $Config) { return [bool]$script:AllowPhysicalCards }
     return [bool]("$($Config.AllowPhysicalCards)" -match '^(True|1|Ja|Yes)$')
+}
+
+function Test-MfaHintEnabled {
+    # Einstellung "Am Ende Authenticator/FIDO2 empfehlen" (config.psd1: ShowMfaHint).
+    # Standard EIN - nur ein ausdrückliches False/0/Nein/No schaltet den Hinweis ab.
+    param($Config)
+    if ($null -eq $Config -or $null -eq $Config.ShowMfaHint -or "$($Config.ShowMfaHint)" -eq '') { return $true }
+    return -not ("$($Config.ShowMfaHint)" -match '^(False|0|Nein|No)$')
 }
 
 function Get-SmartCardTargets {

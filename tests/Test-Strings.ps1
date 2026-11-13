@@ -7,6 +7,7 @@
 # Aufruf:  powershell.exe -File .\tests\Test-Strings.ps1 [-ListMissing]
 param([string]$Repo, [switch]$ListMissing)
 if (-not $Repo) { $Repo = Split-Path -Parent $PSScriptRoot }
+Import-Module (Join-Path $Repo 'modules\VscWizard.Core.psm1') -Force -DisableNameChecking
 
 $keys = @{}
 foreach ($rel in 'VscWizard.ps1', 'modules\VscWizard.Core.psm1') {
@@ -33,7 +34,14 @@ foreach ($rel in 'VscWizard.ps1', 'modules\VscWizard.Core.psm1') {
 foreach ($d in 'Du', 'Tool', 'Prüfung') { if (-not $keys.ContainsKey($d)) { $keys[$d] = 'dynamisch (Szenario-Ablauf)' } }
 
 $dictPath = Join-Path $Repo 'modules\VscWizard.Strings.en.psd1'
-$dict = if (Test-Path $dictPath) { Import-PowerShellDataFile -Path $dictPath } else { @{} }
+# Derselbe Loader wie im Wizard (Import-PowerShellDataFile scheitert ab 501 Einträgen).
+$dict = Import-VscStringTable -Path $dictPath
+if ($dict.Count -lt 400) { Write-Host "FEHLER: Übersetzungstabelle nur $($dict.Count) Einträge geladen" -ForegroundColor Red; exit 1 }
+# Der Weg des Wizards selbst: Sprache Englisch -> übersetzter Text (fiel bei >500 Einträgen still auf Deutsch zurück).
+Set-WizardLanguage -Language 'en'
+$probe = T 'Sicherheitsinformationen öffnen'
+Set-WizardLanguage -Language 'de'
+if ($probe -ne $dict['Sicherheitsinformationen öffnen']) { Write-Host "FEHLER: Set-WizardLanguage en liefert keine Übersetzung ('$probe')" -ForegroundColor Red; exit 1 }
 
 $missing = @($keys.Keys | Where-Object { -not $dict.ContainsKey($_) } | Sort-Object)
 $unused = @($dict.Keys | Where-Object { -not $keys.ContainsKey($_) } | Sort-Object)

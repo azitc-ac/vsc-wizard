@@ -12,4 +12,7 @@
     DiscoveryDomain = ''
     RdpJumpServer = ''
     PinMinLength = '6'
+    # Nach erfolgreicher Ausstellung empfehlen, zusätzlich Microsoft Authenticator oder
+    # einen FIDO2-Schlüssel einzurichten (Knopf zu aka.ms/mysecurityinfo). 'False' = aus.
+    ShowMfaHint = 'True'
 }

@@ -502,6 +502,44 @@ function Get-EnrollmentIdentity {
     return [pscustomobject]@{ Subject = "CN=$env:USERNAME"; Upn = (Get-CurrentUpn); DisplayName = "$env:USERDOMAIN\$env:USERNAME"; SearchTerm = $env:USERNAME }
 }
 
+# --- Hinweis "zusätzlich Authenticator/FIDO2 einrichten" auf den Erfolgsseiten ---
+# EIN Baustein für alle Abschlussseiten (Plan A/Simple-Zusammenfassung, Plan-B-Abschluss,
+# RDP-Direktweg): Box + Knopf zur Microsoft-Seite "Sicherheitsinformationen". Abschaltbar
+# per Einstellung (config.psd1: ShowMfaHint).
+$script:MfaInfoUrl = 'https://aka.ms/mysecurityinfo'
+$script:MfaHints = New-Object System.Collections.Generic.List[object]
+function New-MfaHint {
+    param([Parameter(Mandatory)][int]$Y)
+    $lbl = New-WizardLabel -Text '' -X 20 -Y $Y -Width 780 -Height 62
+    $lbl.BackColor = $script:UI.AccentWeak
+    $lbl.ForeColor = $script:UI.Accent
+    $lbl.Padding = New-Object System.Windows.Forms.Padding(10, 6, 10, 6)
+    $lbl.Visible = $false
+    $btn = New-Object System.Windows.Forms.Button
+    $btn.Text = (T 'Sicherheitsinformationen öffnen')
+    $btn.Location = New-Object System.Drawing.Point(20, ($Y + 70))
+    $btn.Size = New-Object System.Drawing.Size(260, 32)
+    $btn.Visible = $false
+    $btn.Add_Click({
+        try { Start-Process $script:MfaInfoUrl } catch { Write-WizardLog -Message "Browser konnte nicht geöffnet werden: $($_.Exception.Message)" -Level Warn }
+    })
+    $hint = [pscustomobject]@{ Label = $lbl; Button = $btn }
+    $script:MfaHints.Add($hint)
+    return $hint
+}
+function Get-MfaHintText {
+    $text = T 'Tipp: Richte zusätzlich Microsoft Authenticator oder einen FIDO2-Sicherheitsschlüssel ein - als zweiten Anmeldeweg, falls die Smartcard einmal nicht verfügbar ist (neuer PC, TPM zurückgesetzt, PIN gesperrt).'
+    if ($script:TargetAccount) { $text += ' ' + ((T 'Auf der Seite mit dem Konto {0} anmelden.') -f $script:TargetAccount) }
+    return $text
+}
+function Set-MfaHint {
+    param([Parameter(Mandatory)]$Hint, [bool]$Show)
+    $on = $Show -and (Test-MfaHintEnabled -Config $script:config)
+    $Hint.Label.Text = if ($on) { Get-MfaHintText } else { '' }
+    $Hint.Label.Visible = $on
+    $Hint.Button.Visible = $on
+}
+
 function Invoke-EnrollmentAgentRequest {
     # Beantragt ein Enrollment-Agent-Zertifikat für das EIGENE Konto - eine ganz
     # normale Direkt-Beantragung (kein separates Konto, kein RDP). Wahlweise mit dem
@@ -2974,7 +3012,9 @@ $btnStartA.Text = (T 'Zum Startbildschirm')
 $btnStartA.Location = New-Object System.Drawing.Point(280, 220)
 $btnStartA.Size = New-Object System.Drawing.Size(200, 32)
 
-$pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA, $btnStartA))
+$mfaHintA = New-MfaHint -Y 266
+
+$pnlA4.Controls.AddRange(@($lblSummaryA, $btnResetA, $btnStartA, $mfaHintA.Label, $mfaHintA.Button))
 
 function Get-CardValiditySummaryText {
     # Baut den Zusammenfassungstext für die Abschluss-Seite. Wenn der PC/SC-Kartenname
@@ -3020,6 +3060,7 @@ function Update-PlanASummary {
     $id = Get-EnrollmentIdentity
     $matchTerm = if ($id.Upn) { $id.Upn } else { $id.SearchTerm }
     $lblSummaryA.Text = Get-CardValiditySummaryText -CardName $script:PlanA_CardName -PcscName $script:PlanA_PcscName -MatchTerm $matchTerm
+    Set-MfaHint -Hint $mfaHintA -Show $script:PlanA_CertIssued
 }
 
 $btnResetA.Add_Click({
@@ -3641,7 +3682,9 @@ $btnStartB.Text = (T 'Zum Startbildschirm')
 $btnStartB.Location = New-Object System.Drawing.Point(280, 590)
 $btnStartB.Size = New-Object System.Drawing.Size(200, 32)
 
-$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCerTextLabelB, $txtCerTextB, $btnCompleteFromTextB, $lblCompleteResultB, $lblSummaryB, $btnResetB, $btnStartB))
+$mfaHintB = New-MfaHint -Y 636
+
+$pnlB6.Controls.AddRange(@($lblCompleteInfoB, $btnSelectCerB, $txtSelectedCerB, $btnCompleteB, $lblCerTextLabelB, $txtCerTextB, $btnCompleteFromTextB, $lblCompleteResultB, $lblSummaryB, $btnResetB, $btnStartB, $mfaHintB.Label, $mfaHintB.Button))
 
 $btnSelectCerB.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -3809,7 +3852,9 @@ $btnRdpStartB.Location = New-Object System.Drawing.Point(20, 474)
 $btnRdpStartB.Size = New-Object System.Drawing.Size(200, 32)
 $btnRdpStartB.Visible = $false
 
-$pnlB7.Controls.AddRange(@($picCardRdpB, $lblRdpHintB, $lblRdpStepsB, $lblRdpDriverHintB, $btnRdpConnectB, $btnRdpCheckB, $lblRdpResultB, $lblRdpSummaryB, $lnkRdpFallbackB, $btnRdpStartB))
+$mfaHintRdpB = New-MfaHint -Y 516
+
+$pnlB7.Controls.AddRange(@($picCardRdpB, $lblRdpHintB, $lblRdpStepsB, $lblRdpDriverHintB, $btnRdpConnectB, $btnRdpCheckB, $lblRdpResultB, $lblRdpSummaryB, $lnkRdpFallbackB, $btnRdpStartB, $mfaHintRdpB.Label, $mfaHintRdpB.Button))
 
 function Update-PlanBRdpPage {
     $identity = Get-EnrollmentIdentity
@@ -4740,6 +4785,13 @@ function Show-SettingsDialog {
     $chkCfgPhysical.MaximumSize = New-Object System.Drawing.Size(640, 0)
     Add-SettingsFullRow -Control $chkCfgPhysical
 
+    $chkCfgMfaHint = New-Object System.Windows.Forms.CheckBox
+    $chkCfgMfaHint.Text = (T 'Nach der Ausstellung empfehlen, zusätzlich Microsoft Authenticator oder einen FIDO2-Schlüssel einzurichten')
+    $chkCfgMfaHint.Checked = (Test-MfaHintEnabled -Config $config)
+    $chkCfgMfaHint.AutoSize = $true
+    $chkCfgMfaHint.MaximumSize = New-Object System.Drawing.Size(640, 0)
+    Add-SettingsFullRow -Control $chkCfgMfaHint
+
     $txtCfgJump = New-Object System.Windows.Forms.TextBox
     Set-TextBoxPlaceholder -TextBox $txtCfgJump -Placeholder (T 'z.B. pki-jump.contoso.local') -Value $config.RdpJumpServer
     Add-SettingsRow -LabelText (T 'RDP-Zielserver für Plan B:') -InputControl $txtCfgJump
@@ -5038,6 +5090,7 @@ function Show-SettingsDialog {
         $newConfig['EATemplate']      = Get-TextBoxRealValue -TextBox $txtCfgEaTemplate
         $newConfig['PinMinLength']    = [int]$numCfgPinMin.Value
         $newConfig['AllowPhysicalCards'] = "$($chkCfgPhysical.Checked)"
+        $newConfig['ShowMfaHint']     = "$($chkCfgMfaHint.Checked)"
         $newConfig['WorkingDir']      = $config.WorkingDir
         if (-not (Save-WizardConfigChecked -Config $newConfig -Owner $dlg)) {
             $lblCfgSaved.ForeColor = [System.Drawing.Color]::Firebrick
@@ -5094,6 +5147,19 @@ function Register-StatusLabel {
     Update-StatusLook $Label
 }
 foreach ($l in @($lblVscResultA, $lblVscResultB, $lblCertResultA, $lblSubmitResultB, $lblCompleteResultB, $lblRdpResultB, $lblRdpDriverHintB, $lblCsrDoneB, $lblHandoffCopiedB)) { Register-StatusLabel $l }
+
+# Authenticator/FIDO2-Hinweis in Plan B folgt der Ergebnismeldung: sichtbar genau dann,
+# wenn sie Erfolg (grün) meldet - Fehler, Zurücksetzen und Neustart blenden ihn mit aus.
+function Test-SuccessLabel {
+    param([System.Windows.Forms.Label]$Label)
+    $argb = $Label.ForeColor.ToArgb()
+    return [bool]$Label.Text -and ($argb -eq [System.Drawing.Color]::ForestGreen.ToArgb() -or $argb -eq $script:UI.Success.ToArgb())
+}
+foreach ($pair in @(@($lblCompleteResultB, $mfaHintB), @($lblRdpResultB, $mfaHintRdpB))) {
+    $pair[0].Tag = $pair[1]
+    $pair[0].Add_TextChanged({ Set-MfaHint -Hint $this.Tag -Show (Test-SuccessLabel $this) })
+    $pair[0].Add_ForeColorChanged({ Set-MfaHint -Hint $this.Tag -Show (Test-SuccessLabel $this) })
+}
 
 # Karten-Hinweis "im Kartenauswahl-Dialog ... wählen" (Plan A und Plan B, EIN Stil):
 # Die falsche Karte zu wählen landet das Zertifikat auf der falschen VSC - deshalb

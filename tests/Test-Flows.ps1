@@ -583,6 +583,41 @@ $r = Select-ExistingVscReal
 if (-not @($global:Msgs | Select-Object -Skip $before | Where-Object { $_ -like '*Keine VSC vorhanden*' })) { $global:Errors.Add('[Andere Karten] Einstellung aus: bisherige Meldung "Keine VSC vorhanden" fehlt') }
 $config.Remove('AllowPhysicalCards')
 
+# --- Hinweis Authenticator/FIDO2 auf den Erfolgsseiten (Einstellung ShowMfaHint) ---
+$global:Log.Add('=== Authenticator/FIDO2-Hinweis ===')
+foreach ($case in @(@(@{}, $true), @(@{ ShowMfaHint = 'True' }, $true), @(@{ ShowMfaHint = 'False' }, $false), @(@{ ShowMfaHint = 'Nein' }, $false), @($null, $true))) {
+    if ((Test-MfaHintEnabled -Config $case[0]) -ne $case[1]) { $global:Errors.Add("[MFA-Hinweis] Test-MfaHintEnabled '$($case[0].ShowMfaHint)' -> nicht $($case[1])") }
+}
+$config.Remove('ShowMfaHint'); $savedTarget = $script:TargetAccount; $script:TargetAccount = $null
+foreach ($h in @(@($lblCompleteResultB, $mfaHintB, 'Abschluss'), @($lblRdpResultB, $mfaHintRdpB, 'RDP-Direktweg'))) {
+    $h[0].Text = ''
+    $h[0].ForeColor = [System.Drawing.Color]::ForestGreen; $h[0].Text = 'Zertifikat liegt auf der Karte.'
+    if ($h[1].Label.Text -notmatch 'Authenticator' -or -not $h[1].Button.Text) { $global:Errors.Add("[MFA-Hinweis] $($h[2]): bei Erfolg kein Hinweis") }
+    if ($h[1].Label.Text -match 'Konto') { $global:Errors.Add("[MFA-Hinweis] $($h[2]): eigenes Konto, trotzdem Anmeldehinweis für ein fremdes Konto") }
+    # Gegenproben: Fehler, Zurücksetzen, Einstellung aus
+    $h[0].ForeColor = [System.Drawing.Color]::Firebrick; $h[0].Text = 'Übernahme fehlgeschlagen.'
+    if ($h[1].Label.Text) { $global:Errors.Add("[MFA-Hinweis] $($h[2]): Hinweis bei Fehler sichtbar") }
+    $h[0].ForeColor = [System.Drawing.Color]::ForestGreen; $h[0].Text = 'ok'; $h[0].Text = ''
+    if ($h[1].Label.Text) { $global:Errors.Add("[MFA-Hinweis] $($h[2]): Hinweis nach Zurücksetzen noch sichtbar") }
+    $config['ShowMfaHint'] = 'False'
+    $h[0].Text = 'Zertifikat liegt auf der Karte.'
+    if ($h[1].Label.Text) { $global:Errors.Add("[MFA-Hinweis] $($h[2]): Hinweis trotz ShowMfaHint=False") }
+    $config.Remove('ShowMfaHint'); $h[0].Text = ''
+}
+# Fremdes Konto (Szenario 01): Hinweis nennt das Konto, mit dem man sich anmelden muss.
+$script:TargetAccount = 'jdoe@contoso.com'
+$lblRdpResultB.ForeColor = [System.Drawing.Color]::ForestGreen; $lblRdpResultB.Text = 'ok'
+if ($mfaHintRdpB.Label.Text -notmatch 'jdoe@contoso\.com') { $global:Errors.Add("[MFA-Hinweis] fremdes Konto nicht genannt: '$($mfaHintRdpB.Label.Text)'") }
+$lblRdpResultB.Text = ''
+# Plan A / Simple-Zusammenfassung: nur nach ausgestelltem Zertifikat.
+$script:TargetAccount = $null
+$savedIssued = $script:PlanA_CertIssued; $savedPcsc = $script:PlanA_PcscName; $script:PlanA_PcscName = $null
+$script:PlanA_CertIssued = $true; Update-PlanASummary
+if ($mfaHintA.Label.Text -notmatch 'Authenticator') { $global:Errors.Add('[MFA-Hinweis] Plan-A-Zusammenfassung: kein Hinweis nach Ausstellung') }
+$script:PlanA_CertIssued = $false; Update-PlanASummary
+if ($mfaHintA.Label.Text) { $global:Errors.Add('[MFA-Hinweis] Plan-A-Zusammenfassung: Hinweis ohne ausgestelltes Zertifikat') }
+$script:PlanA_CertIssued = $savedIssued; $script:PlanA_PcscName = $savedPcsc; $script:TargetAccount = $savedTarget
+
 # --- Zertifikate nur auf der Karte (CertPropSvc hat sie noch nicht in den Speicher kopiert) ---
 $global:Log.Add('=== Kartenzertifikate: Speicher + Karte zusammenführen ===')
 $rd7 = 'Microsoft Virtual Smart Card 7'

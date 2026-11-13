@@ -498,4 +498,8 @@
     'Weiter mit Plan B' = 'Continue with plan B'
     "Danach in den Einstellungen 'Wartenden EA-Antrag abrufen...' und Szenario 01 neu starten - oder jetzt Plan B." = "Then use 'Retrieve pending EA request...' in the settings and restart scenario 01 - or use plan B now."
     'EA-Zertifikat nicht im Zertifikatsspeicher gefunden.' = 'EA certificate not found in the certificate store.'
+    'Sicherheitsinformationen öffnen' = 'Open security info'
+    'Tipp: Richte zusätzlich Microsoft Authenticator oder einen FIDO2-Sicherheitsschlüssel ein - als zweiten Anmeldeweg, falls die Smartcard einmal nicht verfügbar ist (neuer PC, TPM zurückgesetzt, PIN gesperrt).' = 'Tip: Also set up Microsoft Authenticator or a FIDO2 security key - as a second way to sign in in case the smart card is ever unavailable (new PC, TPM reset, PIN blocked).'
+    'Auf der Seite mit dem Konto {0} anmelden.' = 'Sign in on that page with the account {0}.'
+    'Nach der Ausstellung empfehlen, zusätzlich Microsoft Authenticator oder einen FIDO2-Schlüssel einzurichten' = 'After issuance, recommend also setting up Microsoft Authenticator or a FIDO2 key'
 }

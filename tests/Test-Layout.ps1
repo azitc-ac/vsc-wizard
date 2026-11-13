@@ -166,6 +166,8 @@ foreach ($offline in $false, $true) {
     Show-PlanAStep -Index 2
     $lblSummaryA.Text = (@(((T 'Kartenname: {0}') -f $long), ((T 'Auf der Karte liegen {0} Zertifikate:') -f 3)) + (1..3 | ForEach-Object { "  $_) CN=administrator.langername@contoso.onmicrosoft.com"; ((T '     gültig {0} bis {1}  (Thumbprint {2})') -f '2026-09-28', '2028-09-28', '0123456789ABCDEF0123456789ABCDEF01234567') }) + (T 'Hinweis: Beim Smartcard-Logon nutzt Windows i.d.R. das erste passende Zertifikat. Für "eine Karte = ein Zertifikat" die älteren entfernen (Aufräum-Abfrage nach dem Erneuern oder Szenario 04).')) -join "`r`n"
     Test-Layout $form "Plan A Schritt 4 Zusammenfassung 3 Zertifikate ($mode)"
+    Set-MfaHint -Hint $mfaHintA -Show $true
+    Test-Layout $form "Plan A Schritt 4 Zusammenfassung mit Authenticator/FIDO2-Hinweis ($mode)"
 }
 $script:PlanA_OfflineDirect = $false; $script:TargetAccount = $null
 $tabPlanA.Visible = $false
@@ -181,6 +183,18 @@ for ($i = 0; $i -le 6; $i++) {
 $script:TargetAccount = 'adm-very-long-account-name@contoso-enterprise.onmicrosoft.com'
 Show-PlanBStep -Index 6
 Test-Layout $form 'Plan B Direktweg RDP'
+$lblRdpResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+$lblRdpResultB.Text = (T 'Zertifikat für {0} liegt auf der Karte (gültig bis {1}). Fertig.') -f $script:TargetAccount, '2028-09-28'
+$btnRdpStartB.Visible = $true
+Test-Layout $form 'Plan B Direktweg RDP Erfolg mit Authenticator/FIDO2-Hinweis'
+$lblRdpResultB.Text = ''; $btnRdpStartB.Visible = $false
+# Abschluss (CER übernommen) mit Erfolg + Zusammenfassung + Hinweis
+Show-PlanBStep -Index 5
+$lblCompleteResultB.ForeColor = [System.Drawing.Color]::ForestGreen
+$lblCompleteResultB.Text = (T 'Zertifikat wurde erfolgreich auf der virtuellen Smartcard hinterlegt.')
+$lblSummaryB.Text = (T "Kartenname: {0}`r`nZertifikat: {1}`r`nThumbprint: {2}`r`nGültig ab: {3}`r`nGültig bis: {4}") -f $long, 'CN=administrator.langername', '0123456789ABCDEF0123456789ABCDEF01234567', '2026-09-28', '2028-09-28'
+Test-Layout $form 'Plan B Abschluss Erfolg mit Authenticator/FIDO2-Hinweis'
+$lblCompleteResultB.Text = ''; $lblSummaryB.Text = ''
 $script:TargetAccount = $null
 Show-PlanBStep -Index 4
 $lblSubmitResultB.Text = (T 'Antrag wartet auf Genehmigung (RequestId {0}). {1} Auch nach einem Neustart des Wizards möglich.') -f 123456, (Get-PendingApprovalHint -RequestId 123456)
